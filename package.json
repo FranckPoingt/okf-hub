@@ -1,46 +1,23 @@
 {
-  "name": "okf-hub-workflow",
+  "name": "okf-hub",
   "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=22.13.0"
-  },
-  "scripts": {
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
-    "dev:service": "DENO_DIR=.deno-cache deno task dev",
-    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
-    "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && DENO_DIR=.deno-cache deno task test",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
-  },
+  "type": "module",
   "dependencies": {
-    "@milkdown/crepe": "^7.22.0",
-    "@milkdown/kit": "^7.22.0",
-    "@milkdown/plugin-collab": "^7.22.0",
-    "@milkdown/react": "^7.22.0",
-    "next": "16.2.6",
+    "@milkdown/crepe": "7.21.1",
+    "@milkdown/kit": "7.21.1",
+    "@milkdown/plugin-collab": "7.21.1",
+    "@milkdown/react": "7.21.1",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "y-protocols": "^1.0.7",
-    "yjs": "^13.6.32"
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.37.1",
-    "@tailwindcss/postcss": "4.2.1",
-    "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
-    "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "react-server-dom-webpack": "19.2.6",
-    "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vinext": "0.0.50",
-    "vite": "8.0.13",
-    "wrangler": "4.92.0"
-  },
-  "type": "module"
+    "vite": "8.0.16"
+  }
 }

@@ -21,7 +21,7 @@ function packet(type: number, payload: Uint8Array) {
 export class DenoCollabProvider {
   readonly awareness: Awareness;
   private socket?: WebSocket;
-  private reconnectTimer?: number;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
   private retryDelay = 400;
   private active = false;
   private readonly syncedListeners = new Set<() => void>();
@@ -52,7 +52,7 @@ export class DenoCollabProvider {
 
   destroy() {
     this.active = false;
-    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer) globalThis.clearTimeout(this.reconnectTimer);
     this.awareness.setLocalState(null);
     this.socket?.close();
     this.doc.off("update", this.sendDocumentUpdate);
@@ -102,7 +102,7 @@ export class DenoCollabProvider {
       if (this.socket === socket) this.socket = undefined;
       this.onStatus("offline");
       if (!this.active) return;
-      this.reconnectTimer = window.setTimeout(() => this.open(), this.retryDelay);
+      this.reconnectTimer = globalThis.setTimeout(() => this.open(), this.retryDelay);
       this.retryDelay = Math.min(this.retryDelay * 2, 5_000);
     };
   }

@@ -1,7 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import assert from "node:assert/strict";
-import * as Y from "npm:yjs@13.6.32";
+import * as Y from "yjs";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 
 const DOCUMENT_UPDATE = 0;
@@ -54,7 +54,10 @@ async function waitFor(check: () => boolean) {
 
 Deno.test("stores canonical Markdown and restores collaborative state after reconnect", async () => {
   const dataDir = await Deno.makeTempDir();
-  const app = await createCollabApp({ dataDir });
+  const staticDir = `${dataDir}/dist`;
+  await Deno.mkdir(staticDir);
+  await Deno.writeTextFile(`${staticDir}/index.html`, "<!doctype html><title>OKF Hub</title>");
+  const app = await createCollabApp({ dataDir, staticDir });
   const server = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen() {} }, app.fetch);
   const port = (server.addr as Deno.NetAddr).port;
   const base = `http://127.0.0.1:${port}`;
@@ -64,6 +67,7 @@ Deno.test("stores canonical Markdown and restores collaborative state after reco
 
   try {
     assert.equal(await (await fetch(`${base}/api/doc`)).text(), DEFAULT_MARKDOWN);
+    assert.match(await (await fetch(`${base}/`)).text(), /OKF Hub/);
     const canonical = "# Reopened\n\nCanonical **Markdown**.\n";
     assert.equal((await fetch(`${base}/api/doc`, { method: "PUT", body: canonical })).status, 204);
     assert.equal(await (await fetch(`${base}/api/doc`)).text(), canonical);

@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 
-import * as Y from "npm:yjs@13.6.32";
+import * as Y from "yjs";
 
 const DOCUMENT_UPDATE = 0;
 const AWARENESS_UPDATE = 1;
@@ -41,7 +41,16 @@ flowchart LR
 [^owner]: The incident lead remains accountable for approving external updates.
 `;
 
-type AppOptions = { dataDir?: string };
+type AppOptions = { dataDir?: string; staticDir?: string };
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+};
 
 function frame(type: number, payload: Uint8Array) {
   const result = new Uint8Array(payload.length + 1);
@@ -52,7 +61,7 @@ function frame(type: number, payload: Uint8Array) {
 
 function allowedOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  return !origin || origin === "http://localhost:3000" || origin === "http://127.0.0.1:3000";
+  return !origin || ["http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8788"].includes(origin);
 }
 
 function cors(request: Request) {
@@ -70,7 +79,12 @@ async function bytes(data: unknown): Promise<Uint8Array | null> {
   return null;
 }
 
-export async function createCollabApp({ dataDir = ".okf-data" }: AppOptions = {}) {
+function extension(path: string) {
+  const index = path.lastIndexOf(".");
+  return index < 0 ? "" : path.slice(index);
+}
+
+export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist" }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const markdownPath = `${dataDir}/incident-communication.md`;
   const statePath = `${dataDir}/incident-communication.yjs`;
@@ -140,6 +154,32 @@ export async function createCollabApp({ dataDir = ".okf-data" }: AppOptions = {}
       });
       socket.addEventListener("close", () => clients.delete(socket));
       return response;
+    }
+    if (request.method === "GET" || request.method === "HEAD") {
+      const decoded = decodeURIComponent(url.pathname);
+      if (decoded.split("/").includes("..")) return new Response("Invalid path", { status: 400 });
+      const relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
+      let path = `${staticDir}/${relative}`;
+      let content: Uint8Array;
+      try {
+        content = await Deno.readFile(path);
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound) || !request.headers.get("accept")?.includes("text/html")) {
+          return new Response("Not found", { status: 404 });
+        }
+        path = `${staticDir}/index.html`;
+        try {
+          content = await Deno.readFile(path);
+        } catch {
+          return new Response("Build the web app first", { status: 503 });
+        }
+      }
+      const body = request.method === "HEAD"
+        ? null
+        : content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
+      return new Response(body, {
+        headers: { "content-type": CONTENT_TYPES[extension(path)] ?? "application/octet-stream" },
+      });
     }
     return new Response("Not found", { status: 404, headers: cors(request) });
   };

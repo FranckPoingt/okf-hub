@@ -1,19 +1,16 @@
-"use client";
-
 import { Crepe } from "@milkdown/crepe";
 import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import { getMarkdown, replaceAll } from "@milkdown/kit/utils";
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
 import {
   type Collaborator,
   type ConnectionStatus,
   DenoCollabProvider,
-} from "./collab-provider";
+} from "./collab-provider.ts";
 
-const SERVICE = "http://127.0.0.1:8788";
+const SERVICE = globalThis.location.port === "8788" ? globalThis.location.origin : "http://127.0.0.1:8788";
 const USERS: Collaborator[] = [
   { name: "Maya Chen", color: "#e76f51" },
   { name: "Alex Morgan", color: "#52796f" },
@@ -49,8 +46,8 @@ function EditorControls({ markdown }: { markdown: string }) {
         onChange={(event) => void importMarkdown(event.target.files?.[0])}
         hidden
       />
-      <button onClick={() => input.current?.click()} disabled={loading}>Import .md</button>
-      <button className="primary" onClick={exportMarkdown} disabled={loading}>Export .md</button>
+      <button type="button" onClick={() => input.current?.click()} disabled={loading}>Import .md</button>
+      <button type="button" className="primary" onClick={exportMarkdown} disabled={loading}>Export .md</button>
     </div>
   );
 }
@@ -96,7 +93,7 @@ function EditorSurface({
             if (editorConnected) return;
             service.applyTemplate(initialMarkdown).connect();
             editorConnected = true;
-            window.requestAnimationFrame(() => onMarkdown(crepe.getMarkdown()));
+            globalThis.requestAnimationFrame(() => onMarkdown(crepe.getMarkdown()));
           });
           provider.connect();
         });
@@ -113,10 +110,9 @@ function EditorSurface({
   return <Milkdown />;
 }
 
-export default function Home() {
+export default function App() {
   const [user] = useState<Collaborator>(() => {
-    if (typeof window === "undefined") return USERS[0];
-    const requested = new URLSearchParams(window.location.search).get("user");
+    const requested = new URLSearchParams(globalThis.location.search).get("user");
     return USERS.find((candidate) => candidate.name === requested) ?? USERS[0];
   });
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
@@ -126,7 +122,7 @@ export default function Home() {
   const [saveState, setSaveState] = useState<"saved" | "saving" | "failed">("saved");
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
-  const saveTimer = useRef<number | undefined>(undefined);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     fetch(`${SERVICE}/api/doc`)
@@ -144,8 +140,8 @@ export default function Home() {
   const saveMarkdown = useCallback((content: string) => {
     setMarkdown(content);
     setSaveState("saving");
-    if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
+    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
+    saveTimer.current = globalThis.setTimeout(() => {
       fetch(`${SERVICE}/api/doc`, { method: "PUT", body: content })
         .then((response) => {
           if (!response.ok) throw new Error("save failed");
@@ -157,9 +153,9 @@ export default function Home() {
 
   const openCollaborator = () => {
     const other = USERS.find((candidate) => candidate.name !== user.name) ?? USERS[1];
-    const url = new URL(window.location.href);
+    const url = new URL(globalThis.location.href);
     url.searchParams.set("user", other.name);
-    window.open(url, "_blank", "noopener");
+    globalThis.open(url, "_blank", "noopener");
   };
 
   const profileCoverage = PROFILE_MARKERS.filter((marker) => markdown.includes(marker)).length;
@@ -167,7 +163,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <Link className="brand" href="/" aria-label="OKF Hub home"><span>O</span> OKF Hub</Link>
+        <a className="brand" href="/" aria-label="OKF Hub home"><span>O</span> OKF Hub</a>
         <div className="document-title"><small>Policies /</small><strong>Incident communication</strong></div>
         <div className="header-status">
           <span className={`connection ${status}`}><i />{status}</span>
@@ -178,14 +174,14 @@ export default function Home() {
       <aside className="sidebar">
         <p className="section-label">Company knowledge</p>
         <nav>
-          <button>⌕ <span>Search</span></button>
-          <button>⌂ <span>Home</span></button>
+          <button type="button">⌕ <span>Search</span></button>
+          <button type="button">⌂ <span>Home</span></button>
         </nav>
         <p className="section-label spaces-label">Spaces</p>
         <nav>
-          <button className="active"><i className="space-dot coral" /> <span>Policies</span><b>4</b></button>
-          <button><i className="space-dot green" /> <span>Engineering</span><b>31</b></button>
-          <button><i className="space-dot gold" /> <span>Operations</span><b>16</b></button>
+          <button type="button" className="active"><i className="space-dot coral" /> <span>Policies</span><b>4</b></button>
+          <button type="button"><i className="space-dot green" /> <span>Engineering</span><b>31</b></button>
+          <button type="button"><i className="space-dot gold" /> <span>Operations</span><b>16</b></button>
         </nav>
         <div className="sidebar-bottom">
           <p className="section-label">Prototype coverage</p>
@@ -201,7 +197,7 @@ export default function Home() {
               {collaborators.map((person) => <span key={person.name} style={{ background: person.color }} title={person.name}>{person.name.split(" ").map((part) => part[0]).join("")}</span>)}
               <small>{collaborators.length} online</small>
             </div>
-            <button className="collaborator-button" onClick={openCollaborator}>Open collaborator ↗</button>
+            <button type="button" className="collaborator-button" onClick={openCollaborator}>Open collaborator ↗</button>
             <EditorControls markdown={markdown} />
           </div>
 
@@ -211,7 +207,7 @@ export default function Home() {
                 <span>Service offline</span>
                 <h1>Start the local collaboration service</h1>
                 <p>The editor waits for the Deno service so it can restore the shared document safely.</p>
-                <button onClick={() => { setLoadError(false); setInitialMarkdown(null); setReload((value) => value + 1); }}>Retry connection</button>
+                <button type="button" onClick={() => { setLoadError(false); setInitialMarkdown(null); setReload((value) => value + 1); }}>Retry connection</button>
               </div>
             ) : initialMarkdown ? (
               <>
