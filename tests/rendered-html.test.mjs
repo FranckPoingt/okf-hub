@@ -10,14 +10,14 @@ async function render() {
   }, { waitUntil() {}, passThroughOnException() {} });
 }
 
-test("renders the KH-01 workflow narrative", async () => {
+test("renders the KH-02 collaborative editor shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /<title>OKF Hub — Design partner workflow<\/title>/i);
-  assert.match(html, /Connect your company knowledge/);
-  assert.match(html, /acme\/api/);
-  assert.match(html, /Write a policy/);
-  assert.match(html, /Find the answer/);
-  assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/);
+  assert.match(html, /<title>OKF Hub — Collaborative editor proof<\/title>/i);
+  assert.match(html, /Incident communication/);
+  assert.match(html, /Open collaborator/);
+  assert.match(html, /Import \.md/);
+  assert.match(html, /Export \.md/);
+  assert.doesNotMatch(html, /Design partner|codex-preview/);
 });

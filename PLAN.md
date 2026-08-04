@@ -126,28 +126,18 @@ An artifact may contain reviewed inline HTML or an approved HTTP(S) application 
 
 Each item is a thin vertical slice with UI, service behavior, persistence, and verification. `AFK` means it can be implemented without a product decision; `HITL` requires a decision or review from the product owner.
 
-### Epic 1 — Product validation and product shell
-
-#### KH-01 — Confirm the first customer workflow
-
-- **Type:** HITL
-- **Blocked by:** None
-- **What to build:** A concise design-partner script and a clickable workflow narrative for connecting three repositories, authoring a company policy, and discovering both in one hub.
-- **Acceptance criteria:**
-  - [ ] The target company profile and buyer are explicit.
-  - [ ] Three design-partner conversations are planned or completed.
-  - [ ] The first-release success measure is agreed.
+### Epic 1 — Product shell
 
 #### KH-02 — Run the editor and collaboration proof
 
 - **Type:** AFK
-- **Blocked by:** KH-01
+- **Blocked by:** None
 - **What to build:** A disposable React/Vite and Deno prototype using Milkdown that imports supported Markdown, allows two people to edit concurrently, reconnects, and exports the resulting Markdown.
 - **Acceptance criteria:**
-  - [ ] CommonMark + GFM content round-trips without loss for the supported profile.
-  - [ ] Two collaborators see cursor and text updates.
-  - [ ] A reconnect restores the latest document state.
-  - [ ] The result is stored and reopened as canonical Markdown.
+  - [x] CommonMark + GFM content round-trips without loss for the supported profile.
+  - [x] Two collaborators see cursor and text updates.
+  - [x] A reconnect restores the latest document state.
+  - [x] The result is stored and reopened as canonical Markdown.
 
 #### KH-03 — Ship a self-hosted local installation
 
@@ -266,4 +256,4 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 ## Development order
 
-Build KH-02 through KH-05 first. At that point, a team can sign in, edit a real company document collaboratively, publish portable OKF, and control access. Add repository and shared-store import next, then unified search and freshness automation. Enterprise identity and interactive artifacts remain deliberate follow-on releases.
+Start with KH-02 and build through KH-05. At that point, a team can sign in, edit a real company document collaboratively, publish portable OKF, and control access. Add repository and shared-store import next, then unified search and freshness automation. Enterprise identity and interactive artifacts remain deliberate follow-on releases.

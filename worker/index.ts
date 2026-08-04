@@ -1,5 +1,9 @@
 import handler from "vinext/server/app-router-entry";
 
+interface Fetcher {
+  fetch(request: Request): Promise<Response>;
+}
+
 interface Env {
   ASSETS: Fetcher;
 }

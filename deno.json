@@ -1,0 +1,7 @@
+{
+  "nodeModulesDir": "manual",
+  "tasks": {
+    "dev": "deno run --watch --allow-net --allow-env --allow-read=.okf-data --allow-write=.okf-data server/main.ts",
+    "test": "deno test --allow-net --allow-env --allow-read --allow-write server"
+  }
+}

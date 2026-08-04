@@ -1,10 +1,24 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import "@milkdown/crepe/theme/common/style.css";
+import "@milkdown/crepe/theme/frame.css";
+import "@milkdown/kit/prose/view/style/prosemirror.css";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "OKF Hub — Design partner workflow",
-  description: "A clickable narrative for connecting, authoring, and discovering trusted company knowledge.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  const image = `${protocol}://${host}/og.png`;
+  const title = "OKF Hub — Collaborative editor proof";
+  const description = "A Milkdown and Deno proof for portable, collaborative company knowledge.";
+  return {
+    title,
+    description,
+    openGraph: { title, description, images: [{ url: image, width: 1200, height: 630 }] },
+    twitter: { card: "summary_large_image", title, description, images: [image] },
+  };
+}
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="en"><body>{children}</body></html>;

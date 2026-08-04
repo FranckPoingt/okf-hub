@@ -1,14 +1,9 @@
 # OKF Hub
 
-Product discovery and prototypes for the OKF Knowledge Hub.
+Product prototypes for the OKF Knowledge Hub.
 
-## KH-01
+## KH-02 collaboration proof
 
-The first ticket includes:
+Run the Deno collaboration service with `npm run dev:service`, then run the web app with `npm run dev`. Open the collaborator button to exercise two-user editing and reconnect recovery.
 
-- a clickable narrative covering repository connection, company-policy authoring, and unified discovery;
-- a design-partner interview guide with an explicit target customer and proposed success measure.
-
-Run locally with `npm run dev`. Verify with `npm test`.
-
-The target customer and success measure in `DESIGN_PARTNER_SCRIPT.md` remain proposals until product-owner review.
+The service stores canonical Markdown and Yjs state in `.okf-data/`. Verify the production build, server-rendered shell, Markdown persistence, two-client sync, and reconnect with `npm test`.
