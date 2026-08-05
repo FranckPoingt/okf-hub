@@ -6,7 +6,7 @@ Product prototypes for the OKF Knowledge Hub.
 
 Run the current service stack with `deno task stack`. For frontend development, keep that service running and start Vite with `deno task dev`.
 
-The service stores canonical Markdown and Yjs state in its application data volume. `deno task test` verifies the production build, editor shell, and owner/editor/viewer authorization paths.
+The service stores draft and Yjs state in its application data volume; published revisions live in RustFS. `deno task test` verifies the production build, editor shell, lifecycle, and owner/editor/viewer authorization paths.
 
 For the single-process production proof, run `deno task build` followed by `deno task start`; the native Deno server serves both the app and collaboration API on port 8788.
 
@@ -25,3 +25,7 @@ This first installation uses single-node RustFS, which has no storage redundancy
 Open `http://127.0.0.1:8788` and create the first account; it becomes the organisation owner. The owner can create local invitation links for Policy editors and Policy viewers under **Manage access**. Invitees use the invited email address, open the link, and accept membership in the corresponding Better Auth team.
 
 OpenFGA grants editor access through the source-level editor group and viewer access through the Policies space viewer group. Direct concept reads, writes, listings, and collaboration sockets all enforce the same decision. The owner can inspect permission changes in the access panel audit trail.
+
+## KH-05 hub-native lifecycle
+
+Authors work in a private, autosaved visual draft. **Publish** writes a versioned OKF Markdown revision to RustFS while viewers remain on the last published revision. **History** can restore any published revision as a new draft; **Archive** removes the concept from routine discovery without deleting its history, and **Restore concept** reverses that action.

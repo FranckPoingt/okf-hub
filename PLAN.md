@@ -168,10 +168,10 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 - **Blocked by:** KH-04
 - **What to build:** Create, autosave, publish, archive, restore, and revision history for one hub-native OKF concept.
 - **Acceptance criteria:**
-  - [ ] Authors edit a visual draft without seeing YAML or Markdown by default.
-  - [ ] Publishing emits conformant OKF Markdown to customer storage.
-  - [ ] Published content remains visible while a new draft is edited.
-  - [ ] Archive removes routine discovery but preserves history and restore.
+  - [x] Authors edit a visual draft without seeing YAML or Markdown by default.
+  - [x] Publishing emits conformant OKF Markdown to customer storage.
+  - [x] Published content remains visible while a new draft is edited.
+  - [x] Archive removes routine discovery but preserves history and restore.
 
 #### KH-06 — Add review, provenance, and freshness status
 

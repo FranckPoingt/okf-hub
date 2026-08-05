@@ -1,13 +1,7 @@
 import { Crepe } from "@milkdown/crepe";
 import { editorViewOptionsCtx } from "@milkdown/kit/core";
-import { getMarkdown, replaceAll } from "@milkdown/kit/utils";
 import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
-import {
-  Milkdown,
-  MilkdownProvider,
-  useEditor,
-  useInstance,
-} from "@milkdown/react";
+import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
 import {
   type FormEvent,
   useCallback,
@@ -52,10 +46,28 @@ type Bootstrap = {
   invitations?: Invitation[];
 };
 type AuditEvent = { occurredAt: string; action: string; target: string };
+type Revision = {
+  number: number;
+  publishedAt: string;
+  actorUserId: string;
+};
+type Concept = {
+  id: string;
+  title: string;
+  type: string;
+  status: "active" | "archived";
+  publishedRevision: number | null;
+  updatedAt: string;
+  draft: string | null;
+  published: string | null;
+  revisions: Revision[];
+};
 
 function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  if (init.body) headers.set("content-type", "application/json");
+  if (init.body && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   return fetch(`${SERVICE}${path}`, {
     ...init,
     headers,
@@ -300,55 +312,26 @@ function AccessPanel({ invitations }: { invitations: Invitation[] }) {
   );
 }
 
-function EditorControls(
-  { markdown, canEdit }: { markdown: string; canEdit: boolean },
-) {
-  const [loading, getEditor] = useInstance();
-  const input = useRef<HTMLInputElement>(null);
-  const importMarkdown = async (file?: File) => {
-    if (!file || loading || !canEdit) return;
-    getEditor()?.action(replaceAll(await file.text()));
-    if (input.current) input.current.value = "";
-  };
-  const exportMarkdown = () => {
-    const content = getEditor()?.action(getMarkdown()) ?? markdown;
-    const url = URL.createObjectURL(
-      new Blob([content], { type: "text/markdown" }),
+function DocumentPreview({ markdown }: { markdown: string }) {
+  useEditor((root) => {
+    const crepe = new Crepe({
+      root,
+      defaultValue: markdown,
+      features: {
+        [Crepe.Feature.AI]: false,
+        [Crepe.Feature.ImageBlock]: false,
+        [Crepe.Feature.TopBar]: false,
+      },
+    });
+    crepe.editor.config((ctx) =>
+      ctx.update(
+        editorViewOptionsCtx,
+        (options) => ({ ...options, editable: () => false }),
+      )
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "incident-communication.md";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-  return (
-    <div className="editor-actions">
-      <input
-        ref={input}
-        type="file"
-        accept=".md,text/markdown,text/plain"
-        onChange={(event) => void importMarkdown(event.target.files?.[0])}
-        hidden
-      />
-      {canEdit && (
-        <button
-          type="button"
-          onClick={() => input.current?.click()}
-          disabled={loading}
-        >
-          Import .md
-        </button>
-      )}
-      <button
-        type="button"
-        className="primary"
-        onClick={exportMarkdown}
-        disabled={loading}
-      >
-        Export .md
-      </button>
-    </div>
-  );
+    return crepe;
+  }, [markdown]);
+  return <Milkdown />;
 }
 
 function EditorSurface(
@@ -361,8 +344,6 @@ function EditorSurface(
     onCollaborators: (users: Collaborator[]) => void;
   },
 ) {
-  const providerRef = useRef<DenoCollabProvider | undefined>(undefined);
-  useEffect(() => () => providerRef.current?.destroy(), []);
   useEditor((root) => {
     const doc = new Y.Doc();
     const provider = new DenoCollabProvider(
@@ -372,8 +353,6 @@ function EditorSurface(
       onStatus,
       onCollaborators,
     );
-    providerRef.current?.destroy();
-    providerRef.current = provider;
     let editorConnected = false;
     const crepe = new Crepe({
       root,
@@ -398,9 +377,6 @@ function EditorSurface(
           if (editorConnected) return;
           service.applyTemplate(initialMarkdown).connect();
           editorConnected = true;
-          globalThis.requestAnimationFrame(() =>
-            onMarkdown(crepe.getMarkdown())
-          );
         });
         provider.connect();
       });
@@ -408,6 +384,15 @@ function EditorSurface(
         if (canEdit && markdown !== previous) onMarkdown(markdown);
       });
     });
+    const destroy = crepe.destroy;
+    crepe.destroy = async () => {
+      provider.stop();
+      try {
+        return await destroy();
+      } finally {
+        provider.destroy();
+      }
+    };
     return crepe;
   }, [initialMarkdown, user.name, canEdit]);
   return <Milkdown />;
@@ -416,6 +401,8 @@ function EditorSurface(
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [fatal, setFatal] = useState("");
+  const [concept, setConcept] = useState<Concept | null>(null);
+  const [conceptLoaded, setConceptLoaded] = useState(false);
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -424,6 +411,11 @@ export default function App() {
     "saved",
   );
   const [accessOpen, setAccessOpen] = useState(false);
+  const [view, setView] = useState<"draft" | "published">("draft");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [editorVersion, setEditorVersion] = useState(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -444,18 +436,38 @@ export default function App() {
   }, [refresh]);
   useEffect(() => {
     if (!bootstrap?.canView) return;
-    api(CONCEPT_PATH).then((response) => {
-      if (!response.ok) throw new Error("Concept unavailable");
-      return response.text();
-    }).then((content) => {
-      setInitialMarkdown(content);
-      setMarkdown(content);
-    }).catch((error) => setFatal(error.message));
-  }, [bootstrap?.canView]);
+    const load = async () => {
+      setConceptLoaded(false);
+      let response = await api("/api/concepts");
+      let concepts = await response.json() as Concept[];
+      if (!concepts.length && bootstrap.canEdit) {
+        response = await api("/api/concepts?include=archived");
+        concepts = await response.json();
+      }
+      if (!concepts.length) {
+        setConcept(null);
+        setInitialMarkdown(null);
+        setConceptLoaded(true);
+        return;
+      }
+      response = await api(CONCEPT_PATH);
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
+      setConcept(result);
+      const content = bootstrap.canEdit ? result.draft : result.published;
+      setInitialMarkdown(content ?? null);
+      setMarkdown(content ?? "");
+      setView(bootstrap.canEdit ? "draft" : "published");
+      setConceptLoaded(true);
+    };
+    load().catch((error) => setFatal(error.message));
+  }, [bootstrap?.canView, bootstrap?.canEdit]);
 
   const signOut = () => {
     void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
       setBootstrap({ user: null });
+      setConcept(null);
+      setConceptLoaded(false);
       setInitialMarkdown(null);
     });
   };
@@ -465,12 +477,62 @@ export default function App() {
     setSaveState("saving");
     if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
     saveTimer.current = globalThis.setTimeout(() => {
-      api(CONCEPT_PATH, { method: "PUT", body: content }).then((response) => {
+      api(CONCEPT_PATH, {
+        method: "PUT",
+        body: content,
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }).then((response) => {
         if (!response.ok) throw new Error("save failed");
         setSaveState("saved");
       }).catch(() => setSaveState("failed"));
     }, 300);
   }, [bootstrap?.canEdit]);
+
+  const lifecycle = async (path: string, body?: unknown) => {
+    setActionBusy(true);
+    setActionError("");
+    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
+    const response = await api(`${CONCEPT_PATH}/${path}`, {
+      method: "POST",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const result = await response.json() as Concept & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) {
+      setActionError(result.error ?? "Action failed");
+      return null;
+    }
+    setConcept(result);
+    return result;
+  };
+
+  const createConcept = async () => {
+    setActionBusy(true);
+    setActionError("");
+    const response = await api("/api/concepts", { method: "POST" });
+    const result = await response.json() as Concept & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) return setActionError(result.error ?? "Creation failed");
+    setConcept(result);
+    setInitialMarkdown(result.draft);
+    setMarkdown(result.draft ?? "");
+    setConceptLoaded(true);
+  };
+
+  const publish = async () => {
+    const result = await lifecycle("publish", { markdown });
+    if (result) setSaveState("saved");
+  };
+
+  const restoreRevision = async (number: number) => {
+    const result = await lifecycle(`revisions/${number}/restore`);
+    if (!result?.draft) return;
+    setInitialMarkdown(result.draft);
+    setMarkdown(result.draft);
+    setEditorVersion((current) => current + 1);
+    setView("draft");
+    setHistoryOpen(false);
+  };
 
   if (fatal) {
     return (
@@ -529,16 +591,24 @@ export default function App() {
         </a>
         <div className="document-title">
           <small>Policies /</small>
-          <strong>Incident communication</strong>
+          <strong>{concept?.title ?? "Hub-native knowledge"}</strong>
         </div>
         <div className="header-status">
-          <span className={`connection ${status}`}>
+          <span
+            className={`connection ${
+              concept?.status === "archived" ? "offline" : status
+            }`}
+          >
             <i />
-            {status}
+            {concept?.status === "archived"
+              ? "archived"
+              : bootstrap.canEdit && view === "draft"
+              ? status
+              : "published"}
           </span>
           <span className="save-state">
             {bootstrap.canEdit
-              ? saveState === "saved" ? "Saved as Markdown" : saveState
+              ? saveState === "saved" ? "Draft saved" : saveState
               : "View only"}
           </span>
         </div>
@@ -557,7 +627,7 @@ export default function App() {
         <nav>
           <button type="button" className="active">
             <i className="space-dot coral" /> <span>Policies</span>
-            <b>1</b>
+            <b>{concept?.status === "active" ? 1 : 0}</b>
           </button>
         </nav>
         <div className="sidebar-bottom">
@@ -585,62 +655,212 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        <MilkdownProvider>
-          <div className="workspace-bar">
-            <div
-              className="people"
-              aria-label={`${collaborators.length} collaborators online`}
-            >
-              {collaborators.map((person) => (
-                <span
-                  key={person.name}
-                  style={{ background: person.color }}
-                  title={person.name}
+        {!conceptLoaded
+          ? <div className="editor-loading">Opening authorised concept…</div>
+          : !concept
+          ? (
+            <section className="empty-state">
+              <p className="eyebrow">Policies</p>
+              <h1>No published knowledge yet</h1>
+              <p>
+                {bootstrap.canEdit
+                  ? "Create the first hub-native concept and start writing visually."
+                  : "An editor has not published a policy yet."}
+              </p>
+              {bootstrap.canEdit && (
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={() => void createConcept()}
                 >
-                  {person.name.split(" ").map((part) => part[0]).join("")}
-                </span>
-              ))}
-              <small>{collaborators.length} online</small>
-            </div>
-            <span className="access-badge">{bootstrap.access}</span>
-            <EditorControls
-              markdown={markdown}
-              canEdit={Boolean(bootstrap.canEdit)}
-            />
-          </div>
-          <div
-            className={`editor-frame ${bootstrap.canEdit ? "" : "read-only"}`}
-          >
-            {initialMarkdown
-              ? (
-                <>
-                  <div className="editor-context">
-                    <span className="draft-label">
-                      POLICY ·{" "}
-                      {bootstrap.canEdit ? "SHARED DRAFT" : "VIEW ONLY"}
-                    </span>
-                    <span>
-                      {bootstrap.canEdit ? "Editing" : "Viewing"} as{" "}
-                      <strong>{user.name}</strong>
-                    </span>
-                  </div>
-                  <EditorSurface
-                    initialMarkdown={initialMarkdown}
-                    user={user}
-                    canEdit={Boolean(bootstrap.canEdit)}
-                    onMarkdown={saveMarkdown}
-                    onStatus={setStatus}
-                    onCollaborators={setCollaborators}
-                  />
-                </>
-              )
-              : (
-                <div className="editor-loading">
-                  Opening authorised concept…
-                </div>
+                  Create incident communication
+                </button>
               )}
-          </div>
-        </MilkdownProvider>
+              {actionError && <p className="form-error">{actionError}</p>}
+            </section>
+          )
+          : (
+            <MilkdownProvider
+              key={`${concept.status}-${view}-${editorVersion}`}
+            >
+              <div className="workspace-bar">
+                <div
+                  className="people"
+                  aria-label={`${collaborators.length} collaborators online`}
+                >
+                  {collaborators.map((person) => (
+                    <span
+                      key={person.name}
+                      style={{ background: person.color }}
+                      title={person.name}
+                    >
+                      {person.name.split(" ").map((part) => part[0]).join("")}
+                    </span>
+                  ))}
+                  <small>{collaborators.length} online</small>
+                </div>
+                <span className="access-badge">{bootstrap.access}</span>
+                {bootstrap.canEdit && (
+                  <div className="lifecycle-actions">
+                    {concept.status === "active" && (
+                      <div className="view-switch" aria-label="Concept view">
+                        <button
+                          type="button"
+                          className={view === "draft" ? "active" : ""}
+                          onClick={() =>
+                            setView("draft")}
+                        >
+                          Draft
+                        </button>
+                        <button
+                          type="button"
+                          className={view === "published" ? "active" : ""}
+                          disabled={!concept.published}
+                          onClick={() =>
+                            setView("published")}
+                        >
+                          Published
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setHistoryOpen(!historyOpen)}
+                    >
+                      History ({concept.revisions.length})
+                    </button>
+                    {concept.status === "active"
+                      ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void lifecycle("archive")}
+                            disabled={actionBusy}
+                          >
+                            Archive
+                          </button>
+                          <button
+                            className="primary"
+                            type="button"
+                            onClick={() => void publish()}
+                            disabled={actionBusy || view !== "draft"}
+                          >
+                            Publish
+                          </button>
+                        </>
+                      )
+                      : (
+                        <button
+                          className="primary"
+                          type="button"
+                          disabled={actionBusy}
+                          onClick={() => void lifecycle("restore")}
+                        >
+                          Restore concept
+                        </button>
+                      )}
+                  </div>
+                )}
+              </div>
+              {historyOpen && bootstrap.canEdit && (
+                <section
+                  className="revision-panel"
+                  aria-label="Revision history"
+                >
+                  <strong>Published revisions</strong>
+                  {concept.revisions.length
+                    ? concept.revisions.map((revision) => (
+                      <div key={revision.number}>
+                        <span>
+                          Revision {revision.number} · {new Date(
+                            revision.publishedAt,
+                          ).toLocaleString()}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={actionBusy || concept.status === "archived"}
+                          onClick={() =>
+                            void restoreRevision(revision.number)}
+                        >
+                          Restore as draft
+                        </button>
+                      </div>
+                    ))
+                    : <p>Nothing has been published yet.</p>}
+                </section>
+              )}
+              {actionError && (
+                <p className="action-error" role="alert">{actionError}</p>
+              )}
+              <div
+                className={`editor-frame ${
+                  bootstrap.canEdit ? "" : "read-only"
+                }`}
+              >
+                {concept.status === "archived"
+                  ? (
+                    <section className="lifecycle-empty">
+                      <p className="eyebrow">Archived</p>
+                      <h1>Incident communication is out of discovery</h1>
+                      <p>
+                        Its published revisions remain preserved and can be
+                        restored.
+                      </p>
+                    </section>
+                  )
+                  : bootstrap.canEdit && view === "draft" && initialMarkdown
+                  ? (
+                    <>
+                      <div className="editor-context">
+                        <span className="draft-label">
+                          POLICY · SHARED DRAFT
+                        </span>
+                        <span>
+                          {concept.publishedRevision
+                            ? `Published revision ${concept.publishedRevision} stays live`
+                            : "Not published yet"}
+                        </span>
+                      </div>
+                      <EditorSurface
+                        key={editorVersion}
+                        initialMarkdown={initialMarkdown}
+                        user={user}
+                        canEdit
+                        onMarkdown={saveMarkdown}
+                        onStatus={setStatus}
+                        onCollaborators={setCollaborators}
+                      />
+                    </>
+                  )
+                  : concept.published
+                  ? (
+                    <>
+                      <div className="editor-context">
+                        <span className="published-label">
+                          POLICY · PUBLISHED
+                        </span>
+                        <span>Revision {concept.publishedRevision}</span>
+                      </div>
+                      <DocumentPreview
+                        key={`${concept.publishedRevision}-${view}`}
+                        markdown={concept.published}
+                      />
+                    </>
+                  )
+                  : (
+                    <section className="lifecycle-empty">
+                      <p className="eyebrow">Private draft</p>
+                      <h1>Nothing has been published yet</h1>
+                      <p>
+                        Viewers will see this concept after an editor publishes
+                        it.
+                      </p>
+                    </section>
+                  )}
+              </div>
+            </MilkdownProvider>
+          )}
       </section>
     </main>
   );

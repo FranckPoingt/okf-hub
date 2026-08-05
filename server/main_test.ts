@@ -81,7 +81,7 @@ class Client {
   }
 }
 
-Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access", async () => {
+Deno.test("enforces access and preserves the published lifecycle", async () => {
   const dataDir = await Deno.makeTempDir();
   const staticDir = `${dataDir}/dist`;
   await Deno.mkdir(staticDir);
@@ -91,11 +91,24 @@ Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access",
   );
   const fga = fakeOpenFga();
   const fgaPort = (fga.server.addr as Deno.NetAddr).port;
+  const objects = new Map<string, string>();
   const app = await createCollabApp({
     dataDir,
     staticDir,
     authSecret: "a-secure-test-secret-with-at-least-32-characters",
     openfgaURL: `http://127.0.0.1:${fgaPort}`,
+    objectStore: {
+      put(key, markdown) {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get(key) {
+        const markdown = objects.get(key);
+        return markdown === undefined
+          ? Promise.reject(new Error("Object not found"))
+          : Promise.resolve(markdown);
+      },
+    },
   });
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0, onListen() {} },
@@ -122,8 +135,13 @@ Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access",
       200,
     );
     assert.equal(
-      await (await owner.request("/api/concepts/incident-communication"))
-        .text(),
+      (await owner.request("/api/concepts/incident-communication")).status,
+      404,
+    );
+    const created = await owner.request("/api/concepts", { method: "POST" });
+    assert.equal(created.status, 201);
+    assert.equal(
+      (await created.json()).draft,
       DEFAULT_MARKDOWN,
     );
 
@@ -159,16 +177,68 @@ Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access",
       (await editor.request("/api/concepts/incident-communication")).status,
       200,
     );
+    assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
+    assert.equal(
+      (await viewer.request("/api/concepts/incident-communication")).status,
+      404,
+    );
     assert.equal(
       (await editor.request("/api/concepts/incident-communication", {
         method: "PUT",
-        body: "# Edited\n",
+        body: "# First published draft\n",
       })).status,
       204,
+    );
+    const firstPublish = await editor.request(
+      "/api/concepts/incident-communication/publish",
+      {
+        method: "POST",
+        body: JSON.stringify({ markdown: "# First published draft\n" }),
+      },
+    );
+    assert.equal(firstPublish.status, 200, await firstPublish.text());
+    assert.match(
+      objects.get("policies/incident-communication/revisions/1.md") ?? "",
+      /^---\ntype: Policy\ntitle: "Incident communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
     );
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
       200,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/concepts/incident-communication"))
+        .json()).published,
+      "# First published draft\n",
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication", {
+        method: "PUT",
+        body: "# Private next draft\n",
+      })).status,
+      204,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/concepts/incident-communication"))
+        .json()).published,
+      "# First published draft\n",
+    );
+    const secondPublish = await editor.request(
+      "/api/concepts/incident-communication/publish",
+      {
+        method: "POST",
+        body: JSON.stringify({ markdown: "# Second published revision\n" }),
+      },
+    );
+    const second = await secondPublish.json();
+    assert.equal(second.revisions.length, 2);
+    assert.equal(second.publishedRevision, 2);
+    const restoredDraft = await editor.request(
+      "/api/concepts/incident-communication/revisions/1/restore",
+      { method: "POST" },
+    );
+    assert.equal(
+      (await restoredDraft.json()).draft,
+      "# First published draft\n",
     );
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication", {
@@ -180,6 +250,33 @@ Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access",
     assert.equal(
       (await outsider.request("/api/concepts/incident-communication")).status,
       404,
+    );
+    const archived = await editor.request(
+      "/api/concepts/incident-communication/archive",
+      { method: "POST" },
+    );
+    assert.equal((await archived.json()).revisions.length, 2);
+    assert.deepEqual(await (await editor.request("/api/concepts")).json(), []);
+    assert.equal(
+      (await (await editor.request("/api/concepts?include=archived")).json())
+        .length,
+      1,
+    );
+    assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
+    assert.equal(
+      (await viewer.request("/api/concepts/incident-communication")).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication/restore", {
+        method: "POST",
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/concepts/incident-communication"))
+        .json()).published,
+      "# Second published revision\n",
     );
     assert.deepEqual(
       await (await outsider.request("/api/concepts")).json(),

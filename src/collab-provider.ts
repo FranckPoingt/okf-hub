@@ -50,11 +50,22 @@ export class DenoCollabProvider {
     this.open();
   }
 
-  destroy() {
+  stop() {
     this.active = false;
     if (this.reconnectTimer) globalThis.clearTimeout(this.reconnectTimer);
+    this.syncedListeners.clear();
+    if (this.socket) {
+      this.socket.onopen = null;
+      this.socket.onmessage = null;
+      this.socket.onclose = null;
+      this.socket.close();
+      this.socket = undefined;
+    }
+  }
+
+  destroy() {
+    this.stop();
     this.awareness.setLocalState(null);
-    this.socket?.close();
     this.doc.off("update", this.sendDocumentUpdate);
     this.awareness.off("update", this.sendAwarenessUpdate);
     this.awareness.off("change", this.reportCollaborators);
@@ -82,6 +93,7 @@ export class DenoCollabProvider {
     };
 
     socket.onmessage = async (event) => {
+      if (!this.active) return;
       if (event.data === "synced") {
         this.onStatus("online");
         this.syncedListeners.forEach((listener) => listener());
@@ -90,6 +102,7 @@ export class DenoCollabProvider {
       const data = event.data instanceof Blob
         ? new Uint8Array(await event.data.arrayBuffer())
         : new Uint8Array(event.data as ArrayBuffer);
+      if (!this.active || this.socket !== socket) return;
       if (data[0] === DOCUMENT_UPDATE) {
         Y.applyUpdate(this.doc, data.subarray(1), this);
       } else if (data[0] === AWARENESS_UPDATE) {
@@ -99,8 +112,8 @@ export class DenoCollabProvider {
 
     socket.onclose = () => {
       if (this.socket === socket) this.socket = undefined;
-      this.onStatus("offline");
       if (!this.active) return;
+      this.onStatus("offline");
       this.reconnectTimer = globalThis.setTimeout(
         () => this.open(),
         this.retryDelay,
