@@ -174,6 +174,34 @@ type AutomationState = {
   running: boolean;
   runs: AutomationRun[];
 };
+type ArtifactVersion = {
+  number: number;
+  createdBy: string;
+  createdAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+};
+type Artifact = {
+  id: string;
+  conceptId: string;
+  title: string;
+  type: "inline_html" | "https_url";
+  status: "draft" | "live" | "changes_pending";
+  draftVersion?: number;
+  liveVersion: number | null;
+  version: number;
+  content?: string;
+  document?: string;
+  url?: string;
+  versions: ArtifactVersion[];
+  updatedAt: string;
+};
+type ArtifactState = {
+  artifacts: Artifact[];
+  allowedHosts: string[];
+  canEdit: boolean;
+  canPublish: boolean;
+};
 
 function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
@@ -929,6 +957,244 @@ function AutomationPanel() {
         {state && state.runs.length === 0 && (
           <p className="source-empty">No source checks have run yet.</p>
         )}
+      </div>
+    </section>
+  );
+}
+
+function ArtifactFrame({ artifact }: { artifact: Artifact }) {
+  return (
+    <iframe
+      className="artifact-frame"
+      title={artifact.title}
+      sandbox="allow-scripts"
+      referrerPolicy="no-referrer"
+      allow=""
+      loading="lazy"
+      src={artifact.type === "https_url" ? artifact.url : undefined}
+      srcDoc={artifact.type === "inline_html" ? artifact.document : undefined}
+    />
+  );
+}
+
+function ArtifactPanel(
+  { conceptId, conceptActive }: { conceptId: string; conceptActive: boolean },
+) {
+  const [state, setState] = useState<ArtifactState | null>(null);
+  const [type, setType] = useState<"inline_html" | "https_url">("inline_html");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    const response = await api(
+      `/api/artifacts?conceptId=${encodeURIComponent(conceptId)}`,
+    );
+    const result = await response.json() as ArtifactState & { error?: string };
+    if (!response.ok) throw new Error(result.error ?? "Artifacts unavailable");
+    setState(result);
+  }, [conceptId]);
+  useEffect(() => {
+    load().catch((cause) => setError(cause.message));
+  }, [load]);
+
+  const create = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setBusy("create");
+    setError("");
+    const response = await api("/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId,
+        title: fields.get("title"),
+        type,
+        content: fields.get("content"),
+      }),
+    });
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
+    setBusy("");
+    if (!response.ok) {
+      setError(result.error ?? "Artifact creation failed");
+      return;
+    }
+    form.reset();
+    setType("inline_html");
+    await load();
+  };
+  const revise = async (
+    event: FormEvent<HTMLFormElement>,
+    artifact: Artifact,
+  ) => {
+    event.preventDefault();
+    const content = String(
+      new FormData(event.currentTarget).get("content") ?? "",
+    );
+    setBusy(artifact.id);
+    setError("");
+    const response = await api(`/api/artifacts/${artifact.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    });
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
+    setBusy("");
+    if (!response.ok) {
+      setError(result.error ?? "Artifact update failed");
+      return;
+    }
+    await load();
+  };
+  const publish = async (artifact: Artifact) => {
+    setBusy(artifact.id);
+    setError("");
+    const response = await api(`/api/artifacts/${artifact.id}/publish`, {
+      method: "POST",
+    });
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
+    setBusy("");
+    if (!response.ok) {
+      setError(result.error ?? "Artifact activation failed");
+      return;
+    }
+    await load();
+  };
+
+  if (!state && !error) {
+    return <div className="artifact-loading">Loading artifacts…</div>;
+  }
+  if (state && !state.canEdit && state.artifacts.length === 0) return null;
+  return (
+    <section className="artifact-panel" aria-labelledby="artifact-heading">
+      <div className="artifact-heading">
+        <div>
+          <p className="eyebrow">Interactive artifacts</p>
+          <h2 id="artifact-heading">Reviewed tools and dashboards</h2>
+          <p>
+            Artifacts are separate from portable Markdown and run in a
+            restricted iframe.
+          </p>
+        </div>
+      </div>
+      {state?.canEdit && conceptActive && (
+        <form
+          className="artifact-form"
+          onSubmit={(event) => void create(event)}
+        >
+          <label>
+            Title
+            <input name="title" maxLength={100} required />
+          </label>
+          <label>
+            Type
+            <select
+              value={type}
+              onChange={(event) =>
+                setType(event.target.value as "inline_html" | "https_url")}
+            >
+              <option value="inline_html">Inline HTML</option>
+              <option value="https_url">HTTPS application</option>
+            </select>
+          </label>
+          <label className="artifact-content">
+            {type === "inline_html" ? "HTML" : "HTTPS URL"}
+            <textarea
+              name="content"
+              rows={type === "inline_html" ? 7 : 2}
+              placeholder={type === "inline_html"
+                ? "<h2>Calculator</h2><script>…</script>"
+                : "https://apps.example.com/dashboard"}
+              required
+            />
+          </label>
+          {type === "https_url" && (
+            <p className="artifact-hosts">
+              Allowed hosts:{" "}
+              {state.allowedHosts.join(", ") || "none configured"}
+            </p>
+          )}
+          <button
+            className="primary"
+            type="submit"
+            disabled={busy === "create"}
+          >
+            {busy === "create" ? "Creating…" : "Create draft artifact"}
+          </button>
+        </form>
+      )}
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <div className="artifact-grid">
+        {state?.artifacts.map((artifact) => (
+          <article key={`${artifact.id}-${artifact.version}`}>
+            <header>
+              <div>
+                <span className={`artifact-status ${artifact.status}`}>
+                  {artifact.status.replace("_", " ")}
+                </span>
+                <span>
+                  {artifact.type === "inline_html" ? "HTML" : "HTTPS URL"}
+                </span>
+              </div>
+              <h3>{artifact.title}</h3>
+              <p>
+                Version {artifact.version}
+                {artifact.liveVersion
+                  ? ` · live ${artifact.liveVersion}`
+                  : " · not live"}
+              </p>
+            </header>
+            <ArtifactFrame artifact={artifact} />
+            {state.canEdit && conceptActive && artifact.content !== undefined &&
+              (
+                <form
+                  className="artifact-revision-form"
+                  onSubmit={(event) => void revise(event, artifact)}
+                >
+                  <label>
+                    Draft source
+                    <textarea
+                      key={artifact.version}
+                      name="content"
+                      rows={5}
+                      defaultValue={artifact.content}
+                      required
+                    />
+                  </label>
+                  <button type="submit" disabled={busy === artifact.id}>
+                    Save new version
+                  </button>
+                  {state.canPublish && artifact.status !== "live" && (
+                    <button
+                      className="primary"
+                      type="button"
+                      disabled={busy === artifact.id}
+                      onClick={() => void publish(artifact)}
+                    >
+                      Make version {artifact.version} live
+                    </button>
+                  )}
+                </form>
+              )}
+            {state.canEdit && artifact.versions.length > 0 && (
+              <details className="artifact-history">
+                <summary>{artifact.versions.length} versions</summary>
+                {artifact.versions.map((version) => (
+                  <p key={version.number}>
+                    Version {version.number} · {version.approvedAt
+                      ? `made live ${
+                        new Date(version.approvedAt).toLocaleString()
+                      }`
+                      : "draft"}
+                  </p>
+                ))}
+              </details>
+            )}
+          </article>
+        ))}
       </div>
     </section>
   );
@@ -1893,6 +2159,10 @@ export default function App() {
                     </section>
                   )}
               </div>
+              <ArtifactPanel
+                conceptId={concept.id}
+                conceptActive={concept.status === "active"}
+              />
             </MilkdownProvider>
           )}
       </section>

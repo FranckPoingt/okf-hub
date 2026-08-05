@@ -238,6 +238,7 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** HITL
 - **Blocked by:** KH-04
+- **Status:** Deferred by product choice; self-hosted Better Auth is sufficient for now.
 - **What to build:** A WorkOS-backed SSO and directory-sync adapter that maps identity-provider groups into existing OpenFGA relationships.
 - **Acceptance criteria:**
   - [ ] Self-hosted Better Auth remains the default.
@@ -248,13 +249,14 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** HITL
 - **Blocked by:** KH-06, KH-09
+- **Status:** Versioned inline HTML and allowlisted HTTPS artifacts delivered with owner-only activation.
 - **What to build:** Typed, reviewed HTML and URL artifacts attached to concepts, rendered in a sandboxed iframe with the concept's access policy.
 - **Acceptance criteria:**
-  - [ ] Ordinary Markdown never executes HTML.
-  - [ ] Artifacts require explicit type, review, and versioning.
-  - [ ] The renderer blocks unsafe script/network capabilities by default.
-  - [ ] Artifact access, previews, and audit events follow OpenFGA decisions.
+  - [x] Ordinary Markdown never executes HTML.
+  - [x] Artifacts require explicit type, review, and versioning.
+  - [x] The renderer blocks unsafe script/network capabilities by default.
+  - [x] Artifact access, previews, and audit events follow OpenFGA decisions.
 
 ## Development order
 
-Start with KH-02 and build through KH-05. At that point, a team can sign in, edit a real company document collaboratively, publish portable OKF, and control access. Add repository and shared-store import next, then unified search and freshness automation. Enterprise identity and interactive artifacts remain deliberate follow-on releases.
+KH-02 through KH-10 and KH-12 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

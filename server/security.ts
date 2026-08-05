@@ -558,6 +558,7 @@ export async function createSecurity({
     check,
     handle,
     isOwner,
+    audit,
     ensureImportedConcept,
     close: () => db.close(),
   };

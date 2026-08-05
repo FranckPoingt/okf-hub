@@ -53,3 +53,9 @@ Every search candidate and relationship target passes the same OpenFGA concept c
 Organisation owners can inspect and run source checks under **Sources → Checks and proposals**. The in-process scheduler checks each connected source independently every 15 minutes, records every attempt, retries a failed source once, and leaves unrelated sources running. Set `OKF_AUTOMATION_INTERVAL_MS=0` to disable scheduled runs.
 
 Each run also scans authorised imported concepts for broken internal Markdown links. Findings are stored as `fix_broken_link` proposals for operators; automation never changes hub-native drafts or published revisions. Review-date tasks remain deferred with KH-06.
+
+## KH-12 interactive artifacts
+
+Editors can attach versioned inline HTML or HTTPS applications to a hub-native concept. Owners explicitly make a draft version live; viewers only receive live artifacts, and every artifact request inherits the concept's OpenFGA access decision. Artifacts remain separate from portable Markdown.
+
+Inline HTML runs in an `allow-scripts` iframe with network, nested frames, objects, forms, and top-level navigation blocked. HTTPS applications must use an exact hostname listed in the comma-separated `OKF_ARTIFACT_ALLOWED_HOSTS` setting; leaving it empty disables URL artifacts.

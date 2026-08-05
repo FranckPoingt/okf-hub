@@ -221,6 +221,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       },
     },
     automationIntervalMs: 0,
+    allowedArtifactHosts: ["apps.example.com"],
     repositorySync() {
       repositorySyncs++;
       if (repositorySyncs >= 3) {
@@ -429,6 +430,126 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         body: "# Forbidden\n",
       })).status,
       403,
+    );
+    assert.deepEqual(
+      await (await viewer.request(
+        "/api/artifacts?conceptId=incident-communication",
+      )).json(),
+      {
+        artifacts: [],
+        allowedHosts: [],
+        canEdit: false,
+        canPublish: false,
+      },
+    );
+    assert.equal(
+      (await outsider.request(
+        "/api/artifacts?conceptId=incident-communication",
+      )).status,
+      404,
+    );
+    assert.equal(
+      (await viewer.request("/api/artifacts", {
+        method: "POST",
+        body: JSON.stringify({
+          conceptId: "incident-communication",
+          title: "Calculator",
+          type: "inline_html",
+          content: "<p>Forbidden</p>",
+        }),
+      })).status,
+      403,
+    );
+    const createdArtifact = await editor.request("/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "incident-communication",
+        title: "Incident calculator",
+        type: "inline_html",
+        content:
+          "<button onclick=\"document.body.dataset.used='yes'\">Calculate</button><script>document.body.dataset.ready='yes'</script>",
+      }),
+    });
+    assert.equal(createdArtifact.status, 201, await createdArtifact.text());
+    const artifact = await (await editor.request(
+      "/api/artifacts?conceptId=incident-communication",
+    )).json();
+    assert.equal(artifact.artifacts[0].status, "draft");
+    assert.match(artifact.artifacts[0].document, /connect-src 'none'/);
+    assert.deepEqual(
+      (await (await viewer.request(
+        "/api/artifacts?conceptId=incident-communication",
+      )).json()).artifacts,
+      [],
+    );
+    const artifactId = artifact.artifacts[0].id as string;
+    assert.equal(
+      (await editor.request(`/api/artifacts/${artifactId}/publish`, {
+        method: "POST",
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await owner.request(`/api/artifacts/${artifactId}/publish`, {
+        method: "POST",
+      })).status,
+      200,
+    );
+    const viewerArtifactV1 = (await (await viewer.request(
+      "/api/artifacts?conceptId=incident-communication",
+    )).json()).artifacts[0];
+    assert.equal(viewerArtifactV1.version, 1);
+    assert.equal(viewerArtifactV1.content, undefined);
+    assert.match(viewerArtifactV1.document, /Calculate/);
+    const revisedArtifact = await editor.request(
+      `/api/artifacts/${artifactId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ content: "<p>Version two</p>" }),
+      },
+    );
+    assert.equal((await revisedArtifact.json()).status, "changes_pending");
+    assert.doesNotMatch(
+      (await (await viewer.request(
+        "/api/artifacts?conceptId=incident-communication",
+      )).json()).artifacts[0].document,
+      /Version two/,
+    );
+    assert.equal(
+      (await owner.request(`/api/artifacts/${artifactId}/publish`, {
+        method: "POST",
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await editor.request("/api/artifacts", {
+        method: "POST",
+        body: JSON.stringify({
+          conceptId: "incident-communication",
+          title: "Blocked dashboard",
+          type: "https_url",
+          content: "https://blocked.example.com/dashboard",
+        }),
+      })).status,
+      400,
+    );
+    const urlArtifact = await editor.request("/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "incident-communication",
+        title: "Status dashboard",
+        type: "https_url",
+        content: "https://apps.example.com/status",
+      }),
+    });
+    const urlArtifactBody = await urlArtifact.json();
+    assert.equal(urlArtifact.status, 201);
+    assert.equal(urlArtifactBody.url, "https://apps.example.com/status");
+    assert.equal(
+      (await owner.request(`/api/artifacts/${urlArtifactBody.id}/publish`, {
+        method: "POST",
+      })).status,
+      200,
     );
     assert.equal(
       (await outsider.request("/api/concepts/incident-communication")).status,
@@ -799,6 +920,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.deepEqual(
       audit.map((event: { action: string }) => event.action).sort(),
       [
+        "artifact.created",
+        "artifact.created",
+        "artifact.published",
+        "artifact.published",
+        "artifact.published",
+        "artifact.revised",
         "invitation.accepted",
         "invitation.accepted",
         "invitation.created",

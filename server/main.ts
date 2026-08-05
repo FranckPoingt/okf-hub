@@ -3,6 +3,7 @@
 import * as Y from "yjs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
+import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { createObjectStore } from "./object-store.ts";
 import {
@@ -80,6 +81,7 @@ type AppOptions = {
     config: SharedSourceConfig,
   ) => Promise<RepositorySnapshot>;
   automationIntervalMs?: number;
+  allowedArtifactHosts?: string[];
 };
 
 type ConceptRow = {
@@ -283,6 +285,7 @@ export async function createCollabApp({
   repositorySync = syncRepository,
   sharedSourceSync = syncSharedSource,
   automationIntervalMs = DEFAULT_AUTOMATION_INTERVAL_MS,
+  allowedArtifactHosts = [],
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const security = await createSecurity({
@@ -452,6 +455,7 @@ export async function createCollabApp({
       );
     }
   }
+  const artifactStore = createArtifactStore(db, allowedArtifactHosts);
   const store = objectStore ??
     (s3Endpoint && s3AccessKey && s3SecretKey
       ? createObjectStore({
@@ -1418,6 +1422,217 @@ export async function createCollabApp({
         runs: automationHistory(),
       }, { headers: cors(request) });
     }
+    if (url.pathname === "/api/artifacts" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = url.searchParams.get("conceptId") ?? "";
+      if (
+        conceptId !== CONCEPT || !await security.check(current.user.id, "view")
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const row = concept();
+      const canEdit = await security.check(current.user.id, "edit");
+      if (
+        !row ||
+        (!canEdit && (row.status === "archived" || !row.publishedRevision))
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      return Response.json({
+        artifacts: artifactStore.list(conceptId, canEdit),
+        allowedHosts: canEdit ? artifactStore.allowedHosts : [],
+        canEdit,
+        canPublish: canEdit && security.isOwner(current.user.id),
+      }, { headers: cors(request) });
+    }
+    if (url.pathname === "/api/artifacts" && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      const conceptId = String(body.conceptId ?? "");
+      if (
+        conceptId !== CONCEPT || !await security.check(current.user.id, "view")
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (!await security.check(current.user.id, "edit")) {
+        return Response.json({ error: "Edit access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      if (concept()?.status !== "active") {
+        return Response.json({ error: "Restore the concept first" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      if (body.type !== "inline_html" && body.type !== "https_url") {
+        return Response.json({ error: "Choose an artifact type" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      try {
+        const artifact = artifactStore.create({
+          conceptId,
+          title: String(body.title ?? ""),
+          type: body.type,
+          content: String(body.content ?? ""),
+          actorUserId: current.user.id,
+        });
+        security.audit(
+          current.user.id,
+          "artifact.created",
+          `artifact:${artifact!.id}`,
+        );
+        return Response.json(artifact, { status: 201, headers: cors(request) });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error
+            ? error.message
+            : "Artifact creation failed",
+        }, {
+          status: error instanceof ArtifactInputError ? 400 : 503,
+          headers: cors(request),
+        });
+      }
+    }
+    const artifactPublish = url.pathname.match(
+      /^\/api\/artifacts\/([^/]+)\/publish$/,
+    );
+    if (artifactPublish && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const id = decodeURIComponent(artifactPublish[1]);
+      const conceptId = artifactStore.conceptId(id);
+      if (
+        conceptId !== CONCEPT ||
+        !await security.check(current.user.id, "edit")
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (concept()?.status !== "active") {
+        return Response.json({ error: "Restore the concept first" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const artifact = artifactStore.publish(id, current.user.id);
+      if (!artifact) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      security.audit(
+        current.user.id,
+        "artifact.published",
+        `artifact:${id}:version:${artifact.version}`,
+      );
+      return Response.json(artifact, { headers: cors(request) });
+    }
+    const artifactRevision = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
+    if (artifactRevision && request.method === "PUT") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const id = decodeURIComponent(artifactRevision[1]);
+      const conceptId = artifactStore.conceptId(id);
+      if (
+        conceptId !== CONCEPT ||
+        !await security.check(current.user.id, "view")
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (!await security.check(current.user.id, "edit")) {
+        return Response.json({ error: "Edit access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      if (concept()?.status !== "active") {
+        return Response.json({ error: "Restore the concept first" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        content?: unknown;
+      };
+      try {
+        const artifact = artifactStore.revise(
+          id,
+          String(body.content ?? ""),
+          current.user.id,
+        );
+        if (!artifact) {
+          return Response.json({ error: "Not found" }, {
+            status: 404,
+            headers: cors(request),
+          });
+        }
+        security.audit(
+          current.user.id,
+          "artifact.revised",
+          `artifact:${id}:version:${artifact.version}`,
+        );
+        return Response.json(artifact, { headers: cors(request) });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error
+            ? error.message
+            : "Artifact update failed",
+        }, {
+          status: error instanceof ArtifactInputError ? 400 : 503,
+          headers: cors(request),
+        });
+      }
+    }
     if (url.pathname === "/api/imports" && request.method === "GET") {
       const current = await security.session(request);
       if (!current) {
@@ -1941,6 +2156,9 @@ if (import.meta.main) {
     Deno.env.get("OKF_AUTOMATION_INTERVAL_MS") ??
       DEFAULT_AUTOMATION_INTERVAL_MS,
   );
+  const allowedArtifactHosts =
+    (Deno.env.get("OKF_ARTIFACT_ALLOWED_HOSTS") ?? "")
+      .split(",").map((host) => host.trim()).filter(Boolean);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("OKF_PORT must be a valid TCP port");
   }
@@ -1959,6 +2177,7 @@ if (import.meta.main) {
     s3SecretKey: Deno.env.get("OKF_S3_SECRET_KEY") ?? undefined,
     s3Bucket: Deno.env.get("OKF_S3_BUCKET") ?? undefined,
     automationIntervalMs,
+    allowedArtifactHosts,
   });
   Deno.serve({ hostname, port }, app.fetch);
 }

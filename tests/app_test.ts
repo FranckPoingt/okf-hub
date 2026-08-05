@@ -31,5 +31,13 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Source issues/);
   assert.match(bundle, /connected source is authoritative/);
   assert.match(bundle, /SHARED STORE/);
+  assert.match(bundle, /Reviewed tools and dashboards/);
+  assert.match(bundle, /Create draft artifact/);
+  assert.match(bundle, /Make version/);
+  assert.match(bundle, /allow-scripts/);
+  assert.doesNotMatch(
+    await Deno.readTextFile("src/App.tsx"),
+    /dangerouslySetInnerHTML/,
+  );
   assert.doesNotMatch(bundle, /Import \.md/);
 });
