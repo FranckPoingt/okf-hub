@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 
-Deno.test("builds the lifecycle and repository import shell", async () => {
+Deno.test("builds the lifecycle and connected-source shell", async () => {
   const html = await Deno.readTextFile("dist/index.html");
   assert.match(html, /<title>OKF Hub — Portable company knowledge<\/title>/);
 
@@ -21,7 +21,10 @@ Deno.test("builds the lifecycle and repository import shell", async () => {
   assert.match(bundle, /Restore concept/);
   assert.match(bundle, /Repository-owned OKF/);
   assert.match(bundle, /Refresh repository/);
+  assert.match(bundle, /Shared controlled OKF/);
+  assert.match(bundle, /Refresh shared store/);
   assert.match(bundle, /Source issues/);
-  assert.match(bundle, /REPOSITORY · READ ONLY/);
+  assert.match(bundle, /connected source is authoritative/);
+  assert.match(bundle, /SHARED STORE/);
   assert.doesNotMatch(bundle, /Import \.md/);
 });

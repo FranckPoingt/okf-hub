@@ -2,12 +2,14 @@
 
 import * as Y from "yjs";
 import { DatabaseSync } from "node:sqlite";
+import { createCredentialVault } from "./credential-vault.ts";
 import { createObjectStore } from "./object-store.ts";
 import {
   type RepositorySnapshot,
   syncRepository,
 } from "./repository-source.ts";
 import { CONCEPT, createSecurity } from "./security.ts";
+import { type SharedSourceConfig, syncSharedSource } from "./shared-source.ts";
 
 const DOCUMENT_UPDATE = 0;
 const AWARENESS_UPDATE = 1;
@@ -70,6 +72,9 @@ type AppOptions = {
     repositoryUrl: string,
     folder: string,
   ) => Promise<RepositorySnapshot>;
+  sharedSourceSync?: (
+    config: SharedSourceConfig,
+  ) => Promise<RepositorySnapshot>;
 };
 
 type ConceptRow = {
@@ -97,8 +102,21 @@ type RepositorySourceRow = {
   error: string | null;
 };
 
+type SharedSourceRow = {
+  endpoint: string;
+  bucket: string;
+  path: string;
+  region: string;
+  credentialsCipher: string;
+  status: "syncing" | "current" | "sync_failed";
+  revision: string | null;
+  lastSyncedAt: string | null;
+  error: string | null;
+};
+
 type ImportedConceptRow = {
   id: string;
+  sourceId: "repository" | "shared";
   path: string;
   title: string;
   type: string;
@@ -200,6 +218,7 @@ export async function createCollabApp({
   s3Bucket = "okf-hub",
   objectStore,
   repositorySync = syncRepository,
+  sharedSourceSync = syncSharedSource,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const security = await createSecurity({
@@ -214,6 +233,7 @@ export async function createCollabApp({
   const doc = new Y.Doc();
   const clients = new Set<WebSocket>();
   const db = new DatabaseSync(`${dataDir}/hub.db`);
+  const credentialVault = await createCredentialVault(dataDir);
   db.exec(`
     PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS okf_concept (
@@ -243,9 +263,22 @@ export async function createCollabApp({
       lastSyncedAt TEXT,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS okf_shared_source (
+      id TEXT PRIMARY KEY CHECK (id = 'shared'),
+      endpoint TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      path TEXT NOT NULL,
+      region TEXT NOT NULL,
+      credentialsCipher TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('syncing', 'current', 'sync_failed')),
+      revision TEXT,
+      lastSyncedAt TEXT,
+      error TEXT
+    );
     CREATE TABLE IF NOT EXISTS okf_imported_concept (
       id TEXT PRIMARY KEY,
-      path TEXT NOT NULL UNIQUE,
+      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      path TEXT NOT NULL,
       title TEXT NOT NULL,
       type TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('current', 'invalid', 'deleted', 'renamed')),
@@ -253,7 +286,8 @@ export async function createCollabApp({
       sourceRevision TEXT NOT NULL,
       contentHash TEXT NOT NULL,
       importedAt TEXT NOT NULL,
-      nextPath TEXT
+      nextPath TEXT,
+      UNIQUE (sourceId, path)
     );
     CREATE TABLE IF NOT EXISTS okf_imported_revision (
       conceptId TEXT NOT NULL,
@@ -263,10 +297,50 @@ export async function createCollabApp({
       PRIMARY KEY (conceptId, sourceRevision)
     );
     CREATE TABLE IF NOT EXISTS okf_import_issue (
-      path TEXT PRIMARY KEY,
-      error TEXT NOT NULL
+      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      path TEXT NOT NULL,
+      error TEXT NOT NULL,
+      PRIMARY KEY (sourceId, path)
     );
   `);
+  const importedColumns = db.prepare("PRAGMA table_info(okf_imported_concept)")
+    .all() as { name: string }[];
+  if (!importedColumns.some(({ name }) => name === "sourceId")) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE okf_imported_concept RENAME TO okf_imported_concept_legacy;
+      CREATE TABLE okf_imported_concept (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+        path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('current', 'invalid', 'deleted', 'renamed')),
+        objectKey TEXT NOT NULL,
+        sourceRevision TEXT NOT NULL,
+        contentHash TEXT NOT NULL,
+        importedAt TEXT NOT NULL,
+        nextPath TEXT,
+        UNIQUE (sourceId, path)
+      );
+      INSERT INTO okf_imported_concept
+        (id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath)
+        SELECT id, 'repository', path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath
+        FROM okf_imported_concept_legacy;
+      DROP TABLE okf_imported_concept_legacy;
+      ALTER TABLE okf_import_issue RENAME TO okf_import_issue_legacy;
+      CREATE TABLE okf_import_issue (
+        sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+        path TEXT NOT NULL,
+        error TEXT NOT NULL,
+        PRIMARY KEY (sourceId, path)
+      );
+      INSERT INTO okf_import_issue (sourceId, path, error)
+        SELECT 'repository', path, error FROM okf_import_issue_legacy;
+      DROP TABLE okf_import_issue_legacy;
+      COMMIT;
+    `);
+  }
   const store = objectStore ??
     (s3Endpoint && s3AccessKey && s3SecretKey
       ? createObjectStore({
@@ -293,18 +367,33 @@ export async function createCollabApp({
   const repositorySource = () =>
     db.prepare("SELECT * FROM okf_repository_source WHERE id = 'repository'")
       .get() as RepositorySourceRow | undefined;
-  const importedConcepts = (statuses = ["current"]) =>
+  const sharedSource = () =>
+    db.prepare("SELECT * FROM okf_shared_source WHERE id = 'shared'").get() as
+      | SharedSourceRow
+      | undefined;
+  const importedConcepts = (
+    sourceId?: "repository" | "shared",
+    statuses = ["current"],
+  ) =>
     db.prepare(
-      "SELECT * FROM okf_imported_concept WHERE status IN (" +
+      "SELECT * FROM okf_imported_concept WHERE " +
+        (sourceId ? "sourceId = ? AND " : "") + "status IN (" +
         statuses.map(() => "?").join(",") + ") ORDER BY title, path",
-    ).all(...statuses) as ImportedConceptRow[];
-  const importedId = (path: string) =>
-    "repository/" + encodeURIComponent(path.replace(/\.md$/i, ""));
-  const importedObjectKey = (revision: string, path: string) =>
-    "sources/repository/" + revision + "/" +
+    ).all(
+      ...(sourceId ? [sourceId, ...statuses] : statuses),
+    ) as ImportedConceptRow[];
+  const importedId = (sourceId: string, path: string) =>
+    sourceId + "/" + encodeURIComponent(path.replace(/\.md$/i, ""));
+  const importedObjectKey = (
+    sourceId: string,
+    revision: string,
+    path: string,
+  ) =>
+    `sources/${sourceId}/` + revision + "/" +
     path.split("/").map(encodeURIComponent).join("/");
   const importedPayload = (item: ImportedConceptRow) => ({
     id: item.id,
+    sourceId: item.sourceId,
     path: item.path,
     title: item.title,
     type: item.type,
@@ -313,19 +402,116 @@ export async function createCollabApp({
     importedAt: item.importedAt,
   });
 
-  function sourcePayload() {
-    const source = repositorySource();
+  function sourcePayload(sourceId: "repository" | "shared") {
+    const source = sourceId === "repository"
+      ? repositorySource()
+      : sharedSource();
     if (!source) return null;
     const issues = db.prepare(
-      "SELECT path, 'invalid' AS status, error, NULL AS nextPath FROM okf_import_issue UNION ALL SELECT path, status, NULL AS error, nextPath FROM okf_imported_concept WHERE status IN ('deleted', 'renamed') ORDER BY path",
-    ).all();
-    return {
-      id: "repository",
-      kind: "git",
-      ...source,
-      conceptCount: importedConcepts().length,
+      "SELECT path, 'invalid' AS status, error, NULL AS nextPath FROM okf_import_issue WHERE sourceId = ? UNION ALL SELECT path, status, NULL AS error, nextPath FROM okf_imported_concept WHERE sourceId = ? AND status IN ('deleted', 'renamed') ORDER BY path",
+    ).all(sourceId, sourceId);
+    const common = {
+      id: sourceId,
+      status: source.status,
+      revision: source.revision,
+      lastSyncedAt: source.lastSyncedAt,
+      error: source.error,
+      conceptCount: importedConcepts(sourceId).length,
       issues,
     };
+    return sourceId === "repository"
+      ? {
+        ...common,
+        kind: "git",
+        repositoryUrl: (source as RepositorySourceRow).repositoryUrl,
+        folder: (source as RepositorySourceRow).folder,
+      }
+      : {
+        ...common,
+        kind: "s3",
+        endpoint: (source as SharedSourceRow).endpoint,
+        bucket: (source as SharedSourceRow).bucket,
+        path: (source as SharedSourceRow).path,
+        region: (source as SharedSourceRow).region,
+        credentialsConfigured: true,
+      };
+  }
+
+  async function importSnapshot(
+    sourceId: "repository" | "shared",
+    snapshot: RepositorySnapshot,
+    markCurrent: (revision: string, now: string) => void,
+  ) {
+    for (const file of snapshot.files) {
+      await store.put(
+        importedObjectKey(sourceId, snapshot.revision, file.path),
+        file.markdown,
+      );
+      await security.ensureImportedConcept(importedId(sourceId, file.path));
+    }
+
+    const previous = importedConcepts(sourceId, ["current", "invalid"]);
+    const previousPaths = new Set(previous.map((item) => item.path));
+    const observedPaths = new Set([
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.issues.map((issue) => issue.path),
+    ]);
+    const newFiles = snapshot.files.filter((file) =>
+      !previousPaths.has(file.path)
+    );
+    const now = new Date().toISOString();
+    db.exec("BEGIN");
+    try {
+      db.prepare("DELETE FROM okf_import_issue WHERE sourceId = ?").run(
+        sourceId,
+      );
+      for (const issue of snapshot.issues) {
+        db.prepare(
+          "INSERT INTO okf_import_issue (sourceId, path, error) VALUES (?, ?, ?)",
+        ).run(sourceId, issue.path, issue.error);
+        db.prepare(
+          "UPDATE okf_imported_concept SET status = 'invalid', nextPath = NULL WHERE sourceId = ? AND path = ?",
+        ).run(sourceId, issue.path);
+      }
+      for (const item of previous) {
+        if (observedPaths.has(item.path)) continue;
+        const renamed = newFiles.find((file) => file.hash === item.contentHash);
+        db.prepare(
+          "UPDATE okf_imported_concept SET status = ?, nextPath = ? WHERE id = ?",
+        ).run(renamed ? "renamed" : "deleted", renamed?.path ?? null, item.id);
+      }
+      for (const file of snapshot.files) {
+        const id = importedId(sourceId, file.path);
+        const key = importedObjectKey(sourceId, snapshot.revision, file.path);
+        db.prepare(
+          "INSERT INTO okf_imported_concept " +
+            "(id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath) " +
+            "VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, NULL) " +
+            "ON CONFLICT(sourceId, path) DO UPDATE SET " +
+            "title = excluded.title, type = excluded.type, status = 'current', " +
+            "objectKey = excluded.objectKey, sourceRevision = excluded.sourceRevision, " +
+            "contentHash = excluded.contentHash, importedAt = excluded.importedAt, nextPath = NULL",
+        ).run(
+          id,
+          sourceId,
+          file.path,
+          file.title,
+          file.type,
+          key,
+          snapshot.revision,
+          file.hash,
+          now,
+        );
+        db.prepare(
+          "INSERT OR IGNORE INTO okf_imported_revision (conceptId, sourceRevision, objectKey, importedAt) VALUES (?, ?, ?, ?)",
+        ).run(id, snapshot.revision, key, now);
+      }
+      markCurrent(snapshot.revision, now);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async function syncRepositorySource() {
@@ -340,81 +526,11 @@ export async function createCollabApp({
         source.repositoryUrl,
         source.folder,
       );
-      for (const file of snapshot.files) {
-        await store.put(
-          importedObjectKey(snapshot.revision, file.path),
-          file.markdown,
-        );
-        await security.ensureImportedConcept(importedId(file.path));
-      }
-
-      const previous = importedConcepts(["current", "invalid"]);
-      const previousPaths = new Set(previous.map((item) => item.path));
-      const observedPaths = new Set([
-        ...snapshot.files.map((file) => file.path),
-        ...snapshot.issues.map((issue) => issue.path),
-      ]);
-      const newFiles = snapshot.files.filter((file) =>
-        !previousPaths.has(file.path)
-      );
-      const now = new Date().toISOString();
-      db.exec("BEGIN");
-      try {
-        db.exec("DELETE FROM okf_import_issue");
-        for (const issue of snapshot.issues) {
-          db.prepare(
-            "INSERT INTO okf_import_issue (path, error) VALUES (?, ?)",
-          ).run(issue.path, issue.error);
-          db.prepare(
-            "UPDATE okf_imported_concept SET status = 'invalid', nextPath = NULL WHERE path = ?",
-          ).run(issue.path);
-        }
-        for (const item of previous) {
-          if (observedPaths.has(item.path)) continue;
-          const renamed = newFiles.find((file) =>
-            file.hash === item.contentHash
-          );
-          db.prepare(
-            "UPDATE okf_imported_concept SET status = ?, nextPath = ? WHERE id = ?",
-          ).run(
-            renamed ? "renamed" : "deleted",
-            renamed?.path ?? null,
-            item.id,
-          );
-        }
-        for (const file of snapshot.files) {
-          const id = importedId(file.path);
-          const key = importedObjectKey(snapshot.revision, file.path);
-          db.prepare(
-            "INSERT INTO okf_imported_concept " +
-              "(id, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath) " +
-              "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?, NULL) " +
-              "ON CONFLICT(path) DO UPDATE SET " +
-              "title = excluded.title, type = excluded.type, status = 'current', " +
-              "objectKey = excluded.objectKey, sourceRevision = excluded.sourceRevision, " +
-              "contentHash = excluded.contentHash, importedAt = excluded.importedAt, nextPath = NULL",
-          ).run(
-            id,
-            file.path,
-            file.title,
-            file.type,
-            key,
-            snapshot.revision,
-            file.hash,
-            now,
-          );
-          db.prepare(
-            "INSERT OR IGNORE INTO okf_imported_revision (conceptId, sourceRevision, objectKey, importedAt) VALUES (?, ?, ?, ?)",
-          ).run(id, snapshot.revision, key, now);
-        }
+      await importSnapshot("repository", snapshot, (revision, now) => {
         db.prepare(
           "UPDATE okf_repository_source SET status = 'current', revision = ?, lastSyncedAt = ?, error = NULL WHERE id = 'repository'",
-        ).run(snapshot.revision, now);
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
+        ).run(revision, now);
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sync failed";
       db.prepare(
@@ -432,6 +548,47 @@ export async function createCollabApp({
       repositoryRefresh = undefined;
     });
     return repositoryRefresh;
+  }
+
+  async function syncSharedStoreSource() {
+    const source = sharedSource();
+    if (!source) throw new Error("Connect a shared store first");
+    db.prepare(
+      "UPDATE okf_shared_source SET status = 'syncing', error = NULL WHERE id = 'shared'",
+    ).run();
+    try {
+      const credentials = await credentialVault.decrypt<{
+        accessKey: string;
+        secretKey: string;
+      }>(source.credentialsCipher);
+      const snapshot = await sharedSourceSync({
+        endpoint: source.endpoint,
+        bucket: source.bucket,
+        path: source.path,
+        region: source.region,
+        ...credentials,
+      });
+      await importSnapshot("shared", snapshot, (revision, now) => {
+        db.prepare(
+          "UPDATE okf_shared_source SET status = 'current', revision = ?, lastSyncedAt = ?, error = NULL WHERE id = 'shared'",
+        ).run(revision, now);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Sync failed";
+      db.prepare(
+        "UPDATE okf_shared_source SET status = 'sync_failed', error = ? WHERE id = 'shared'",
+      ).run(message.slice(0, 500));
+      throw error;
+    }
+  }
+
+  let sharedRefresh: Promise<void> | undefined;
+  function refreshSharedStore() {
+    if (sharedRefresh) return sharedRefresh;
+    sharedRefresh = syncSharedStoreSource().finally(() => {
+      sharedRefresh = undefined;
+    });
+    return sharedRefresh;
   }
 
   let markdown: string;
@@ -522,7 +679,10 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      return Response.json(sourcePayload(), { headers: cors(request) });
+      return Response.json({
+        repository: sourcePayload("repository"),
+        shared: sourcePayload("shared"),
+      }, { headers: cors(request) });
     }
     if (
       url.pathname === "/api/sources/repository" && request.method === "POST"
@@ -594,12 +754,12 @@ export async function createCollabApp({
       }
       try {
         await refreshRepository();
-        return Response.json(sourcePayload(), {
+        return Response.json(sourcePayload("repository"), {
           status: 201,
           headers: cors(request),
         });
       } catch {
-        return Response.json(sourcePayload(), {
+        return Response.json(sourcePayload("repository"), {
           status: 502,
           headers: cors(request),
         });
@@ -624,9 +784,158 @@ export async function createCollabApp({
       }
       try {
         await refreshRepository();
-        return Response.json(sourcePayload(), { headers: cors(request) });
+        return Response.json(sourcePayload("repository"), {
+          headers: cors(request),
+        });
       } catch {
-        return Response.json(sourcePayload(), {
+        return Response.json(sourcePayload("repository"), {
+          status: 502,
+          headers: cors(request),
+        });
+      }
+    }
+    if (url.pathname === "/api/sources/shared" && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const existing = sharedSource();
+      if (existing?.revision) {
+        return Response.json({ error: "Shared store already connected" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      let endpoint: URL;
+      try {
+        endpoint = new URL(String(body.endpoint ?? "").trim());
+      } catch {
+        return Response.json({ error: "Enter a valid S3 endpoint" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (
+        !["http:", "https:"].includes(endpoint.protocol) ||
+        endpoint.username || endpoint.password
+      ) {
+        return Response.json({
+          error: "Use an HTTP(S) endpoint without embedded credentials",
+        }, { status: 400, headers: cors(request) });
+      }
+      const bucket = String(body.bucket ?? "").trim();
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,61}[a-zA-Z0-9]$/.test(bucket)) {
+        return Response.json({ error: "Enter a valid S3 bucket name" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const path = String(body.path ?? "okf").trim().replace(/^\.\//, "")
+        .replace(/\/+$/, "");
+      if (
+        path.startsWith("/") || path.includes("\\") ||
+        path.split("/").includes("..")
+      ) {
+        return Response.json({ error: "Enter a bucket-relative path" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const region = String(body.region ?? "us-east-1").trim();
+      if (!region || !/^[a-zA-Z0-9-]+$/.test(region)) {
+        return Response.json({ error: "Enter a valid S3 region" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const accessKey = String(body.accessKey ?? "").trim();
+      const secretKey = String(body.secretKey ?? "");
+      if (Boolean(accessKey) !== Boolean(secretKey)) {
+        return Response.json({ error: "Enter both S3 credentials" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (!accessKey && !existing) {
+        return Response.json({ error: "Enter S3 credentials" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const credentialsCipher = accessKey
+        ? await credentialVault.encrypt({ accessKey, secretKey })
+        : existing!.credentialsCipher;
+      if (existing) {
+        db.prepare(
+          "UPDATE okf_shared_source SET endpoint = ?, bucket = ?, path = ?, region = ?, credentialsCipher = ?, status = 'syncing', error = NULL WHERE id = 'shared'",
+        ).run(
+          endpoint.toString(),
+          bucket,
+          path,
+          region,
+          credentialsCipher,
+        );
+      } else {
+        db.prepare(
+          "INSERT INTO okf_shared_source (id, endpoint, bucket, path, region, credentialsCipher, status) VALUES ('shared', ?, ?, ?, ?, ?, 'syncing')",
+        ).run(
+          endpoint.toString(),
+          bucket,
+          path,
+          region,
+          credentialsCipher,
+        );
+      }
+      try {
+        await refreshSharedStore();
+        return Response.json(sourcePayload("shared"), {
+          status: 201,
+          headers: cors(request),
+        });
+      } catch {
+        return Response.json(sourcePayload("shared"), {
+          status: 502,
+          headers: cors(request),
+        });
+      }
+    }
+    if (
+      url.pathname === "/api/sources/shared/refresh" &&
+      request.method === "POST"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      try {
+        await refreshSharedStore();
+        return Response.json(sourcePayload("shared"), {
+          headers: cors(request),
+        });
+      } catch {
+        return Response.json(sourcePayload("shared"), {
           status: 502,
           headers: cors(request),
         });
@@ -646,7 +955,6 @@ export async function createCollabApp({
           visible.push({
             ...importedPayload(item),
             kind: "imported",
-            source: "repository",
           });
         }
       }
@@ -661,9 +969,12 @@ export async function createCollabApp({
         });
       }
       const path = url.searchParams.get("path") ?? "";
+      const sourceId = url.searchParams.get("source") === "shared"
+        ? "shared"
+        : "repository";
       const item = db.prepare(
-        "SELECT * FROM okf_imported_concept WHERE path = ? AND status IN ('current', 'invalid')",
-      ).get(path) as ImportedConceptRow | undefined;
+        "SELECT * FROM okf_imported_concept WHERE sourceId = ? AND path = ? AND status IN ('current', 'invalid')",
+      ).get(sourceId, path) as ImportedConceptRow | undefined;
       if (
         !item || !await security.check(current.user.id, "view", item.id)
       ) {
@@ -684,7 +995,7 @@ export async function createCollabApp({
           kind: "imported",
           markdown: withoutFrontmatter(raw),
           revisionCount,
-          source: sourcePayload(),
+          source: sourcePayload(item.sourceId),
         }, { headers: cors(request) });
       } catch (error) {
         return Response.json({

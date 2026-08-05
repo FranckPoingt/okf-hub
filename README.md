@@ -16,7 +16,7 @@ Run `deno task stack` to build and start the Deno app, OpenFGA with SQLite, and 
 
 Stop the stack without deleting data with `deno task stack:down`. Create a consistent backup with `deno task stack:backup`, then restore one with `deno task stack:restore backups/<file>.tgz --yes`. Restore stops the data services and only restarts them after a successful extraction.
 
-Keep `.okf-stack.env` in a separate secure backup; data archives intentionally exclude credentials.
+Keep `.okf-stack.env` in a separate secure backup; data archives exclude those stack service credentials. Archives do include encrypted connected-source credentials and their local decryption key, so protect backups as sensitive data.
 
 This first installation uses single-node RustFS, which has no storage redundancy. Move to multi-node RustFS when the deployment needs host-failure tolerance.
 
@@ -35,3 +35,9 @@ Authors work in a private, autosaved visual draft. **Publish** writes a versione
 The organisation owner can connect one public HTTPS Git repository and repository-relative OKF folder under **Repository**. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
 
 The Docker image includes Git. Install `git` separately when running `deno task start` outside Docker. Private-repository credentials and provider webhooks are intentionally deferred until manual refresh is insufficient.
+
+## KH-08 shared controlled store
+
+The organisation owner can also connect one S3-compatible endpoint, bucket, and OKF path under **Sources**. The hub lists and validates Markdown without GitHub, copies each healthy source revision into its revision store, and keeps the last healthy imports available when a refresh fails. S3 credentials are write-only in the browser API and AES-GCM encrypted in SQLite with a generated `source-credentials.key` stored at mode `0600` in the application data volume.
+
+Use **Refresh shared store** to retry or index a changed bundle. The connector uses path-style S3 requests and the standard AWS Signature Version 4 credential format; RustFS, AWS S3, R2, and other compatible endpoints can use their normal endpoint and region values.

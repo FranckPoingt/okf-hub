@@ -8,6 +8,12 @@ type StoreOptions = {
   region?: string;
 };
 
+export type StoredObject = {
+  key: string;
+  etag: string;
+  size: number;
+};
+
 const encoder = new TextEncoder();
 
 function hex(value: ArrayBuffer | Uint8Array) {
@@ -59,6 +65,22 @@ function objectPath(bucket: string, key = "") {
   }`;
 }
 
+function awsEncode(value: string) {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function xmlValue(xml: string, tag: string) {
+  return xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1]
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'") ?? "";
+}
+
 export function createObjectStore({
   endpoint,
   accessKey,
@@ -68,17 +90,27 @@ export function createObjectStore({
 }: StoreOptions) {
   const base = new URL(endpoint);
 
-  async function request(method: "GET" | "PUT", key = "", body = "") {
+  async function request(
+    method: "GET" | "PUT",
+    key = "",
+    body = "",
+    query: Record<string, string> = {},
+  ) {
     const now = new Date();
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
     const date = amzDate.slice(0, 8);
     const path = objectPath(bucket, key);
+    const canonicalQuery = Object.entries(query).sort(([left], [right]) =>
+      left.localeCompare(right)
+    ).map(([name, value]) => `${awsEncode(name)}=${awsEncode(value)}`).join(
+      "&",
+    );
     const payloadHash = await sha256(body);
     const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
     const canonicalHeaders =
       `host:${base.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
     const canonical =
-      `${method}\n${path}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+      `${method}\n${path}\n${canonicalQuery}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
     const scope = `${date}/${region}/s3/aws4_request`;
     const toSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256(
       canonical,
@@ -88,7 +120,9 @@ export function createObjectStore({
     const serviceKey = await hmac(regionKey, "s3");
     const signingKey = await hmac(serviceKey, "aws4_request");
     const signature = hex(await hmac(signingKey, toSign));
-    const response = await fetch(new URL(path, base), {
+    const url = new URL(path, base);
+    url.search = canonicalQuery;
+    const response = await fetch(url, {
       method,
       body: method === "PUT" ? body : undefined,
       headers: {
@@ -134,6 +168,32 @@ export function createObjectStore({
         );
       }
       return response.text();
+    },
+    async list(prefix = ""): Promise<StoredObject[]> {
+      const objects: StoredObject[] = [];
+      let continuation = "";
+      do {
+        const response = await request("GET", "", "", {
+          "encoding-type": "url",
+          "list-type": "2",
+          prefix,
+          ...(continuation ? { "continuation-token": continuation } : {}),
+        });
+        if (!response.ok) {
+          throw new Error(
+            `Object storage ${response.status}: ${await response.text()}`,
+          );
+        }
+        const xml = await response.text();
+        for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+          const key = decodeURIComponent(xmlValue(match[1], "Key"));
+          const etag = xmlValue(match[1], "ETag").replace(/^"|"$/g, "");
+          const size = Number(xmlValue(match[1], "Size"));
+          if (key && Number.isFinite(size)) objects.push({ key, etag, size });
+        }
+        continuation = xmlValue(xml, "NextContinuationToken");
+      } while (continuation);
+      return objects;
     },
   };
 }

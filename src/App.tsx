@@ -79,8 +79,28 @@ type RepositorySource = {
   conceptCount: number;
   issues: SourceIssue[];
 };
+type SharedSource = {
+  id: "shared";
+  kind: "s3";
+  endpoint: string;
+  bucket: string;
+  path: string;
+  region: string;
+  credentialsConfigured: true;
+  status: "syncing" | "current" | "sync_failed";
+  revision: string | null;
+  lastSyncedAt: string | null;
+  error: string | null;
+  conceptCount: number;
+  issues: SourceIssue[];
+};
+type Sources = {
+  repository: RepositorySource | null;
+  shared: SharedSource | null;
+};
 type ImportedConcept = {
   id: string;
+  sourceId: "repository" | "shared";
   path: string;
   title: string;
   type: string;
@@ -89,7 +109,7 @@ type ImportedConcept = {
   importedAt: string;
   markdown?: string;
   revisionCount?: number;
-  source?: RepositorySource;
+  source?: RepositorySource | SharedSource;
 };
 
 function api(path: string, init: RequestInit = {}) {
@@ -427,6 +447,50 @@ function EditorSurface(
   return <Milkdown />;
 }
 
+function SourceIssues({ issues }: { issues: SourceIssue[] }) {
+  if (!issues.length) return null;
+  return (
+    <section className="source-issues" aria-label="Source issues">
+      <h3>Source issues</h3>
+      {issues.map((issue) => (
+        <p key={`${issue.status}-${issue.path}`}>
+          <strong>{issue.status}</strong>
+          <code>{issue.path}</code>
+          <span>
+            {issue.error ?? (issue.nextPath
+              ? `Moved to ${issue.nextPath}`
+              : "No longer present at the source revision")}
+          </span>
+        </p>
+      ))}
+    </section>
+  );
+}
+
+function ImportGrid(
+  { sourceId, imports, onOpen }: {
+    sourceId: "repository" | "shared";
+    imports: ImportedConcept[];
+    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
+  },
+) {
+  return (
+    <section className="import-grid" aria-label="Imported concepts">
+      {imports.filter((item) => item.sourceId === sourceId).map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => void onOpen(sourceId, item.path)}
+        >
+          <span>{item.type}</span>
+          <strong>{item.title}</strong>
+          <small>{item.path}</small>
+        </button>
+      ))}
+    </section>
+  );
+}
+
 function RepositoryPanel(
   { source, imports, canManage, busy, error, onConnect, onRefresh, onOpen }: {
     source: RepositorySource | null;
@@ -436,7 +500,7 @@ function RepositoryPanel(
     error: string;
     onConnect: (repositoryUrl: string, folder: string) => Promise<void>;
     onRefresh: () => Promise<void>;
-    onOpen: (path: string) => Promise<void>;
+    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
   },
 ) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
@@ -466,16 +530,18 @@ function RepositoryPanel(
       <button className="primary" type="submit" disabled={busy}>
         {busy
           ? "Connecting…"
-          : source ? "Try different settings" : "Connect and import"}
+          : source
+          ? "Try different settings"
+          : "Connect and import"}
       </button>
     </form>
   );
   return (
-    <section className="source-panel" aria-labelledby="source-heading">
+    <section className="source-card" aria-labelledby="repository-heading">
       <div className="source-heading">
         <div>
-          <p className="eyebrow">Connected knowledge</p>
-          <h1 id="source-heading">Repository-owned OKF</h1>
+          <p className="eyebrow">Git source</p>
+          <h2 id="repository-heading">Repository-owned OKF</h2>
           <p>
             Imported concepts stay read-only here. The Git repository remains
             authoritative.
@@ -519,44 +585,179 @@ function RepositoryPanel(
                   <code>{source.revision?.slice(0, 12) ?? "None"}</code>
                 </dd>
               </div>
+              <div>
+                <dt>Last successful sync</dt>
+                <dd>
+                  {source.lastSyncedAt
+                    ? new Date(source.lastSyncedAt).toLocaleString()
+                    : "Not yet"}
+                </dd>
+              </div>
             </dl>
             {source.error && (
               <p className="source-error" role="alert">{source.error}</p>
             )}
-            {source.issues.length > 0 && (
-              <section className="source-issues" aria-label="Source issues">
-                <h2>Source issues</h2>
-                {source.issues.map((issue) => (
-                  <p key={`${issue.status}-${issue.path}`}>
-                    <strong>{issue.status}</strong>
-                    <code>{issue.path}</code>
-                    <span>
-                      {issue.error ?? (issue.nextPath
-                        ? `Moved to ${issue.nextPath}`
-                        : "No longer present at the source revision")}
-                    </span>
-                  </p>
-                ))}
-              </section>
-            )}
+            <SourceIssues issues={source.issues} />
             {canManage && source.status === "sync_failed" &&
               !source.revision && connectionForm}
           </>
         )}
       {error && <p className="source-error" role="alert">{error}</p>}
-      <section className="import-grid" aria-label="Imported concepts">
-        {imports.map((item) => (
+      <ImportGrid sourceId="repository" imports={imports} onOpen={onOpen} />
+    </section>
+  );
+}
+
+function SharedStorePanel(
+  { source, imports, canManage, busy, error, onConnect, onRefresh, onOpen }: {
+    source: SharedSource | null;
+    imports: ImportedConcept[];
+    canManage: boolean;
+    busy: boolean;
+    error: string;
+    onConnect: (values: Record<string, string>) => Promise<void>;
+    onRefresh: () => Promise<void>;
+    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
+  },
+) {
+  const connect = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    void onConnect({
+      endpoint: String(fields.get("endpoint") ?? ""),
+      bucket: String(fields.get("bucket") ?? ""),
+      path: String(fields.get("path") ?? "okf"),
+      region: String(fields.get("region") ?? "us-east-1"),
+      accessKey: String(fields.get("accessKey") ?? ""),
+      secretKey: String(fields.get("secretKey") ?? ""),
+    });
+  };
+  const connectionForm = (
+    <form className="source-form shared-source-form" onSubmit={connect}>
+      <label>
+        S3 endpoint
+        <input
+          name="endpoint"
+          type="url"
+          placeholder="https://s3.example.com"
+          defaultValue={source?.endpoint}
+          required
+        />
+      </label>
+      <label>
+        Bucket
+        <input name="bucket" defaultValue={source?.bucket} required />
+      </label>
+      <label>
+        OKF path
+        <input name="path" defaultValue={source?.path ?? "okf"} required />
+      </label>
+      <label>
+        Region
+        <input
+          name="region"
+          defaultValue={source?.region ?? "us-east-1"}
+          required
+        />
+      </label>
+      <label>
+        Access key
+        <input
+          name="accessKey"
+          autoComplete="off"
+          required={!source?.credentialsConfigured}
+        />
+      </label>
+      <label>
+        Secret key
+        <input
+          name="secretKey"
+          type="password"
+          autoComplete="new-password"
+          required={!source?.credentialsConfigured}
+        />
+      </label>
+      <button className="primary" type="submit" disabled={busy}>
+        {busy
+          ? "Connecting…"
+          : source
+          ? "Retry with these settings"
+          : "Connect and import"}
+      </button>
+    </form>
+  );
+  return (
+    <section className="source-card" aria-labelledby="shared-heading">
+      <div className="source-heading">
+        <div>
+          <p className="eyebrow">Shared store source</p>
+          <h2 id="shared-heading">Shared controlled OKF</h2>
+          <p>
+            Import a portable OKF bundle directly from customer-controlled
+            object storage, without GitHub.
+          </p>
+        </div>
+        {source && canManage && (
           <button
-            key={item.path}
+            className="primary"
             type="button"
-            onClick={() => void onOpen(item.path)}
+            disabled={busy}
+            onClick={() => void onRefresh()}
           >
-            <span>{item.type}</span>
-            <strong>{item.title}</strong>
-            <small>{item.path}</small>
+            {busy ? "Refreshing…" : "Refresh shared store"}
           </button>
-        ))}
-      </section>
+        )}
+      </div>
+      {!source
+        ? canManage
+          ? connectionForm
+          : <p className="source-empty">No shared store has been connected.</p>
+        : (
+          <>
+            <dl className="source-provenance">
+              <div>
+                <dt>Status</dt>
+                <dd className={`source-status ${source.status}`}>
+                  {source.status.replace("_", " ")}
+                </dd>
+              </div>
+              <div>
+                <dt>Endpoint</dt>
+                <dd>{source.endpoint}</dd>
+              </div>
+              <div>
+                <dt>Bucket and path</dt>
+                <dd>{source.bucket}/{source.path}</dd>
+              </div>
+              <div>
+                <dt>Source revision</dt>
+                <dd>
+                  <code>{source.revision?.slice(0, 12) ?? "None"}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>Last successful sync</dt>
+                <dd>
+                  {source.lastSyncedAt
+                    ? new Date(source.lastSyncedAt).toLocaleString()
+                    : "Not yet"}
+                </dd>
+              </div>
+              <div>
+                <dt>Credentials</dt>
+                <dd>Encrypted and stored server-side</dd>
+              </div>
+            </dl>
+            {source.error && (
+              <p className="source-error" role="alert">{source.error}</p>
+            )}
+            <SourceIssues issues={source.issues} />
+            {canManage && source.status === "sync_failed" &&
+              !source.revision && connectionForm}
+          </>
+        )}
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <ImportGrid sourceId="shared" imports={imports} onOpen={onOpen} />
     </section>
   );
 }
@@ -580,11 +781,14 @@ export default function App() {
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
   const [source, setSource] = useState<RepositorySource | null>(null);
+  const [sharedSource, setSharedSource] = useState<SharedSource | null>(null);
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
+  const [sharedBusy, setSharedBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
+  const [sharedError, setSharedError] = useState("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -599,15 +803,17 @@ export default function App() {
     if (!response.ok) throw new Error(result.error ?? "Service unavailable");
     setBootstrap(result);
   }, []);
-  const loadRepository = useCallback(async () => {
+  const loadSources = useCallback(async () => {
     const [sourceResponse, importsResponse] = await Promise.all([
       api("/api/sources"),
       api("/api/imports"),
     ]);
     if (!sourceResponse.ok || !importsResponse.ok) {
-      throw new Error("Repository source unavailable");
+      throw new Error("Connected sources unavailable");
     }
-    setSource(await sourceResponse.json());
+    const sources = await sourceResponse.json() as Sources;
+    setSource(sources.repository);
+    setSharedSource(sources.shared);
     setImports(await importsResponse.json());
   }, []);
 
@@ -644,8 +850,8 @@ export default function App() {
   }, [bootstrap?.canView, bootstrap?.canEdit]);
   useEffect(() => {
     if (!bootstrap?.canView) return;
-    loadRepository().catch((error) => setSourceError(error.message));
-  }, [bootstrap?.canView, loadRepository]);
+    loadSources().catch((error) => setSourceError(error.message));
+  }, [bootstrap?.canView, loadSources]);
 
   const signOut = () => {
     void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
@@ -654,6 +860,7 @@ export default function App() {
       setConceptLoaded(false);
       setInitialMarkdown(null);
       setSource(null);
+      setSharedSource(null);
       setImports([]);
       setImported(null);
     });
@@ -736,7 +943,7 @@ export default function App() {
     if (!response.ok) {
       setSourceError(result.error ?? "Repository connection failed");
     }
-    await loadRepository().catch(() => {});
+    await loadSources().catch(() => {});
   };
 
   const refreshRepository = async () => {
@@ -753,19 +960,55 @@ export default function App() {
     if (!response.ok) {
       setSourceError(result.error ?? "Repository refresh failed");
     }
-    await loadRepository().catch(() => {});
+    await loadSources().catch(() => {});
     if (imported) {
       const current = await api(
-        `/api/imported?path=${encodeURIComponent(imported.path)}`,
+        `/api/imported?source=${imported.sourceId}&path=${
+          encodeURIComponent(imported.path)
+        }`,
       );
       setImported(current.ok ? await current.json() : null);
     }
   };
 
-  const openImported = async (path: string) => {
+  const connectSharedSource = async (values: Record<string, string>) => {
+    setSharedBusy(true);
+    setSharedError("");
+    const response = await api("/api/sources/shared", {
+      method: "POST",
+      body: JSON.stringify(values),
+    });
+    const result = await response.json() as SharedSource & { error?: string };
+    setSharedBusy(false);
+    if (result?.id === "shared") setSharedSource(result);
+    if (!response.ok) {
+      setSharedError(result.error ?? "Shared store connection failed");
+    }
+    await loadSources().catch(() => {});
+  };
+
+  const refreshSharedSource = async () => {
+    setSharedBusy(true);
+    setSharedError("");
+    const response = await api("/api/sources/shared/refresh", {
+      method: "POST",
+    });
+    const result = await response.json() as SharedSource & { error?: string };
+    setSharedBusy(false);
+    if (result?.id === "shared") setSharedSource(result);
+    if (!response.ok) {
+      setSharedError(result.error ?? "Shared store refresh failed");
+    }
+    await loadSources().catch(() => {});
+  };
+
+  const openImported = async (
+    sourceId: "repository" | "shared",
+    path: string,
+  ) => {
     setSourceError("");
     const response = await api(
-      `/api/imported?path=${encodeURIComponent(path)}`,
+      `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
     );
     const result = await response.json() as ImportedConcept & {
       error?: string;
@@ -832,6 +1075,11 @@ export default function App() {
   };
   const profileCoverage =
     PROFILE_MARKERS.filter((marker) => markdown.includes(marker)).length;
+  const connectedSourceCount = Number(Boolean(source)) +
+    Number(Boolean(sharedSource));
+  const importedSourceLabel = imported?.sourceId === "shared"
+    ? "Shared store"
+    : "Git repository";
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -849,10 +1097,10 @@ export default function App() {
             }
           }}
         >
-          {imported || sourceOpen ? "Policies" : `Repository (${imports.length})`}
+          {imported || sourceOpen ? "Policies" : `Sources (${imports.length})`}
         </button>
         <div className="document-title">
-          <small>{imported ? "Repository /" : "Policies /"}</small>
+          <small>{imported ? `${importedSourceLabel} /` : "Policies /"}</small>
           <strong>
             {imported?.title ?? concept?.title ?? "Hub-native knowledge"}
           </strong>
@@ -861,7 +1109,9 @@ export default function App() {
           <span
             className={`connection ${
               imported
-                ? source?.status === "sync_failed" ? "offline" : "online"
+                ? imported.source?.status === "sync_failed"
+                  ? "offline"
+                  : "online"
                 : concept?.status === "archived"
                 ? "offline"
                 : status
@@ -878,7 +1128,9 @@ export default function App() {
           </span>
           <span className="save-state">
             {imported
-              ? "Repository owned"
+              ? imported.sourceId === "shared"
+                ? "Shared-store owned"
+                : "Repository owned"
               : bootstrap.canEdit
               ? saveState === "saved" ? "Draft saved" : saveState
               : "View only"}
@@ -914,7 +1166,7 @@ export default function App() {
               setAccessOpen(false);
             }}
           >
-            <i className="space-dot green" /> <span>Repository</span>
+            <i className="space-dot green" /> <span>Sources</span>
             <b>{imports.length}</b>
           </button>
         </nav>
@@ -925,11 +1177,13 @@ export default function App() {
               {imports.map((item) => (
                 <button
                   type="button"
-                  className={imported?.path === item.path ? "active" : ""}
-                  key={item.path}
-                  onClick={() => void openImported(item.path)}
+                  className={imported?.id === item.id ? "active" : ""}
+                  key={item.id}
+                  onClick={() => void openImported(item.sourceId, item.path)}
                 >
-                  <span>{item.title}</span>
+                  <span>
+                    {item.title} · {item.sourceId === "shared" ? "S3" : "Git"}
+                  </span>
                 </button>
               ))}
             </nav>
@@ -966,16 +1220,36 @@ export default function App() {
         )}
         {sourceOpen
           ? (
-            <RepositoryPanel
-              source={source}
-              imports={imports}
-              canManage={bootstrap.access === "owner"}
-              busy={sourceBusy}
-              error={sourceError}
-              onConnect={connectRepository}
-              onRefresh={refreshRepository}
-              onOpen={openImported}
-            />
+            <div className="source-panel">
+              <div className="source-page-heading">
+                <p className="eyebrow">Connected knowledge</p>
+                <h1>Knowledge sources</h1>
+                <p>
+                  {connectedSourceCount} connected · {imports.length}{" "}
+                  healthy concepts
+                </p>
+              </div>
+              <RepositoryPanel
+                source={source}
+                imports={imports}
+                canManage={bootstrap.access === "owner"}
+                busy={sourceBusy}
+                error={sourceError}
+                onConnect={connectRepository}
+                onRefresh={refreshRepository}
+                onOpen={openImported}
+              />
+              <SharedStorePanel
+                source={sharedSource}
+                imports={imports}
+                canManage={bootstrap.access === "owner"}
+                busy={sharedBusy}
+                error={sharedError}
+                onConnect={connectSharedSource}
+                onRefresh={refreshSharedSource}
+                onOpen={openImported}
+              />
+            </div>
           )
           : imported?.markdown
           ? (
@@ -997,7 +1271,7 @@ export default function App() {
                 </button>
               </div>
               <section className="import-provenance">
-                <span>Git repository</span>
+                <span>{importedSourceLabel}</span>
                 <span>
                   Revision <code>{imported.sourceRevision.slice(0, 12)}</code>
                 </span>
@@ -1009,9 +1283,11 @@ export default function App() {
               <div className="editor-frame read-only">
                 <div className="editor-context">
                   <span className="published-label">
-                    REPOSITORY · READ ONLY
+                    {imported.sourceId === "shared"
+                      ? "SHARED STORE"
+                      : "REPOSITORY"} · READ ONLY
                   </span>
-                  <span>The connected repository is authoritative</span>
+                  <span>The connected source is authoritative</span>
                 </div>
                 <DocumentPreview markdown={imported.markdown} />
               </div>

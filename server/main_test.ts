@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 
 type Tuple = { user: string; relation: string; object: string };
@@ -81,6 +82,48 @@ class Client {
   }
 }
 
+Deno.test("migrates repository imports to source-scoped paths", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const legacy = new DatabaseSync(`${dataDir}/hub.db`);
+  legacy.exec(`
+    CREATE TABLE okf_imported_concept (
+      id TEXT PRIMARY KEY,
+      path TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      objectKey TEXT NOT NULL,
+      sourceRevision TEXT NOT NULL,
+      contentHash TEXT NOT NULL,
+      importedAt TEXT NOT NULL,
+      nextPath TEXT
+    );
+    CREATE TABLE okf_import_issue (path TEXT PRIMARY KEY, error TEXT NOT NULL);
+    INSERT INTO okf_imported_concept VALUES
+      ('repository/guide', 'guide.md', 'Guide', 'Guide', 'current', 'old.md', 'commit', 'hash', '2026-01-01', NULL);
+    INSERT INTO okf_import_issue VALUES ('bad.md', 'Invalid');
+  `);
+  legacy.close();
+  const app = await createCollabApp({ dataDir });
+  try {
+    const migrated = new DatabaseSync(`${dataDir}/hub.db`);
+    assert.deepEqual(
+      migrated.prepare("SELECT sourceId, path FROM okf_imported_concept").all()
+        .map((row) => ({ ...row })),
+      [{ sourceId: "repository", path: "guide.md" }],
+    );
+    assert.deepEqual(
+      migrated.prepare("SELECT sourceId, path FROM okf_import_issue").all()
+        .map((row) => ({ ...row })),
+      [{ sourceId: "repository", path: "bad.md" }],
+    );
+    migrated.close();
+  } finally {
+    await app.close();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("enforces access and preserves the published lifecycle", async () => {
   const dataDir = await Deno.makeTempDir();
   const staticDir = `${dataDir}/dist`;
@@ -93,6 +136,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   const fgaPort = (fga.server.addr as Deno.NetAddr).port;
   const objects = new Map<string, string>();
   let repositorySyncs = 0;
+  let sharedSyncs = 0;
+  let sharedConfig: Record<string, string> | undefined;
   const imported = (
     path: string,
     title: string,
@@ -163,6 +208,31 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
             }],
           },
       );
+    },
+    sharedSourceSync(config) {
+      sharedSyncs++;
+      sharedConfig = config;
+      if (sharedSyncs === 2) {
+        return Promise.reject(new Error("Shared store unavailable"));
+      }
+      return Promise.resolve({
+        revision: "objects-one",
+        files: [
+          imported(
+            "operations.md",
+            "Shared operations",
+            "# Shared operations\n",
+            "shared-ops",
+          ),
+          imported(
+            "handbook.md",
+            "Company handbook",
+            "# Handbook\n",
+            "handbook",
+          ),
+        ],
+        issues: [{ path: "bad.md", error: "Missing YAML frontmatter" }],
+      });
     },
   });
   const server = Deno.serve(
@@ -374,6 +444,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       }),
       {
         id: "repository/operations",
+        sourceId: "repository",
         path: "operations.md",
         title: "Operations",
         type: "Runbook",
@@ -426,6 +497,96 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(
       (await (await viewer.request("/api/imports")).json()).length,
       2,
+    );
+
+    const sharedConnected = await owner.request("/api/sources/shared", {
+      method: "POST",
+      body: JSON.stringify({
+        endpoint: "https://objects.example.com",
+        bucket: "shared-okf",
+        path: "company/okf",
+        region: "ap-southeast-2",
+        accessKey: "browser-access-key",
+        secretKey: "browser-secret-key",
+      }),
+    });
+    const sharedText = await sharedConnected.text();
+    assert.equal(sharedConnected.status, 201, sharedText);
+    const sharedBody = JSON.parse(sharedText);
+    assert.equal(sharedBody.status, "current");
+    assert.equal(sharedBody.revision, "objects-one");
+    assert.equal(sharedBody.conceptCount, 2);
+    assert.ok(sharedBody.lastSyncedAt);
+    assert.equal(sharedBody.credentialsConfigured, true);
+    assert.equal(
+      JSON.stringify(sharedBody).includes("browser-secret-key"),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(sharedBody).includes("browser-access-key"),
+      false,
+    );
+    assert.deepEqual(sharedConfig, {
+      endpoint: "https://objects.example.com/",
+      bucket: "shared-okf",
+      path: "company/okf",
+      region: "ap-southeast-2",
+      accessKey: "browser-access-key",
+      secretKey: "browser-secret-key",
+    });
+    const savedDb = new DatabaseSync(`${dataDir}/hub.db`);
+    const stored = savedDb.prepare(
+      "SELECT credentialsCipher FROM okf_shared_source WHERE id = 'shared'",
+    ).get() as { credentialsCipher: string };
+    assert.match(stored.credentialsCipher, /^v1:/);
+    assert.equal(
+      stored.credentialsCipher.includes("browser-secret-key"),
+      false,
+    );
+    savedDb.close();
+    assert.equal(
+      ((await Deno.stat(`${dataDir}/source-credentials.key`)).mode ?? 0) &
+        0o777,
+      0o600,
+    );
+    assert.equal(
+      (await editor.request("/api/sources/shared/refresh", {
+        method: "POST",
+      })).status,
+      403,
+    );
+    const allSourcesText = await (await owner.request("/api/sources")).text();
+    assert.equal(allSourcesText.includes("browser-secret-key"), false);
+    assert.equal(allSourcesText.includes("browser-access-key"), false);
+    const sharedImported = await viewer.request(
+      "/api/imported?source=shared&path=operations.md",
+    );
+    assert.equal(sharedImported.status, 200);
+    const sharedImportedBody = await sharedImported.json();
+    assert.equal(sharedImportedBody.id, "shared/operations");
+    assert.equal(sharedImportedBody.sourceId, "shared");
+    assert.equal(sharedImportedBody.markdown, "# Shared operations\n");
+    assert.equal(
+      (await (await viewer.request("/api/imported?path=operations.md")).json())
+        .markdown,
+      "# Operations v2\n",
+    );
+    assert.equal(
+      (await (await viewer.request("/api/imports")).json()).length,
+      4,
+    );
+    const sharedUnavailable = await owner.request(
+      "/api/sources/shared/refresh",
+      { method: "POST" },
+    );
+    assert.equal(sharedUnavailable.status, 502);
+    assert.equal(
+      (await sharedUnavailable.json()).error,
+      "Shared store unavailable",
+    );
+    assert.equal(
+      (await (await viewer.request("/api/imports")).json()).length,
+      4,
     );
     assert.deepEqual(
       await (await outsider.request("/api/concepts")).json(),

@@ -204,10 +204,10 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 - **Blocked by:** KH-07
 - **What to build:** Connect an S3-compatible bucket and path as a shared OKF source, with the same validation, provenance, and retry behavior as repositories.
 - **Acceptance criteria:**
-  - [ ] The owner configures endpoint, bucket, path, and credentials.
-  - [ ] The hub indexes a shared OKF bundle without GitHub dependence.
-  - [ ] The source status reports last successful sync and any error.
-  - [ ] Credentials are encrypted and never returned to the browser.
+  - [x] The owner configures endpoint, bucket, path, and credentials.
+  - [x] The hub indexes a shared OKF bundle without GitHub dependence.
+  - [x] The source status reports last successful sync and any error.
+  - [x] Credentials are encrypted and never returned to the browser.
 
 #### KH-09 — Deliver permission-aware unified search and relationships
 
