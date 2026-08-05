@@ -12,6 +12,7 @@ type Row = Record<string, unknown>;
 
 const SOURCE = "company";
 const SPACE = "policies";
+const IMPORTED_SPACE = "imported";
 export const CONCEPT = "incident-communication";
 
 const model = {
@@ -264,7 +265,11 @@ export async function createSecurity({
     });
   }
 
-  async function check(userId: string, relation: "view" | "edit") {
+  async function check(
+    userId: string,
+    relation: "view" | "edit",
+    conceptId = CONCEPT,
+  ) {
     const { storeId, modelId } = await authorization();
     const result = await fga(`/stores/${storeId}/check`, {
       method: "POST",
@@ -272,7 +277,7 @@ export async function createSecurity({
         tuple_key: {
           user: `user:${userId}`,
           relation,
-          object: `concept:${CONCEPT}`,
+          object: `concept:${conceptId}`,
         },
         authorization_model_id: modelId,
       }),
@@ -348,7 +353,18 @@ export async function createSecurity({
         relation: "parent",
         object: `concept:${CONCEPT}`,
       },
+      {
+        user: `source:${SOURCE}`,
+        relation: "parent",
+        object: `space:${IMPORTED_SPACE}`,
+      },
+      {
+        user: `group:${viewerTeamId}#member`,
+        relation: "viewer",
+        object: `space:${IMPORTED_SPACE}`,
+      },
     ]);
+    set("openfga_imported_space", "1");
     if (firstSetup) {
       audit(
         current.user.id,
@@ -356,6 +372,31 @@ export async function createSecurity({
         `organization:${organizationId}`,
       );
     }
+  }
+
+  async function ensureImportedConcept(conceptId: string) {
+    const viewerTeamId = get("viewer_team_id");
+    if (!get("openfga_imported_space")) {
+      if (!viewerTeamId) throw new Error("Finish organization setup first");
+      await writeTuples([{
+        user: `source:${SOURCE}`,
+        relation: "parent",
+        object: `space:${IMPORTED_SPACE}`,
+      }, {
+        user: `group:${viewerTeamId}#member`,
+        relation: "viewer",
+        object: `space:${IMPORTED_SPACE}`,
+      }]);
+      set("openfga_imported_space", "1");
+    }
+    const key = `openfga_imported_concept:${conceptId}`;
+    if (get(key)) return;
+    await writeTuples([{
+      user: `space:${IMPORTED_SPACE}`,
+      relation: "parent",
+      object: `concept:${conceptId}`,
+    }]);
+    set(key, "1");
   }
 
   async function bootstrap(current: NonNullable<Session>) {
@@ -511,5 +552,13 @@ export async function createSecurity({
     return null;
   }
 
-  return { auth, session, check, handle, close: () => db.close() };
+  return {
+    auth,
+    session,
+    check,
+    handle,
+    isOwner,
+    ensureImportedConcept,
+    close: () => db.close(),
+  };
 }

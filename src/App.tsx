@@ -62,6 +62,35 @@ type Concept = {
   published: string | null;
   revisions: Revision[];
 };
+type SourceIssue = {
+  path: string;
+  status: "invalid" | "deleted" | "renamed";
+  error: string | null;
+  nextPath: string | null;
+};
+type RepositorySource = {
+  id: "repository";
+  repositoryUrl: string;
+  folder: string;
+  status: "syncing" | "current" | "sync_failed";
+  revision: string | null;
+  lastSyncedAt: string | null;
+  error: string | null;
+  conceptCount: number;
+  issues: SourceIssue[];
+};
+type ImportedConcept = {
+  id: string;
+  path: string;
+  title: string;
+  type: string;
+  status: "current" | "invalid";
+  sourceRevision: string;
+  importedAt: string;
+  markdown?: string;
+  revisionCount?: number;
+  source?: RepositorySource;
+};
 
 function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
@@ -398,6 +427,140 @@ function EditorSurface(
   return <Milkdown />;
 }
 
+function RepositoryPanel(
+  { source, imports, canManage, busy, error, onConnect, onRefresh, onOpen }: {
+    source: RepositorySource | null;
+    imports: ImportedConcept[];
+    canManage: boolean;
+    busy: boolean;
+    error: string;
+    onConnect: (repositoryUrl: string, folder: string) => Promise<void>;
+    onRefresh: () => Promise<void>;
+    onOpen: (path: string) => Promise<void>;
+  },
+) {
+  const connect = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    void onConnect(
+      String(fields.get("repositoryUrl") ?? ""),
+      String(fields.get("folder") ?? "okf"),
+    );
+  };
+  const connectionForm = (
+    <form className="source-form" onSubmit={connect}>
+      <label>
+        Public HTTPS Git URL
+        <input
+          name="repositoryUrl"
+          type="url"
+          placeholder="https://example.com/company/knowledge.git"
+          defaultValue={source?.repositoryUrl}
+          required
+        />
+      </label>
+      <label>
+        OKF folder
+        <input name="folder" defaultValue={source?.folder ?? "okf"} required />
+      </label>
+      <button className="primary" type="submit" disabled={busy}>
+        {busy
+          ? "Connecting…"
+          : source ? "Try different settings" : "Connect and import"}
+      </button>
+    </form>
+  );
+  return (
+    <section className="source-panel" aria-labelledby="source-heading">
+      <div className="source-heading">
+        <div>
+          <p className="eyebrow">Connected knowledge</p>
+          <h1 id="source-heading">Repository-owned OKF</h1>
+          <p>
+            Imported concepts stay read-only here. The Git repository remains
+            authoritative.
+          </p>
+        </div>
+        {source && canManage && (
+          <button
+            className="primary"
+            type="button"
+            disabled={busy}
+            onClick={() => void onRefresh()}
+          >
+            {busy ? "Refreshing…" : "Refresh repository"}
+          </button>
+        )}
+      </div>
+      {!source
+        ? canManage
+          ? connectionForm
+          : <p className="source-empty">No repository has been connected.</p>
+        : (
+          <>
+            <dl className="source-provenance">
+              <div>
+                <dt>Status</dt>
+                <dd className={`source-status ${source.status}`}>
+                  {source.status.replace("_", " ")}
+                </dd>
+              </div>
+              <div>
+                <dt>Repository</dt>
+                <dd>{source.repositoryUrl}</dd>
+              </div>
+              <div>
+                <dt>Folder</dt>
+                <dd>{source.folder}</dd>
+              </div>
+              <div>
+                <dt>Source revision</dt>
+                <dd>
+                  <code>{source.revision?.slice(0, 12) ?? "None"}</code>
+                </dd>
+              </div>
+            </dl>
+            {source.error && (
+              <p className="source-error" role="alert">{source.error}</p>
+            )}
+            {source.issues.length > 0 && (
+              <section className="source-issues" aria-label="Source issues">
+                <h2>Source issues</h2>
+                {source.issues.map((issue) => (
+                  <p key={`${issue.status}-${issue.path}`}>
+                    <strong>{issue.status}</strong>
+                    <code>{issue.path}</code>
+                    <span>
+                      {issue.error ?? (issue.nextPath
+                        ? `Moved to ${issue.nextPath}`
+                        : "No longer present at the source revision")}
+                    </span>
+                  </p>
+                ))}
+              </section>
+            )}
+            {canManage && source.status === "sync_failed" &&
+              !source.revision && connectionForm}
+          </>
+        )}
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <section className="import-grid" aria-label="Imported concepts">
+        {imports.map((item) => (
+          <button
+            key={item.path}
+            type="button"
+            onClick={() => void onOpen(item.path)}
+          >
+            <span>{item.type}</span>
+            <strong>{item.title}</strong>
+            <small>{item.path}</small>
+          </button>
+        ))}
+      </section>
+    </section>
+  );
+}
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [fatal, setFatal] = useState("");
@@ -416,6 +579,12 @@ export default function App() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
+  const [source, setSource] = useState<RepositorySource | null>(null);
+  const [imports, setImports] = useState<ImportedConcept[]>([]);
+  const [imported, setImported] = useState<ImportedConcept | null>(null);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceError, setSourceError] = useState("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -429,6 +598,17 @@ export default function App() {
     }
     if (!response.ok) throw new Error(result.error ?? "Service unavailable");
     setBootstrap(result);
+  }, []);
+  const loadRepository = useCallback(async () => {
+    const [sourceResponse, importsResponse] = await Promise.all([
+      api("/api/sources"),
+      api("/api/imports"),
+    ]);
+    if (!sourceResponse.ok || !importsResponse.ok) {
+      throw new Error("Repository source unavailable");
+    }
+    setSource(await sourceResponse.json());
+    setImports(await importsResponse.json());
   }, []);
 
   useEffect(() => {
@@ -462,6 +642,10 @@ export default function App() {
     };
     load().catch((error) => setFatal(error.message));
   }, [bootstrap?.canView, bootstrap?.canEdit]);
+  useEffect(() => {
+    if (!bootstrap?.canView) return;
+    loadRepository().catch((error) => setSourceError(error.message));
+  }, [bootstrap?.canView, loadRepository]);
 
   const signOut = () => {
     void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
@@ -469,6 +653,9 @@ export default function App() {
       setConcept(null);
       setConceptLoaded(false);
       setInitialMarkdown(null);
+      setSource(null);
+      setImports([]);
+      setImported(null);
     });
   };
   const saveMarkdown = useCallback((content: string) => {
@@ -534,6 +721,68 @@ export default function App() {
     setHistoryOpen(false);
   };
 
+  const connectRepository = async (repositoryUrl: string, folder: string) => {
+    setSourceBusy(true);
+    setSourceError("");
+    const response = await api("/api/sources/repository", {
+      method: "POST",
+      body: JSON.stringify({ repositoryUrl, folder }),
+    });
+    const result = await response.json() as RepositorySource & {
+      error?: string;
+    };
+    setSourceBusy(false);
+    if (result?.id === "repository") setSource(result);
+    if (!response.ok) {
+      setSourceError(result.error ?? "Repository connection failed");
+    }
+    await loadRepository().catch(() => {});
+  };
+
+  const refreshRepository = async () => {
+    setSourceBusy(true);
+    setSourceError("");
+    const response = await api("/api/sources/repository/refresh", {
+      method: "POST",
+    });
+    const result = await response.json() as RepositorySource & {
+      error?: string;
+    };
+    setSourceBusy(false);
+    if (result?.id === "repository") setSource(result);
+    if (!response.ok) {
+      setSourceError(result.error ?? "Repository refresh failed");
+    }
+    await loadRepository().catch(() => {});
+    if (imported) {
+      const current = await api(
+        `/api/imported?path=${encodeURIComponent(imported.path)}`,
+      );
+      setImported(current.ok ? await current.json() : null);
+    }
+  };
+
+  const openImported = async (path: string) => {
+    setSourceError("");
+    const response = await api(
+      `/api/imported?path=${encodeURIComponent(path)}`,
+    );
+    const result = await response.json() as ImportedConcept & {
+      error?: string;
+    };
+    if (!response.ok) {
+      return setSourceError(result.error ?? "Import unavailable");
+    }
+    setImported(result);
+    setSourceOpen(false);
+    setAccessOpen(false);
+  };
+
+  const showHubConcept = () => {
+    setImported(null);
+    setSourceOpen(false);
+  };
+
   if (fatal) {
     return (
       <main className="auth-shell">
@@ -589,25 +838,48 @@ export default function App() {
         <a className="brand" href="/" aria-label="OKF Hub home">
           <span>O</span> OKF Hub
         </a>
+        <button
+          className="mobile-space-button"
+          type="button"
+          onClick={() => {
+            if (imported || sourceOpen) showHubConcept();
+            else {
+              setSourceOpen(true);
+              setAccessOpen(false);
+            }
+          }}
+        >
+          {imported || sourceOpen ? "Policies" : `Repository (${imports.length})`}
+        </button>
         <div className="document-title">
-          <small>Policies /</small>
-          <strong>{concept?.title ?? "Hub-native knowledge"}</strong>
+          <small>{imported ? "Repository /" : "Policies /"}</small>
+          <strong>
+            {imported?.title ?? concept?.title ?? "Hub-native knowledge"}
+          </strong>
         </div>
         <div className="header-status">
           <span
             className={`connection ${
-              concept?.status === "archived" ? "offline" : status
+              imported
+                ? source?.status === "sync_failed" ? "offline" : "online"
+                : concept?.status === "archived"
+                ? "offline"
+                : status
             }`}
           >
             <i />
-            {concept?.status === "archived"
+            {imported
+              ? "read only"
+              : concept?.status === "archived"
               ? "archived"
               : bootstrap.canEdit && view === "draft"
               ? status
               : "published"}
           </span>
           <span className="save-state">
-            {bootstrap.canEdit
+            {imported
+              ? "Repository owned"
+              : bootstrap.canEdit
               ? saveState === "saved" ? "Draft saved" : saveState
               : "View only"}
           </span>
@@ -624,12 +896,45 @@ export default function App() {
           </button>
         </nav>
         <p className="section-label spaces-label">Spaces</p>
-        <nav>
-          <button type="button" className="active">
+        <nav className="space-nav">
+          <button
+            type="button"
+            className={!imported && !sourceOpen ? "active" : ""}
+            onClick={showHubConcept}
+          >
             <i className="space-dot coral" /> <span>Policies</span>
             <b>{concept?.status === "active" ? 1 : 0}</b>
           </button>
+          <button
+            type="button"
+            className={imported || sourceOpen ? "active" : ""}
+            onClick={() => {
+              setImported(null);
+              setSourceOpen(true);
+              setAccessOpen(false);
+            }}
+          >
+            <i className="space-dot green" /> <span>Repository</span>
+            <b>{imports.length}</b>
+          </button>
         </nav>
+        {imports.length > 0 && (
+          <>
+            <p className="section-label spaces-label">Imported</p>
+            <nav className="imported-nav">
+              {imports.map((item) => (
+                <button
+                  type="button"
+                  className={imported?.path === item.path ? "active" : ""}
+                  key={item.path}
+                  onClick={() => void openImported(item.path)}
+                >
+                  <span>{item.title}</span>
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
         <div className="sidebar-bottom">
           <p className="section-label">Signed in</p>
           <div className="account">
@@ -639,7 +944,11 @@ export default function App() {
           {bootstrap.access === "owner" && (
             <button
               type="button"
-              onClick={() => setAccessOpen(!accessOpen)}
+              onClick={() => {
+                setAccessOpen(!accessOpen);
+                setSourceOpen(false);
+                setImported(null);
+              }}
             >
               Manage access
             </button>
@@ -655,7 +964,60 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        {!conceptLoaded
+        {sourceOpen
+          ? (
+            <RepositoryPanel
+              source={source}
+              imports={imports}
+              canManage={bootstrap.access === "owner"}
+              busy={sourceBusy}
+              error={sourceError}
+              onConnect={connectRepository}
+              onRefresh={refreshRepository}
+              onOpen={openImported}
+            />
+          )
+          : imported?.markdown
+          ? (
+            <MilkdownProvider key={`imported-${imported.path}`}>
+              <div className="workspace-bar imported-bar">
+                <div>
+                  <strong>{imported.type}</strong>
+                  <span>{imported.path}</span>
+                </div>
+                <span className="access-badge">Read only</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImported(null);
+                    setSourceOpen(true);
+                  }}
+                >
+                  Source details
+                </button>
+              </div>
+              <section className="import-provenance">
+                <span>Git repository</span>
+                <span>
+                  Revision <code>{imported.sourceRevision.slice(0, 12)}</code>
+                </span>
+                <span>{imported.revisionCount} imported revisions</span>
+                <span>
+                  Synced {new Date(imported.importedAt).toLocaleString()}
+                </span>
+              </section>
+              <div className="editor-frame read-only">
+                <div className="editor-context">
+                  <span className="published-label">
+                    REPOSITORY · READ ONLY
+                  </span>
+                  <span>The connected repository is authoritative</span>
+                </div>
+                <DocumentPreview markdown={imported.markdown} />
+              </div>
+            </MilkdownProvider>
+          )
+          : !conceptLoaded
           ? <div className="editor-loading">Opening authorised concept…</div>
           : !concept
           ? (

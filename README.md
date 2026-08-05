@@ -29,3 +29,9 @@ OpenFGA grants editor access through the source-level editor group and viewer ac
 ## KH-05 hub-native lifecycle
 
 Authors work in a private, autosaved visual draft. **Publish** writes a versioned OKF Markdown revision to RustFS while viewers remain on the last published revision. **History** can restore any published revision as a new draft; **Archive** removes the concept from routine discovery without deleting its history, and **Restore concept** reverses that action.
+
+## KH-07 repository source
+
+The organisation owner can connect one public HTTPS Git repository and repository-relative OKF folder under **Repository**. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
+
+The Docker image includes Git. Install `git` separately when running `deno task start` outside Docker. Private-repository credentials and provider webhooks are intentionally deferred until manual refresh is insufficient.

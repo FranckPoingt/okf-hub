@@ -92,6 +92,22 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   const fga = fakeOpenFga();
   const fgaPort = (fga.server.addr as Deno.NetAddr).port;
   const objects = new Map<string, string>();
+  let repositorySyncs = 0;
+  const imported = (
+    path: string,
+    title: string,
+    content: string,
+    hash: string,
+  ) => ({
+    path,
+    title,
+    type: "Runbook",
+    markdown: `---\n${
+      path === "operations.md" ? '"type"' : "type"
+    }: Runbook\ntitle: ${title}\n---\n\n${content}`,
+    body: content,
+    hash,
+  });
   const app = await createCollabApp({
     dataDir,
     staticDir,
@@ -108,6 +124,45 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           ? Promise.reject(new Error("Object not found"))
           : Promise.resolve(markdown);
       },
+    },
+    repositorySync() {
+      repositorySyncs++;
+      if (repositorySyncs === 3) {
+        return Promise.reject(new Error("Repository unavailable"));
+      }
+      return Promise.resolve(
+        repositorySyncs === 1
+          ? {
+            revision: "commit-one",
+            files: [
+              imported(
+                "operations.md",
+                "Operations",
+                "# Operations v1\n",
+                "ops-1",
+              ),
+              imported("move-me.md", "Move me", "# Move me\n", "same"),
+              imported("delete-me.md", "Delete me", "# Delete me\n", "gone"),
+            ],
+            issues: [{ path: "broken.md", error: "Missing YAML frontmatter" }],
+          }
+          : {
+            revision: "commit-two",
+            files: [
+              imported(
+                "operations.md",
+                "Operations",
+                "# Operations v2\n",
+                "ops-2",
+              ),
+              imported("guides/moved.md", "Moved", "# Move me\n", "same"),
+            ],
+            issues: [{
+              path: "invalid.md",
+              error: "Frontmatter requires a non-empty type",
+            }],
+          },
+      );
     },
   });
   const server = Deno.serve(
@@ -277,6 +332,100 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await (await viewer.request("/api/concepts/incident-communication"))
         .json()).published,
       "# Second published revision\n",
+    );
+
+    const connected = await owner.request("/api/sources/repository", {
+      method: "POST",
+      body: JSON.stringify({
+        repositoryUrl: "https://example.com/company/knowledge.git",
+        folder: "okf",
+      }),
+    });
+    if (!connected.ok) assert.fail(await connected.text());
+    const firstSource = await connected.json();
+    assert.equal(firstSource.status, "current");
+    assert.equal(firstSource.revision, "commit-one");
+    assert.equal(firstSource.conceptCount, 3);
+    assert.deepEqual(firstSource.issues, [{
+      path: "broken.md",
+      status: "invalid",
+      error: "Missing YAML frontmatter",
+      nextPath: null,
+    }]);
+    assert.equal(
+      (await editor.request("/api/sources/repository/refresh", {
+        method: "POST",
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/imports")).json()).length,
+      3,
+    );
+    assert.deepEqual(await (await outsider.request("/api/imports")).json(), []);
+    const firstImported = await viewer.request(
+      "/api/imported?path=operations.md",
+    );
+    assert.equal(firstImported.status, 200);
+    assert.deepEqual(
+      Object.assign({}, await firstImported.json(), {
+        source: undefined,
+        importedAt: undefined,
+      }),
+      {
+        id: "repository/operations",
+        path: "operations.md",
+        title: "Operations",
+        type: "Runbook",
+        status: "current",
+        sourceRevision: "commit-one",
+        importedAt: undefined,
+        kind: "imported",
+        markdown: "# Operations v1\n",
+        revisionCount: 1,
+        source: undefined,
+      },
+    );
+    assert.equal(
+      (await outsider.request("/api/imported?path=operations.md")).status,
+      404,
+    );
+
+    const refreshed = await owner.request(
+      "/api/sources/repository/refresh",
+      { method: "POST" },
+    );
+    if (!refreshed.ok) assert.fail(await refreshed.text());
+    const secondSource = await refreshed.json();
+    assert.equal(secondSource.revision, "commit-two");
+    assert.equal(secondSource.conceptCount, 2);
+    assert.deepEqual(
+      secondSource.issues.map((
+        issue: { path: string; status: string; nextPath: string | null },
+      ) => [issue.path, issue.status, issue.nextPath]),
+      [
+        ["delete-me.md", "deleted", null],
+        ["invalid.md", "invalid", null],
+        ["move-me.md", "renamed", "guides/moved.md"],
+      ],
+    );
+    const updatedImported = await (await viewer.request(
+      "/api/imported?path=operations.md",
+    )).json();
+    assert.equal(updatedImported.markdown, "# Operations v2\n");
+    assert.equal(updatedImported.revisionCount, 2);
+
+    const unavailable = await owner.request(
+      "/api/sources/repository/refresh",
+      { method: "POST" },
+    );
+    assert.equal(unavailable.status, 502);
+    const failedSource = await unavailable.json();
+    assert.equal(failedSource.status, "sync_failed");
+    assert.equal(failedSource.error, "Repository unavailable");
+    assert.equal(
+      (await (await viewer.request("/api/imports")).json()).length,
+      2,
     );
     assert.deepEqual(
       await (await outsider.request("/api/concepts")).json(),

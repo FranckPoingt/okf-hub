@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/yaml@^1.2.0": "1.2.0",
     "npm:@milkdown/crepe@7.21.1": "7.21.1_prosemirror-model@1.25.11_prosemirror-state@1.4.4_prosemirror-view@1.42.2_typescript@5.9.3",
     "npm:@milkdown/kit@7.21.1": "7.21.1_@codemirror+language@6.12.4_@codemirror+state@6.7.1_@codemirror+view@6.43.7_typescript@5.9.3",
     "npm:@milkdown/plugin-collab@7.21.1": "7.21.1_y-prosemirror@1.3.7__prosemirror-model@1.25.11__prosemirror-state@1.4.4__prosemirror-view@1.42.2__y-protocols@1.0.7___yjs@13.6.31__yjs@13.6.31_y-protocols@1.0.7__yjs@13.6.31_yjs@13.6.31_prosemirror-model@1.25.11_prosemirror-state@1.4.4_prosemirror-view@1.42.2",
@@ -15,6 +16,11 @@
     "npm:vite@8.0.16": "8.0.16",
     "npm:y-protocols@1.0.7": "1.0.7_yjs@13.6.31",
     "npm:yjs@13.6.31": "13.6.31"
+  },
+  "jsr": {
+    "@std/yaml@1.2.0": {
+      "integrity": "20beb41e4983ba3437dbefac62b14061ab058e8a187596f19d28ff9035f6e6cf"
+    }
   },
   "npm": {
     "@babel/helper-string-parser@7.29.7": {
@@ -2177,6 +2183,9 @@
     }
   },
   "workspace": {
+    "dependencies": [
+      "jsr:@std/yaml@^1.2.0"
+    ],
     "packageJson": {
       "dependencies": [
         "npm:@milkdown/crepe@7.21.1",

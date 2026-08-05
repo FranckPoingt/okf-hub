@@ -177,6 +177,7 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** AFK
 - **Blocked by:** KH-05
+- **Status:** Deferred; review dates and approval gates are not needed before source import.
 - **What to build:** Optional approval requests, concept owners, review due dates, source provenance, and stale indicators.
 - **Acceptance criteria:**
   - [ ] A policy space can require review before publication.
@@ -190,12 +191,12 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** AFK
 - **Blocked by:** KH-04
-- **What to build:** Connect a Git repository and folder, validate its OKF, import concepts, display source provenance, and update through a webhook with retry fallback.
+- **What to build:** Connect a public HTTPS Git repository and folder, validate its OKF, import concepts, display source provenance, and refresh on demand. Add provider webhooks with background source automation only when manual refresh is insufficient.
 - **Acceptance criteria:**
-  - [ ] A repository owner maps an OKF directory through the UI or CLI.
-  - [ ] Imported concepts are visibly read-only and identify their source revision.
-  - [ ] Invalid files report actionable validation errors without blocking healthy concepts.
-  - [ ] Renamed, deleted, and temporarily unavailable source files receive distinct status handling.
+  - [x] A repository owner maps an OKF directory through the UI or CLI.
+  - [x] Imported concepts are visibly read-only and identify their source revision.
+  - [x] Invalid files report actionable validation errors without blocking healthy concepts.
+  - [x] Renamed, deleted, and temporarily unavailable source files receive distinct status handling.
 
 #### KH-08 — Import the shared controlled knowledge store
 
