@@ -68,6 +68,8 @@ Deno.test("stores canonical Markdown and restores collaborative state after reco
   try {
     assert.equal(await (await fetch(`${base}/api/doc`)).text(), DEFAULT_MARKDOWN);
     assert.match(await (await fetch(`${base}/`)).text(), /OKF Hub/);
+    assert.equal((await fetch(`${base}/api/health`, { headers: { origin: base } })).status, 200);
+    assert.equal((await fetch(`${base}/api/health`, { headers: { origin: "https://attacker.example" } })).status, 403);
     const canonical = "# Reopened\n\nCanonical **Markdown**.\n";
     assert.equal((await fetch(`${base}/api/doc`, { method: "PUT", body: canonical })).status, 204);
     assert.equal(await (await fetch(`${base}/api/doc`)).text(), canonical);

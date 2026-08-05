@@ -1,0 +1,131 @@
+name: okf-hub
+
+services:
+  rustfs-init:
+    image: alpine:3.23.3
+    command: chown -R 10001:10001 /data
+    volumes:
+      - rustfs_data:/data
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.4
+    command: ["/data"]
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ACCESS_KEY: ${OKF_S3_ACCESS_KEY:?missing OKF_S3_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${OKF_S3_SECRET_KEY:?missing OKF_S3_SECRET_KEY}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+    healthcheck:
+      test: [
+        "CMD",
+        "curl",
+        "--fail",
+        "--silent",
+        "http://127.0.0.1:9000/health",
+      ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    volumes:
+      - rustfs_data:/data
+    # ponytail: single-node storage has no redundancy; use multi-node RustFS when availability matters.
+
+  openfga-migrate:
+    image: openfga/openfga:v1.15.1
+    command: migrate
+    user: nonroot
+    environment:
+      OPENFGA_DATASTORE_ENGINE: sqlite
+      OPENFGA_DATASTORE_URI: file:/home/nonroot/openfga.db
+    volumes:
+      - openfga_data:/home/nonroot
+
+  openfga:
+    image: openfga/openfga:v1.15.1
+    command: run
+    user: nonroot
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENFGA_AUTHN_METHOD: preshared
+      OPENFGA_AUTHN_PRESHARED_KEYS: ${OKF_OPENFGA_KEY:?missing OKF_OPENFGA_KEY}
+      OPENFGA_DATASTORE_ENGINE: sqlite
+      OPENFGA_DATASTORE_URI: file:/home/nonroot/openfga.db
+      OPENFGA_LOG_FORMAT: json
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+    restart: unless-stopped
+    volumes:
+      - openfga_data:/home/nonroot
+
+  app:
+    build: .
+    depends_on:
+      openfga:
+        condition: service_started
+      rustfs:
+        condition: service_healthy
+    environment:
+      OKF_DATA_DIR: /data
+      OKF_HOST: 0.0.0.0
+      OKF_PORT: "8788"
+      OKF_STATIC_DIR: /app/dist
+      NODE_ENV: production
+      PRODUCTION: "true"
+    healthcheck:
+      test: [
+        "CMD",
+        "deno",
+        "eval",
+        "await fetch('http://127.0.0.1:8788/api/health').then(r => { if (!r.ok) throw new Error(String(r.status)) })",
+      ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "127.0.0.1:8788:8788"
+    restart: unless-stopped
+    volumes:
+      - app_data:/data
+
+  backup:
+    image: alpine:3.23.3
+    profiles: [tools]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+          set -eu;
+          test -n "$${BACKUP_FILE}";
+          tar -czf "/backups/$${BACKUP_FILE}" -C /volumes app openfga rustfs
+    volumes:
+      - app_data:/volumes/app:ro
+      - openfga_data:/volumes/openfga:ro
+      - rustfs_data:/volumes/rustfs:ro
+      - ./backups:/backups
+
+  restore:
+    image: alpine:3.23.3
+    profiles: [tools]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+          set -eu;
+          test -f "/backups/$${BACKUP_FILE}";
+          for directory in app openfga rustfs; do
+            find "/volumes/$${directory}" -mindepth 1 -exec rm -rf {} +;
+          done;
+          tar -xzf "/backups/$${BACKUP_FILE}" -C /volumes
+    volumes:
+      - app_data:/volumes/app
+      - openfga_data:/volumes/openfga
+      - rustfs_data:/volumes/rustfs
+      - ./backups:/backups:ro
+
+volumes:
+  app_data:
+  openfga_data:
+  rustfs_data:

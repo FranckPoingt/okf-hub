@@ -7,3 +7,5 @@
 /dist/
 /.okf-data/
 /.deno-cache/
+/.okf-stack.env
+/backups/

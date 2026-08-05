@@ -61,7 +61,7 @@ function frame(type: number, payload: Uint8Array) {
 
 function allowedOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  return !origin || ["http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8788"].includes(origin);
+  return !origin || origin === new URL(request.url).origin || ["http://localhost:3000", "http://127.0.0.1:3000"].includes(origin);
 }
 
 function cors(request: Request) {
@@ -195,6 +195,14 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
 }
 
 if (import.meta.main) {
-  const app = await createCollabApp();
-  Deno.serve({ hostname: "127.0.0.1", port: 8788 }, app.fetch);
+  const hostname = Deno.env.get("OKF_HOST") ?? "127.0.0.1";
+  const port = Number(Deno.env.get("OKF_PORT") ?? "8788");
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("OKF_PORT must be a valid TCP port");
+  }
+  const app = await createCollabApp({
+    dataDir: Deno.env.get("OKF_DATA_DIR") ?? ".okf-data",
+    staticDir: Deno.env.get("OKF_STATIC_DIR") ?? "dist",
+  });
+  Deno.serve({ hostname, port }, app.fetch);
 }

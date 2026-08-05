@@ -1,0 +1,7 @@
+.git
+.deno-cache
+.okf-data
+.okf-stack.env
+backups
+dist
+node_modules

@@ -66,7 +66,7 @@ Spaces and sources are the normal permission boundary. Individual document restr
 | Authorization | Self-hosted OpenFGA from the first release |
 | Application metadata | SQLite on a persistent volume |
 | Authorization metadata | OpenFGA with SQLite on its own persistent volume |
-| Knowledge and attachments | Customer-controlled S3-compatible object storage; Azure Blob adapter later |
+| Knowledge and attachments | Customer-controlled S3-compatible object storage; RustFS is the local default; Azure Blob adapter later |
 | Repository sync | Git provider webhooks with CLI/polling fallback |
 | Editor candidate | Milkdown, with CommonMark + GFM and collaborative CRDT support |
 | Live collaboration | CRDT document state over WebSockets; Markdown is generated at checkpoint/publish time |
@@ -74,7 +74,7 @@ Spaces and sources are the normal permission boundary. Individual document restr
 
 ### Storage and source contract
 
-The initial object-storage contract is S3-compatible storage, covering AWS S3, Cloudflare R2, MinIO, and Google Cloud Storage interoperability. Azure Blob Storage is a separate adapter when demand requires it.
+The initial object-storage contract is S3-compatible storage, covering RustFS, AWS S3, Cloudflare R2, and Google Cloud Storage interoperability. Azure Blob Storage is a separate adapter when demand requires it.
 
 Source connectors report a stable source identifier, sync cursor, content revision, validation results, owner, and errors. They must be safe to retry and must not silently delete a previously indexed concept when a source becomes temporarily unavailable.
 
@@ -120,7 +120,6 @@ An artifact may contain reviewed inline HTML or an approved HTTP(S) application 
 | Real-time collaboration complicates self-hosting | Prove two-user CRDT editing, reconnect, snapshot recovery, and Markdown publication in a single-node install. |
 | Source sync is unreliable | Prove webhook, retry, rename, deletion, invalid OKF, and source-unavailable behavior. |
 | Permission rules leak restricted knowledge | Prove denial through direct URL, search, graph, previews, automation, and source sync. |
-| Product has no urgent buyer | Interview three design partners before expanding beyond the first release. |
 
 ## Backlog
 
@@ -143,12 +142,12 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** AFK
 - **Blocked by:** KH-02
-- **What to build:** A one-command local deployment containing the Deno application, OpenFGA, persistent volumes, and S3-compatible storage configuration.
+- **What to build:** A one-command local deployment containing the Deno application, OpenFGA, persistent volumes, and RustFS storage configuration.
 - **Acceptance criteria:**
-  - [ ] A new installation starts with no cloud dependency.
-  - [ ] Data and authorization state survive restart.
-  - [ ] Backup and restore instructions are tested.
-  - [ ] Services use least-privilege credentials and do not expose internal admin endpoints.
+  - [x] A new installation starts with no cloud dependency.
+  - [x] Data and authorization state survive restart.
+  - [x] Backup and restore instructions are tested.
+  - [x] Services use least-privilege credentials and do not expose internal admin endpoints.
 
 ### Epic 2 — Identity, authorization, and knowledge lifecycle
 
