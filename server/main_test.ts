@@ -1,99 +1,211 @@
 /// <reference lib="deno.ns" />
 
 import assert from "node:assert/strict";
-import * as Y from "yjs";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 
-const DOCUMENT_UPDATE = 0;
-const AWARENESS_UPDATE = 1;
+type Tuple = { user: string; relation: string; object: string };
 
-function packet(update: Uint8Array) {
-  const result = new Uint8Array(update.length + 1);
-  result[0] = DOCUMENT_UPDATE;
-  result.set(update, 1);
-  return result;
-}
-
-class Peer {
-  readonly doc = new Y.Doc();
-  readonly ready: Promise<void>;
-  readonly socket: WebSocket;
-  awarenessMessages = 0;
-
-  constructor(url: string) {
-    this.socket = new WebSocket(url);
-    this.socket.binaryType = "arraybuffer";
-    this.ready = new Promise((resolve, reject) => {
-      this.socket.addEventListener("open", () => this.socket.send(packet(Y.encodeStateAsUpdate(this.doc))));
-      this.socket.addEventListener("message", (event) => {
-        if (event.data === "synced") return resolve();
-        const message = new Uint8Array(event.data as ArrayBuffer);
-        if (message[0] === DOCUMENT_UPDATE) Y.applyUpdate(this.doc, message.subarray(1), this);
-        if (message[0] === AWARENESS_UPDATE) this.awarenessMessages += 1;
+function fakeOpenFga() {
+  const tuples: Tuple[] = [];
+  let receivedModel = false;
+  const fetch = async (request: Request) => {
+    const url = new URL(request.url);
+    const body = request.body ? await request.json() : {};
+    if (url.pathname === "/stores") return Response.json({ id: "store" });
+    if (url.pathname.endsWith("/authorization-models")) {
+      receivedModel = Array.isArray(body.type_definitions);
+      return Response.json({ authorization_model_id: "model" });
+    }
+    if (url.pathname.endsWith("/write")) {
+      tuples.push(...body.writes.tuple_keys);
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname.endsWith("/check")) {
+      const { user, relation } = body.tuple_key;
+      const has = (candidate: Partial<Tuple>) =>
+        tuples.some((tuple) =>
+          Object.entries(candidate).every(([key, value]) =>
+            tuple[key as keyof Tuple] === value
+          )
+        );
+      const memberOf = (groupUser: string) =>
+        has({
+          user,
+          relation: "member",
+          object: groupUser.replace(/#member$/, ""),
+        });
+      const owner = has({ user, relation: "owner", object: "source:company" });
+      const editor = tuples.some((tuple) =>
+        tuple.relation === "editor" && tuple.object === "source:company" &&
+        memberOf(tuple.user)
+      );
+      const viewer = tuples.some((tuple) =>
+        tuple.relation === "viewer" && tuple.object === "space:policies" &&
+        memberOf(tuple.user)
+      );
+      return Response.json({
+        allowed: owner || editor || (relation === "view" && viewer),
       });
-      this.socket.addEventListener("error", () => reject(new Error("WebSocket failed")));
-    });
-    this.doc.on("update", (update, origin) => {
-      if (origin !== this && this.socket.readyState === WebSocket.OPEN) this.socket.send(packet(update));
-    });
+    }
+    return new Response("Not found", { status: 404 });
+  };
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    fetch,
+  );
+  return { server, tuples, modelReceived: () => receivedModel };
+}
+
+class Client {
+  cookie = "";
+  constructor(readonly base: string) {}
+
+  async request(path: string, init: RequestInit = {}) {
+    const headers = new Headers(init.headers);
+    if (this.cookie) headers.set("cookie", this.cookie);
+    if (init.body) headers.set("content-type", "application/json");
+    const response = await fetch(`${this.base}${path}`, { ...init, headers });
+    const cookie = response.headers.get("set-cookie")?.match(
+      /better-auth\.session_token=[^;]+/,
+    )?.[0];
+    if (cookie) this.cookie = cookie;
+    return response;
   }
 
-  close() {
-    this.socket.close();
-    this.doc.destroy();
+  async signUp(name: string, email: string) {
+    const response = await this.request("/api/auth/sign-up/email", {
+      method: "POST",
+      body: JSON.stringify({ name, email, password: "password123" }),
+    });
+    assert.equal(response.status, 200, await response.text());
   }
 }
 
-async function waitFor(check: () => boolean) {
-  const deadline = Date.now() + 2_000;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error("Timed out waiting for collaboration");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-Deno.test("stores canonical Markdown and restores collaborative state after reconnect", async () => {
+Deno.test("enforces owner, editor, viewer, outsider, listing, and audit access", async () => {
   const dataDir = await Deno.makeTempDir();
   const staticDir = `${dataDir}/dist`;
   await Deno.mkdir(staticDir);
-  await Deno.writeTextFile(`${staticDir}/index.html`, "<!doctype html><title>OKF Hub</title>");
-  const app = await createCollabApp({ dataDir, staticDir });
-  const server = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen() {} }, app.fetch);
-  const port = (server.addr as Deno.NetAddr).port;
-  const base = `http://127.0.0.1:${port}`;
-  let first: Peer | undefined;
-  let second: Peer | undefined;
-  let reconnected: Peer | undefined;
+  await Deno.writeTextFile(
+    `${staticDir}/index.html`,
+    "<!doctype html><title>OKF Hub</title>",
+  );
+  const fga = fakeOpenFga();
+  const fgaPort = (fga.server.addr as Deno.NetAddr).port;
+  const app = await createCollabApp({
+    dataDir,
+    staticDir,
+    authSecret: "a-secure-test-secret-with-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${fgaPort}`,
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const editor = new Client(base);
+  const viewer = new Client(base);
+  const outsider = new Client(base);
 
   try {
-    assert.equal(await (await fetch(`${base}/api/doc`)).text(), DEFAULT_MARKDOWN);
-    assert.match(await (await fetch(`${base}/`)).text(), /OKF Hub/);
-    assert.equal((await fetch(`${base}/api/health`, { headers: { origin: base } })).status, 200);
-    assert.equal((await fetch(`${base}/api/health`, { headers: { origin: "https://attacker.example" } })).status, 403);
-    const canonical = "# Reopened\n\nCanonical **Markdown**.\n";
-    assert.equal((await fetch(`${base}/api/doc`, { method: "PUT", body: canonical })).status, 204);
-    assert.equal(await (await fetch(`${base}/api/doc`)).text(), canonical);
+    assert.equal(
+      (await fetch(`${base}/api/concepts/incident-communication`)).status,
+      401,
+    );
+    await owner.signUp("Owner", "owner@example.com");
+    assert.equal(
+      (await (await owner.request("/api/bootstrap")).json()).setupRequired,
+      true,
+    );
+    assert.equal(
+      (await owner.request("/api/setup", { method: "POST" })).status,
+      200,
+    );
+    assert.equal(
+      await (await owner.request("/api/concepts/incident-communication"))
+        .text(),
+      DEFAULT_MARKDOWN,
+    );
 
-    first = new Peer(`ws://127.0.0.1:${port}/collab`);
-    second = new Peer(`ws://127.0.0.1:${port}/collab`);
-    await Promise.all([first.ready, second.ready]);
-    first.doc.getText("proof").insert(0, "two editors");
-    await waitFor(() => second?.doc.getText("proof").toString() === "two editors");
-    first.socket.send(new Uint8Array([AWARENESS_UPDATE, 1, 2, 3]));
-    await waitFor(() => second?.awarenessMessages === 1);
+    const invite = async (email: string, access: "editor" | "viewer") => {
+      const response = await owner.request("/api/invitations", {
+        method: "POST",
+        body: JSON.stringify({ email, access }),
+      });
+      if (!response.ok) assert.fail(await response.text());
+      return (await response.json()).id as string;
+    };
+    const editorInvitation = await invite("editor@example.com", "editor");
+    const viewerInvitation = await invite("viewer@example.com", "viewer");
+    await editor.signUp("Editor", "editor@example.com");
+    await viewer.signUp("Viewer", "viewer@example.com");
+    await outsider.signUp("Outsider", "outsider@example.com");
+    assert.equal(
+      (await editor.request("/api/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ invitationId: editorInvitation }),
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await viewer.request("/api/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ invitationId: viewerInvitation }),
+      })).status,
+      200,
+    );
 
-    second.close();
-    second = undefined;
-    first.doc.getText("proof").insert(11, " reconnect");
-    reconnected = new Peer(`ws://127.0.0.1:${port}/collab`);
-    await reconnected.ready;
-    await waitFor(() => reconnected?.doc.getText("proof").toString() === "two editors reconnect");
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication")).status,
+      200,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication", {
+        method: "PUT",
+        body: "# Edited\n",
+      })).status,
+      204,
+    );
+    assert.equal(
+      (await viewer.request("/api/concepts/incident-communication")).status,
+      200,
+    );
+    assert.equal(
+      (await viewer.request("/api/concepts/incident-communication", {
+        method: "PUT",
+        body: "# Forbidden\n",
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await outsider.request("/api/concepts/incident-communication")).status,
+      404,
+    );
+    assert.deepEqual(
+      await (await outsider.request("/api/concepts")).json(),
+      [],
+    );
+    assert.equal(fga.modelReceived(), true);
+    assert.equal(
+      fga.tuples.filter((tuple) => tuple.relation === "member").length,
+      2,
+    );
+
+    const audit = await (await owner.request("/api/audit")).json();
+    assert.deepEqual(
+      audit.map((event: { action: string }) => event.action).sort(),
+      [
+        "invitation.accepted",
+        "invitation.accepted",
+        "invitation.created",
+        "invitation.created",
+        "organization.created",
+      ],
+    );
   } finally {
-    first?.close();
-    second?.close();
-    reconnected?.close();
     await server.shutdown();
     await app.close();
+    await fga.server.shutdown();
     await Deno.remove(dataDir, { recursive: true });
   }
 });

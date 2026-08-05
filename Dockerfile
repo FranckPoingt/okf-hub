@@ -19,4 +19,4 @@ RUN mkdir /data && chown -R deno:deno /app /data
 USER deno
 
 EXPOSE 8788
-CMD ["deno", "run", "--cached-only", "--allow-net", "--allow-env=OKF_HOST,OKF_PORT,OKF_DATA_DIR,OKF_STATIC_DIR,PRODUCTION,NODE_ENV", "--allow-read=/data,/app/dist", "--allow-write=/data", "server/main.ts"]
+CMD ["deno", "run", "--cached-only", "--allow-net", "--allow-env=OKF_HOST,OKF_PORT,OKF_DATA_DIR,OKF_STATIC_DIR,OKF_BASE_URL,OKF_AUTH_SECRET,OKF_OPENFGA_URL,OKF_OPENFGA_KEY,PRODUCTION,NODE_ENV,NODE_DISABLE_COLORS,BETTER_AUTH_TELEMETRY,BETTER_AUTH_TELEMETRY_DEBUG,BETTER_AUTH_TELEMETRY_ENDPOINT,BETTER_AUTH_TRUSTED_ORIGINS,TEST", "--allow-read=/data,/app/dist", "--allow-write=/data", "server/main.ts"]

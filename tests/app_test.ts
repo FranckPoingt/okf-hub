@@ -11,7 +11,9 @@ Deno.test("builds the collaborative editor shell", async () => {
     if (entry.isFile && entry.name.endsWith(".js")) scripts.push(await Deno.readTextFile(`dist/assets/${entry.name}`));
   }
   const bundle = scripts.join("\n");
-  assert.match(bundle, /Open collaborator/);
+  assert.match(bundle, /Create your account/);
+  assert.match(bundle, /Invite through a group/);
+  assert.match(bundle, /View only/);
   assert.match(bundle, /Import \.md/);
   assert.match(bundle, /Export \.md/);
 });

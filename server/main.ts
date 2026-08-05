@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import * as Y from "yjs";
+import { CONCEPT, createSecurity } from "./security.ts";
 
 const DOCUMENT_UPDATE = 0;
 const AWARENESS_UPDATE = 1;
@@ -41,7 +42,14 @@ flowchart LR
 [^owner]: The incident lead remains accountable for approving external updates.
 `;
 
-type AppOptions = { dataDir?: string; staticDir?: string };
+type AppOptions = {
+  dataDir?: string;
+  staticDir?: string;
+  baseURL?: string;
+  authSecret?: string;
+  openfgaURL?: string;
+  openfgaKey?: string;
+};
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -61,15 +69,29 @@ function frame(type: number, payload: Uint8Array) {
 
 function allowedOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin || ["http://localhost:3000", "http://127.0.0.1:3000"].includes(origin);
+  return !origin || origin === new URL(request.url).origin ||
+    ["http://localhost:3000", "http://127.0.0.1:3000"].includes(origin);
 }
 
 function cors(request: Request) {
   return {
     "access-control-allow-origin": request.headers.get("origin") ?? "*",
-    "access-control-allow-methods": "GET, PUT, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
     "access-control-allow-headers": "content-type",
+    "access-control-allow-credentials": "true",
   };
+}
+
+function withCors(response: Response, request: Request) {
+  const headers = new Headers(response.headers);
+  Object.entries(cors(request)).forEach(([name, value]) =>
+    headers.set(name, value)
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 async function bytes(data: unknown): Promise<Uint8Array | null> {
@@ -84,8 +106,22 @@ function extension(path: string) {
   return index < 0 ? "" : path.slice(index);
 }
 
-export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist" }: AppOptions = {}) {
+export async function createCollabApp({
+  dataDir = ".okf-data",
+  staticDir = "dist",
+  baseURL,
+  authSecret,
+  openfgaURL,
+  openfgaKey,
+}: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
+  const security = await createSecurity({
+    dataDir,
+    baseURL,
+    authSecret,
+    openfgaURL,
+    openfgaKey,
+  });
   const markdownPath = `${dataDir}/incident-communication.md`;
   const statePath = `${dataDir}/incident-communication.yjs`;
   const doc = new Y.Doc();
@@ -113,26 +149,108 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
   });
 
   const fetch = async (request: Request): Promise<Response> => {
-    if (!allowedOrigin(request)) return new Response("Origin not allowed", { status: 403 });
+    if (!allowedOrigin(request)) {
+      return new Response("Origin not allowed", { status: 403 });
+    }
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(request) });
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: cors(request) });
+    }
 
     if (url.pathname === "/api/health") {
-      return Response.json({ status: "ok", clients: clients.size }, { headers: cors(request) });
+      return Response.json({ status: "ok", clients: clients.size }, {
+        headers: cors(request),
+      });
     }
-    if (url.pathname === "/api/doc" && request.method === "GET") {
-      return new Response(markdown, { headers: { ...cors(request), "content-type": "text/markdown; charset=utf-8" } });
+    const securityResponse = await security.handle(request);
+    if (securityResponse) return withCors(securityResponse, request);
+
+    if (url.pathname === "/api/concepts" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const allowed = await security.check(current.user.id, "view");
+      return Response.json(
+        allowed
+          ? [{
+            id: CONCEPT,
+            title: "Incident communication",
+            space: "Policies",
+          }]
+          : [],
+        { headers: cors(request) },
+      );
     }
-    if (url.pathname === "/api/doc" && request.method === "PUT") {
+    if (
+      url.pathname === `/api/concepts/${CONCEPT}` && request.method === "GET"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return new Response("Sign in required", {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!await security.check(current.user.id, "view")) {
+        return new Response("Not found", {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      return new Response(markdown, {
+        headers: {
+          ...cors(request),
+          "content-type": "text/markdown; charset=utf-8",
+        },
+      });
+    }
+    if (
+      url.pathname === `/api/concepts/${CONCEPT}` && request.method === "PUT"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return new Response("Sign in required", {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!await security.check(current.user.id, "view")) {
+        return new Response("Not found", {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (!await security.check(current.user.id, "edit")) {
+        return new Response("Edit access required", {
+          status: 403,
+          headers: cors(request),
+        });
+      }
       const next = await request.text();
       if (new TextEncoder().encode(next).byteLength > MAX_MARKDOWN_BYTES) {
-        return new Response("Markdown is too large", { status: 413, headers: cors(request) });
+        return new Response("Markdown is too large", {
+          status: 413,
+          headers: cors(request),
+        });
       }
       markdown = next.endsWith("\n") ? next : `${next}\n`;
       await Deno.writeTextFile(markdownPath, markdown);
       return new Response(null, { status: 204, headers: cors(request) });
     }
-    if (url.pathname === "/collab" && request.headers.get("upgrade") === "websocket") {
+    if (
+      url.pathname === "/collab" &&
+      request.headers.get("upgrade") === "websocket"
+    ) {
+      const current = await security.session(request);
+      if (!current) return new Response("Sign in required", { status: 401 });
+      if (!await security.check(current.user.id, "view")) {
+        return new Response("Not found", { status: 404 });
+      }
+      const canEdit = await security.check(current.user.id, "edit");
       const { socket, response } = Deno.upgradeWebSocket(request);
       socket.binaryType = "arraybuffer";
       socket.addEventListener("open", () => {
@@ -144,8 +262,12 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
         if (typeof event.data === "string") return;
         const message = await bytes(event.data);
         if (!message?.length) return;
-        if (message[0] === DOCUMENT_UPDATE) Y.applyUpdate(doc, message.subarray(1), socket);
-        if (message[0] !== DOCUMENT_UPDATE && message[0] !== AWARENESS_UPDATE) return;
+        if (message[0] === DOCUMENT_UPDATE && canEdit) {
+          Y.applyUpdate(doc, message.subarray(1), socket);
+        }
+        if (message[0] !== DOCUMENT_UPDATE && message[0] !== AWARENESS_UPDATE) {
+          return;
+        }
         for (const client of clients) {
           if (client !== socket && client.readyState === WebSocket.OPEN) {
             client.send(message.slice().buffer as ArrayBuffer);
@@ -157,14 +279,21 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
     }
     if (request.method === "GET" || request.method === "HEAD") {
       const decoded = decodeURIComponent(url.pathname);
-      if (decoded.split("/").includes("..")) return new Response("Invalid path", { status: 400 });
-      const relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
+      if (decoded.split("/").includes("..")) {
+        return new Response("Invalid path", { status: 400 });
+      }
+      const relative = decoded === "/"
+        ? "index.html"
+        : decoded.replace(/^\/+/, "");
       let path = `${staticDir}/${relative}`;
       let content: Uint8Array;
       try {
         content = await Deno.readFile(path);
       } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound) || !request.headers.get("accept")?.includes("text/html")) {
+        if (
+          !(error instanceof Deno.errors.NotFound) ||
+          !request.headers.get("accept")?.includes("text/html")
+        ) {
           return new Response("Not found", { status: 404 });
         }
         path = `${staticDir}/index.html`;
@@ -174,11 +303,15 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
           return new Response("Build the web app first", { status: 503 });
         }
       }
-      const body = request.method === "HEAD"
-        ? null
-        : content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
+      const body = request.method === "HEAD" ? null : content.buffer.slice(
+        content.byteOffset,
+        content.byteOffset + content.byteLength,
+      ) as ArrayBuffer;
       return new Response(body, {
-        headers: { "content-type": CONTENT_TYPES[extension(path)] ?? "application/octet-stream" },
+        headers: {
+          "content-type": CONTENT_TYPES[extension(path)] ??
+            "application/octet-stream",
+        },
       });
     }
     return new Response("Not found", { status: 404, headers: cors(request) });
@@ -190,6 +323,7 @@ export async function createCollabApp({ dataDir = ".okf-data", staticDir = "dist
       clients.forEach((client) => client.close());
       await stateWrite;
       doc.destroy();
+      security.close();
     },
   };
 }
@@ -203,6 +337,10 @@ if (import.meta.main) {
   const app = await createCollabApp({
     dataDir: Deno.env.get("OKF_DATA_DIR") ?? ".okf-data",
     staticDir: Deno.env.get("OKF_STATIC_DIR") ?? "dist",
+    baseURL: Deno.env.get("OKF_BASE_URL") ?? `http://127.0.0.1:${port}`,
+    authSecret: Deno.env.get("OKF_AUTH_SECRET") ?? undefined,
+    openfgaURL: Deno.env.get("OKF_OPENFGA_URL") ?? undefined,
+    openfgaKey: Deno.env.get("OKF_OPENFGA_KEY") ?? undefined,
   });
   Deno.serve({ hostname, port }, app.fetch);
 }

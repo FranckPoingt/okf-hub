@@ -1,6 +1,6 @@
 import {
-  Awareness,
   applyAwarenessUpdate,
+  Awareness,
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -87,10 +87,9 @@ export class DenoCollabProvider {
         this.syncedListeners.forEach((listener) => listener());
         return;
       }
-      const data =
-        event.data instanceof Blob
-          ? new Uint8Array(await event.data.arrayBuffer())
-          : new Uint8Array(event.data as ArrayBuffer);
+      const data = event.data instanceof Blob
+        ? new Uint8Array(await event.data.arrayBuffer())
+        : new Uint8Array(event.data as ArrayBuffer);
       if (data[0] === DOCUMENT_UPDATE) {
         Y.applyUpdate(this.doc, data.subarray(1), this);
       } else if (data[0] === AWARENESS_UPDATE) {
@@ -102,7 +101,10 @@ export class DenoCollabProvider {
       if (this.socket === socket) this.socket = undefined;
       this.onStatus("offline");
       if (!this.active) return;
-      this.reconnectTimer = globalThis.setTimeout(() => this.open(), this.retryDelay);
+      this.reconnectTimer = globalThis.setTimeout(
+        () => this.open(),
+        this.retryDelay,
+      );
       this.retryDelay = Math.min(this.retryDelay * 2, 5_000);
     };
   }
@@ -113,19 +115,32 @@ export class DenoCollabProvider {
   };
 
   private sendAwarenessUpdate = (
-    { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
+    { added, updated, removed }: {
+      added: number[];
+      updated: number[];
+      removed: number[];
+    },
     origin: unknown,
   ) => {
     if (origin === this || this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(
-      packet(AWARENESS_UPDATE, encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed])),
+      packet(
+        AWARENESS_UPDATE,
+        encodeAwarenessUpdate(this.awareness, [
+          ...added,
+          ...updated,
+          ...removed,
+        ]),
+      ),
     );
   };
 
   private reportCollaborators = () => {
     const users = [...this.awareness.getStates().values()]
       .map((state) => state.user as Collaborator | undefined)
-      .filter((user): user is Collaborator => Boolean(user?.name && user?.color));
+      .filter((user): user is Collaborator =>
+        Boolean(user?.name && user?.color)
+      );
     this.onCollaborators(users);
   };
 }

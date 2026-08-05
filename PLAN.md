@@ -157,10 +157,10 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 - **Blocked by:** KH-03
 - **What to build:** Login, invitations, groups, source/space roles, and OpenFGA-backed authorization checks for viewing and editing a concept.
 - **Acceptance criteria:**
-  - [ ] An owner can invite an editor and viewer.
-  - [ ] Access is granted through group membership at source/space level.
-  - [ ] Restricted concepts are inaccessible through direct URLs and listing APIs.
-  - [ ] Permission changes are recorded in an audit trail.
+  - [x] An owner can invite an editor and viewer.
+  - [x] Access is granted through group membership at source/space level.
+  - [x] Restricted concepts are inaccessible through direct URLs and listing APIs.
+  - [x] Permission changes are recorded in an audit trail.
 
 #### KH-05 — Create the hub-native OKF lifecycle
 

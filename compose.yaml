@@ -70,12 +70,22 @@ services:
       rustfs:
         condition: service_healthy
     environment:
+      BETTER_AUTH_TELEMETRY: "0"
+      BETTER_AUTH_TELEMETRY_DEBUG: "0"
+      BETTER_AUTH_TELEMETRY_ENDPOINT: ""
+      BETTER_AUTH_TRUSTED_ORIGINS: ""
+      OKF_AUTH_SECRET: ${OKF_AUTH_SECRET:?missing OKF_AUTH_SECRET}
+      OKF_BASE_URL: http://127.0.0.1:8788
       OKF_DATA_DIR: /data
       OKF_HOST: 0.0.0.0
+      OKF_OPENFGA_KEY: ${OKF_OPENFGA_KEY:?missing OKF_OPENFGA_KEY}
+      OKF_OPENFGA_URL: http://openfga:8080
       OKF_PORT: "8788"
       OKF_STATIC_DIR: /app/dist
       NODE_ENV: production
+      NODE_DISABLE_COLORS: "1"
       PRODUCTION: "true"
+      TEST: "0"
     healthcheck:
       test: [
         "CMD",

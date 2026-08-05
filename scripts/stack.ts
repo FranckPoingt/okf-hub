@@ -12,21 +12,28 @@ function randomHex(length: number) {
 }
 
 async function ensureEnvironment() {
+  let contents = "";
   try {
-    await Deno.stat(ENV_FILE);
-    return;
+    contents = await Deno.readTextFile(ENV_FILE);
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
 
-  const contents = [
-    `OKF_OPENFGA_KEY=${randomHex(24)}`,
-    `OKF_S3_ACCESS_KEY=okf${randomHex(8)}`,
-    `OKF_S3_SECRET_KEY=${randomHex(24)}`,
-    "",
-  ].join("\n");
+  const additions = [
+    ["OKF_AUTH_SECRET", randomHex(32)],
+    ["OKF_OPENFGA_KEY", randomHex(24)],
+    ["OKF_S3_ACCESS_KEY", `okf${randomHex(8)}`],
+    ["OKF_S3_SECRET_KEY", randomHex(24)],
+  ].filter(([name]) =>
+    !contents.split("\n").some((line) => line.startsWith(`${name}=`))
+  );
+  if (!additions.length) return;
+  contents = `${contents.trim()}\n${
+    additions.map(([name, value]) => `${name}=${value}`).join("\n")
+  }\n`;
   await Deno.writeTextFile(ENV_FILE, contents, { mode: 0o600 });
-  console.log(`Created ${ENV_FILE} with local-only credentials.`);
+  await Deno.chmod(ENV_FILE, 0o600);
+  console.log(`Updated ${ENV_FILE} with local-only credentials.`);
 }
 
 async function docker(args: string[]) {
