@@ -107,9 +107,38 @@ type ImportedConcept = {
   status: "current" | "invalid";
   sourceRevision: string;
   importedAt: string;
+  tags: string[];
+  owner: string;
   markdown?: string;
   revisionCount?: number;
   source?: RepositorySource | SharedSource;
+};
+type SearchRelationship = {
+  id: string;
+  kind: "hub-native" | "imported";
+  sourceId: "hub" | "repository" | "shared";
+  title: string;
+  path?: string;
+  trust: "current" | "sync_failed";
+  sourceLabel: string;
+};
+type SearchResult = SearchRelationship & {
+  type: string;
+  tags: string[];
+  owner: string;
+  status: "active" | "archived" | "current";
+  sourceStatus: "current" | "sync_failed";
+  sourceRevision?: string;
+  importedAt?: string;
+  snippet: string;
+  links: SearchRelationship[];
+  backlinks: SearchRelationship[];
+};
+type SearchResponse = {
+  query: string;
+  results: SearchResult[];
+  facets: { types: string[]; tags: string[] };
+  canIncludeArchived: boolean;
 };
 
 function api(path: string, init: RequestInit = {}) {
@@ -762,6 +791,189 @@ function SharedStorePanel(
   );
 }
 
+function SearchPanel(
+  { onOpenHub, onOpenImported }: {
+    onOpenHub: () => void;
+    onOpenImported: (
+      sourceId: "repository" | "shared",
+      path: string,
+    ) => Promise<void>;
+  },
+) {
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState("");
+  const [tag, setTag] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [result, setResult] = useState<SearchResponse | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async (params = new URLSearchParams()) => {
+    setBusy(true);
+    setError("");
+    const response = await api(`/api/search?${params}`);
+    const body = await response.json() as SearchResponse & { error?: string };
+    setBusy(false);
+    if (!response.ok) {
+      setError(body.error ?? "Search unavailable");
+      return;
+    }
+    setResult(body);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const params = new URLSearchParams();
+    if (query.trim()) params.set("q", query.trim());
+    if (type) params.set("type", type);
+    if (tag) params.set("tag", tag);
+    if (includeArchived) params.set("includeArchived", "true");
+    void load(params);
+  };
+  const open = (item: SearchRelationship) => {
+    if (item.kind === "hub-native") return onOpenHub();
+    if (item.sourceId !== "hub" && item.path) {
+      void onOpenImported(item.sourceId, item.path);
+    }
+  };
+  const relationships = (
+    label: string,
+    items: SearchRelationship[],
+  ) =>
+    items.length > 0 && (
+      <div className="search-relationships">
+        <strong>{label}</strong>
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => open(item)}
+          >
+            {item.title}
+            <small>{item.sourceId === "hub" ? "Hub" : item.sourceId}</small>
+          </button>
+        ))}
+      </div>
+    );
+
+  return (
+    <section className="search-panel" aria-labelledby="search-heading">
+      <div className="source-page-heading">
+        <p className="eyebrow">Permission-aware discovery</p>
+        <h1 id="search-heading">Search company knowledge</h1>
+        <p>Browse hub-native, Git, and shared-store knowledge in one view.</p>
+      </div>
+      <form className="search-form" role="search" onSubmit={submit}>
+        <label className="search-query">
+          Search
+          <input
+            type="search"
+            value={query}
+            maxLength={120}
+            placeholder="Incident response, onboarding, owner…"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <label>
+          Type
+          <select
+            value={type}
+            onChange={(event) => setType(event.target.value)}
+          >
+            <option value="">All types</option>
+            {result?.facets.types.map((item) => (
+              <option key={item} value={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Tag
+          <select value={tag} onChange={(event) => setTag(event.target.value)}>
+            <option value="">All tags</option>
+            {result?.facets.tags.map((item) => (
+              <option key={item} value={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        {result?.canIncludeArchived && (
+          <label className="archived-filter">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(event) => setIncludeArchived(event.target.checked)}
+            />
+            Include archived
+          </label>
+        )}
+        <button className="primary" type="submit" disabled={busy}>
+          {busy ? "Searching…" : "Search"}
+        </button>
+      </form>
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <div className="search-summary" aria-live="polite">
+        {busy
+          ? "Checking access…"
+          : `${result?.results.length ?? 0} accessible concepts`}
+      </div>
+      <div className="search-results">
+        {result?.results.map((item) => (
+          <article key={item.id}>
+            <div className="search-result-heading">
+              <div>
+                <span className={`knowledge-kind ${item.kind}`}>
+                  {item.kind === "hub-native" ? "Hub-native" : "Imported"}
+                </span>
+                <span className={`trust-status ${item.trust}`}>
+                  {item.trust.replace("_", " ")}
+                </span>
+              </div>
+              <button type="button" onClick={() => open(item)}>
+                {item.title}
+              </button>
+              <p>{item.snippet}</p>
+            </div>
+            <dl className="search-metadata">
+              <div>
+                <dt>Type</dt>
+                <dd>{item.type}</dd>
+              </div>
+              <div>
+                <dt>Owner</dt>
+                <dd>{item.owner}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{item.sourceLabel}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{item.status}</dd>
+              </div>
+            </dl>
+            {item.tags.length > 0 && (
+              <div className="search-tags">
+                {item.tags.map((itemTag) => (
+                  <span key={itemTag}>{itemTag}</span>
+                ))}
+              </div>
+            )}
+            {relationships("Links to", item.links)}
+            {relationships("Linked from", item.backlinks)}
+          </article>
+        ))}
+        {!busy && result?.results.length === 0 && (
+          <p className="search-empty">
+            No accessible knowledge matches these filters.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [fatal, setFatal] = useState("");
@@ -785,6 +997,7 @@ export default function App() {
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sharedBusy, setSharedBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
@@ -863,6 +1076,7 @@ export default function App() {
       setSharedSource(null);
       setImports([]);
       setImported(null);
+      setSearchOpen(false);
     });
   };
   const saveMarkdown = useCallback((content: string) => {
@@ -1018,12 +1232,14 @@ export default function App() {
     }
     setImported(result);
     setSourceOpen(false);
+    setSearchOpen(false);
     setAccessOpen(false);
   };
 
   const showHubConcept = () => {
     setImported(null);
     setSourceOpen(false);
+    setSearchOpen(false);
   };
 
   if (fatal) {
@@ -1090,25 +1306,38 @@ export default function App() {
           className="mobile-space-button"
           type="button"
           onClick={() => {
-            if (imported || sourceOpen) showHubConcept();
+            if (imported || sourceOpen || searchOpen) showHubConcept();
             else {
               setSourceOpen(true);
+              setSearchOpen(false);
               setAccessOpen(false);
             }
           }}
         >
-          {imported || sourceOpen ? "Policies" : `Sources (${imports.length})`}
+          {imported || sourceOpen || searchOpen
+            ? "Policies"
+            : `Sources (${imports.length})`}
         </button>
         <div className="document-title">
-          <small>{imported ? `${importedSourceLabel} /` : "Policies /"}</small>
+          <small>
+            {searchOpen
+              ? "Company knowledge /"
+              : imported
+              ? `${importedSourceLabel} /`
+              : "Policies /"}
+          </small>
           <strong>
-            {imported?.title ?? concept?.title ?? "Hub-native knowledge"}
+            {searchOpen
+              ? "Search"
+              : imported?.title ?? concept?.title ?? "Hub-native knowledge"}
           </strong>
         </div>
         <div className="header-status">
           <span
             className={`connection ${
-              imported
+              searchOpen
+                ? "online"
+                : imported
                 ? imported.source?.status === "sync_failed"
                   ? "offline"
                   : "online"
@@ -1118,7 +1347,9 @@ export default function App() {
             }`}
           >
             <i />
-            {imported
+            {searchOpen
+              ? "permission filtered"
+              : imported
               ? "read only"
               : concept?.status === "archived"
               ? "archived"
@@ -1127,7 +1358,9 @@ export default function App() {
               : "published"}
           </span>
           <span className="save-state">
-            {imported
+            {searchOpen
+              ? "Authorised results"
+              : imported
               ? imported.sourceId === "shared"
                 ? "Shared-store owned"
                 : "Repository owned"
@@ -1140,7 +1373,16 @@ export default function App() {
       <aside className="sidebar">
         <p className="section-label">Company knowledge</p>
         <nav>
-          <button type="button">
+          <button
+            type="button"
+            className={searchOpen ? "active" : ""}
+            onClick={() => {
+              setSearchOpen(true);
+              setSourceOpen(false);
+              setImported(null);
+              setAccessOpen(false);
+            }}
+          >
             ⌕ <span>Search</span>
           </button>
           <button type="button">
@@ -1151,7 +1393,7 @@ export default function App() {
         <nav className="space-nav">
           <button
             type="button"
-            className={!imported && !sourceOpen ? "active" : ""}
+            className={!imported && !sourceOpen && !searchOpen ? "active" : ""}
             onClick={showHubConcept}
           >
             <i className="space-dot coral" /> <span>Policies</span>
@@ -1159,10 +1401,11 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={imported || sourceOpen ? "active" : ""}
+            className={!searchOpen && (imported || sourceOpen) ? "active" : ""}
             onClick={() => {
               setImported(null);
               setSourceOpen(true);
+              setSearchOpen(false);
               setAccessOpen(false);
             }}
           >
@@ -1201,6 +1444,7 @@ export default function App() {
               onClick={() => {
                 setAccessOpen(!accessOpen);
                 setSourceOpen(false);
+                setSearchOpen(false);
                 setImported(null);
               }}
             >
@@ -1218,7 +1462,14 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        {sourceOpen
+        {searchOpen
+          ? (
+            <SearchPanel
+              onOpenHub={showHubConcept}
+              onOpenImported={openImported}
+            />
+          )
+          : sourceOpen
           ? (
             <div className="source-panel">
               <div className="source-page-heading">
@@ -1265,6 +1516,7 @@ export default function App() {
                   onClick={() => {
                     setImported(null);
                     setSourceOpen(true);
+                    setSearchOpen(false);
                   }}
                 >
                   Source details

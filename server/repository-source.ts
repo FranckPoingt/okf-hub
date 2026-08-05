@@ -11,6 +11,10 @@ export type RepositoryFile = {
   body: string;
   title: string;
   type: string;
+  tags: string[];
+  owner: string;
+  links: string[];
+  searchText: string;
   hash: string;
 };
 
@@ -79,14 +83,33 @@ export async function inspectOkf(path: string, markdown: string) {
     throw new Error("Frontmatter requires a non-empty type");
   }
   const filename = path.split("/").pop()!.replace(/\.md$/i, "");
+  const title = typeof fields.title === "string" && fields.title.trim()
+    ? fields.title.trim()
+    : filename.replaceAll("-", " ");
+  const type = fields.type.trim();
+  const tags =
+    (Array.isArray(fields.tags)
+      ? fields.tags
+      : typeof fields.tags === "string"
+      ? fields.tags.split(",")
+      : []).filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.trim()).filter(Boolean);
+  const owner = typeof fields.owner === "string" ? fields.owner.trim() : "";
+  const body = markdown.slice(frontmatter[0].length);
+  const links = Array.from(
+    body.matchAll(/(?<!!)\[[^\]]+\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)/g),
+    (match) => match[1] || match[2],
+  );
   return {
     path,
     markdown,
-    body: markdown.slice(frontmatter[0].length),
-    title: typeof fields.title === "string" && fields.title.trim()
-      ? fields.title.trim()
-      : filename.replaceAll("-", " "),
-    type: fields.type.trim(),
+    body,
+    title,
+    type,
+    tags,
+    owner,
+    links,
+    searchText: [title, type, owner, tags.join(" "), body].join("\n"),
     hash: await hash(markdown),
   };
 }

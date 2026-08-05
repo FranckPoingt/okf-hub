@@ -41,3 +41,9 @@ The Docker image includes Git. Install `git` separately when running `deno task 
 The organisation owner can also connect one S3-compatible endpoint, bucket, and OKF path under **Sources**. The hub lists and validates Markdown without GitHub, copies each healthy source revision into its revision store, and keeps the last healthy imports available when a refresh fails. S3 credentials are write-only in the browser API and AES-GCM encrypted in SQLite with a generated `source-credentials.key` stored at mode `0600` in the application data volume.
 
 Use **Refresh shared store** to retry or index a changed bundle. The connector uses path-style S3 requests and the standard AWS Signature Version 4 credential format; RustFS, AWS S3, R2, and other compatible endpoints can use their normal endpoint and region values.
+
+## KH-09 unified search and relationships
+
+Open **Search** to browse hub-native, Git, and shared-store concepts together. Lexical search covers titles, types, owners, tags, and Markdown content; type and tag filters are derived only from concepts the current user can view. Results identify their source, owner, lifecycle/trust status, links, and backlinks.
+
+Every search candidate and relationship target passes the same OpenFGA concept check as direct reads. Archived hub-native concepts stay out of normal results; authorised editors can opt into them with **Include archived**. Imported content is re-indexed on source refresh, and existing imports receive a startup metadata backfill from their stored revision.

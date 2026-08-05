@@ -23,14 +23,21 @@ Deno.test("clones, refreshes, and isolates invalid OKF files", async () => {
     await git(origin, "config", "user.name", "Test");
     await Deno.writeTextFile(
       `${origin}/okf/on-call.md`,
-      "---\ntype: Runbook\ntitle: On-call\nteam: platform\n---\n\n# Steps\n",
+      "---\ntype: Runbook\ntitle: On-call\nowner: Platform\ntags: [operations, incident]\n---\n\n# Steps\n\nSee [Escalation](escalation.md).\n",
     );
     await git(origin, "add", ".");
     await git(origin, "commit", "-m", "first");
 
     const first = await syncRepository(checkout, origin, "okf");
     assert.equal(first.files[0].title, "On-call");
-    assert.equal(first.files[0].body, "# Steps\n");
+    assert.equal(
+      first.files[0].body,
+      "# Steps\n\nSee [Escalation](escalation.md).\n",
+    );
+    assert.deepEqual(first.files[0].tags, ["operations", "incident"]);
+    assert.equal(first.files[0].owner, "Platform");
+    assert.deepEqual(first.files[0].links, ["escalation.md"]);
+    assert.match(first.files[0].searchText, /Platform/);
     assert.deepEqual(first.issues, []);
 
     await Deno.writeTextFile(

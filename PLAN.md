@@ -215,10 +215,10 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 - **Blocked by:** KH-05, KH-07, KH-08
 - **What to build:** One lexical search and browse experience across hub-native and imported concepts, with type/tag filters, backlinks, and source/owner status.
 - **Acceptance criteria:**
-  - [ ] Results never reveal inaccessible concepts.
-  - [ ] Users can distinguish imported from hub-native concepts.
-  - [ ] Links and relationship views show provenance and trust status.
-  - [ ] Archived concepts are excluded by default and optionally discoverable by authorised users.
+  - [x] Results never reveal inaccessible concepts.
+  - [x] Users can distinguish imported from hub-native concepts.
+  - [x] Links and relationship views show provenance and trust status.
+  - [x] Archived concepts are excluded by default and optionally discoverable by authorised users.
 
 ### Epic 4 — Automation and product hardening
 

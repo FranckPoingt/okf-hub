@@ -2,9 +2,11 @@
 
 import * as Y from "yjs";
 import { DatabaseSync } from "node:sqlite";
+import { dirname, join, normalize } from "node:path/posix";
 import { createCredentialVault } from "./credential-vault.ts";
 import { createObjectStore } from "./object-store.ts";
 import {
+  inspectOkf,
   type RepositorySnapshot,
   syncRepository,
 } from "./repository-source.ts";
@@ -126,6 +128,29 @@ type ImportedConceptRow = {
   contentHash: string;
   importedAt: string;
   nextPath: string | null;
+  tags: string;
+  owner: string;
+  links: string;
+  searchText: string;
+};
+
+type SearchDocument = {
+  id: string;
+  kind: "hub-native" | "imported";
+  sourceId: "hub" | "repository" | "shared";
+  sourceLabel: string;
+  sourceStatus: "current" | "sync_failed";
+  title: string;
+  type: string;
+  tags: string[];
+  owner: string;
+  status: "active" | "archived" | "current";
+  trust: "current" | "sync_failed";
+  searchText: string;
+  path?: string;
+  sourceRevision?: string;
+  importedAt?: string;
+  linkHrefs: string[];
 };
 
 function bodyOnly(markdown: string) {
@@ -138,6 +163,20 @@ function bodyOnly(markdown: string) {
 function withoutFrontmatter(markdown: string) {
   const match = markdown.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n(?:\r?\n)?/);
   return match ? markdown.slice(match[0].length) : markdown;
+}
+
+function searchSnippet(text: string, query: string) {
+  const plain = text.replace(/[`*_>#|[\]()~-]/g, " ").replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "";
+  const firstTerm = query.toLocaleLowerCase().split(/\s+/).find(Boolean);
+  const match = firstTerm ? plain.toLocaleLowerCase().indexOf(firstTerm) : -1;
+  const start = Math.max(0, match < 0 ? 0 : match - 55);
+  const prefix = start ? "…" : "";
+  const excerpt = plain.slice(start, start + 180);
+  return `${prefix}${excerpt}${
+    start + excerpt.length < plain.length ? "…" : ""
+  }`;
 }
 
 export function publishedMarkdown(
@@ -287,6 +326,10 @@ export async function createCollabApp({
       contentHash TEXT NOT NULL,
       importedAt TEXT NOT NULL,
       nextPath TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
+      owner TEXT NOT NULL DEFAULT '',
+      links TEXT NOT NULL DEFAULT '[]',
+      searchText TEXT NOT NULL DEFAULT '',
       UNIQUE (sourceId, path)
     );
     CREATE TABLE IF NOT EXISTS okf_imported_revision (
@@ -321,11 +364,15 @@ export async function createCollabApp({
         contentHash TEXT NOT NULL,
         importedAt TEXT NOT NULL,
         nextPath TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        owner TEXT NOT NULL DEFAULT '',
+        links TEXT NOT NULL DEFAULT '[]',
+        searchText TEXT NOT NULL DEFAULT '',
         UNIQUE (sourceId, path)
       );
       INSERT INTO okf_imported_concept
-        (id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath)
-        SELECT id, 'repository', path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath
+        (id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath, tags, owner, links, searchText)
+        SELECT id, 'repository', path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath, '[]', '', '[]', lower(title || ' ' || type)
         FROM okf_imported_concept_legacy;
       DROP TABLE okf_imported_concept_legacy;
       ALTER TABLE okf_import_issue RENAME TO okf_import_issue_legacy;
@@ -340,6 +387,25 @@ export async function createCollabApp({
       DROP TABLE okf_import_issue_legacy;
       COMMIT;
     `);
+  }
+  const searchableColumns = new Set(
+    (db.prepare("PRAGMA table_info(okf_imported_concept)").all() as {
+      name: string;
+    }[]).map(({ name }) => name),
+  );
+  for (
+    const [name, definition] of [
+      ["tags", "TEXT NOT NULL DEFAULT '[]'"],
+      ["owner", "TEXT NOT NULL DEFAULT ''"],
+      ["links", "TEXT NOT NULL DEFAULT '[]'"],
+      ["searchText", "TEXT NOT NULL DEFAULT ''"],
+    ]
+  ) {
+    if (!searchableColumns.has(name)) {
+      db.exec(
+        `ALTER TABLE okf_imported_concept ADD COLUMN ${name} ${definition}`,
+      );
+    }
   }
   const store = objectStore ??
     (s3Endpoint && s3AccessKey && s3SecretKey
@@ -400,6 +466,8 @@ export async function createCollabApp({
     status: item.status,
     sourceRevision: item.sourceRevision,
     importedAt: item.importedAt,
+    tags: JSON.parse(item.tags) as string[],
+    owner: item.owner,
   });
 
   function sourcePayload(sourceId: "repository" | "shared") {
@@ -485,12 +553,13 @@ export async function createCollabApp({
         const key = importedObjectKey(sourceId, snapshot.revision, file.path);
         db.prepare(
           "INSERT INTO okf_imported_concept " +
-            "(id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath) " +
-            "VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, NULL) " +
+            "(id, sourceId, path, title, type, status, objectKey, sourceRevision, contentHash, importedAt, nextPath, tags, owner, links, searchText) " +
+            "VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, NULL, ?, ?, ?, ?) " +
             "ON CONFLICT(sourceId, path) DO UPDATE SET " +
             "title = excluded.title, type = excluded.type, status = 'current', " +
             "objectKey = excluded.objectKey, sourceRevision = excluded.sourceRevision, " +
-            "contentHash = excluded.contentHash, importedAt = excluded.importedAt, nextPath = NULL",
+            "contentHash = excluded.contentHash, importedAt = excluded.importedAt, nextPath = NULL, " +
+            "tags = excluded.tags, owner = excluded.owner, links = excluded.links, searchText = excluded.searchText",
         ).run(
           id,
           sourceId,
@@ -501,6 +570,10 @@ export async function createCollabApp({
           snapshot.revision,
           file.hash,
           now,
+          JSON.stringify(file.tags),
+          file.owner,
+          JSON.stringify(file.links),
+          file.searchText,
         );
         db.prepare(
           "INSERT OR IGNORE INTO okf_imported_revision (conceptId, sourceRevision, objectKey, importedAt) VALUES (?, ?, ?, ?)",
@@ -591,6 +664,29 @@ export async function createCollabApp({
     return sharedRefresh;
   }
 
+  for (const item of importedConcepts(undefined, ["current"])) {
+    if (item.searchText) continue;
+    try {
+      const indexed = await inspectOkf(
+        item.path,
+        await store.get(item.objectKey),
+      );
+      db.prepare(
+        "UPDATE okf_imported_concept SET tags = ?, owner = ?, links = ?, searchText = ? WHERE id = ?",
+      ).run(
+        JSON.stringify(indexed.tags),
+        indexed.owner,
+        JSON.stringify(indexed.links),
+        indexed.searchText,
+        item.id,
+      );
+    } catch {
+      db.prepare(
+        "UPDATE okf_imported_concept SET searchText = ? WHERE id = ?",
+      ).run(`${item.title}\n${item.type}`, item.id);
+    }
+  }
+
   let markdown: string;
   let legacyConcept = false;
   try {
@@ -646,6 +742,110 @@ export async function createCollabApp({
       published: published ? bodyOnly(published) : null,
       revisions: canEdit ? revisions() : [],
     };
+  }
+
+  function resolveImportedLink(item: SearchDocument, href: string) {
+    if (item.sourceId === "hub" || !item.path) return null;
+    const target = href.split(/[?#]/, 1)[0];
+    if (
+      !target || target.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(target)
+    ) {
+      return null;
+    }
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(target);
+    } catch {
+      return null;
+    }
+    const path = normalize(
+      decoded.startsWith("/")
+        ? decoded.slice(1)
+        : join(dirname(item.path), decoded),
+    );
+    if (!path || path === ".." || path.startsWith("../")) return null;
+    return importedId(item.sourceId, path);
+  }
+
+  async function visibleSearchDocuments(
+    userId: string,
+    userName: string,
+    includeArchived: boolean,
+  ) {
+    const documents: SearchDocument[] = [];
+    const row = concept();
+    const canViewHub = row && await security.check(userId, "view");
+    const canEditHub = canViewHub && await security.check(userId, "edit");
+    if (
+      row && canViewHub &&
+      (row.status === "active" || (includeArchived && canEditHub)) &&
+      (canEditHub || row.publishedRevision)
+    ) {
+      let content = canEditHub && row.status === "active" ? markdown : "";
+      if (!content && row.publishedRevision) {
+        const revision = revisions().find((item) =>
+          item.number === row.publishedRevision
+        );
+        if (revision) {
+          try {
+            content = bodyOnly(await store.get(revision.objectKey));
+          } catch {
+            // The title remains discoverable while its stored body is unavailable.
+          }
+        }
+      }
+      documents.push({
+        id: CONCEPT,
+        kind: "hub-native",
+        sourceId: "hub",
+        sourceLabel: "OKF Hub",
+        sourceStatus: "current",
+        title: row.title,
+        type: row.type,
+        tags: [],
+        owner: canEditHub && !row.publishedRevision
+          ? userName
+          : "OKF Hub authors",
+        status: row.status,
+        trust: "current",
+        searchText: [row.title, row.type, content].join("\n"),
+        linkHrefs: [],
+      });
+    }
+
+    const repository = repositorySource();
+    const shared = sharedSource();
+    for (const item of importedConcepts()) {
+      if (!await security.check(userId, "view", item.id)) continue;
+      const source = item.sourceId === "repository" ? repository : shared;
+      const failed = source?.status === "sync_failed";
+      documents.push({
+        id: item.id,
+        kind: "imported",
+        sourceId: item.sourceId,
+        sourceLabel: item.sourceId === "repository"
+          ? repository?.repositoryUrl ?? "Git repository"
+          : shared
+          ? `s3://${shared.bucket}/${shared.path}`.replace(/\/$/, "")
+          : "Shared store",
+        sourceStatus: failed ? "sync_failed" : "current",
+        title: item.title,
+        type: item.type,
+        tags: JSON.parse(item.tags) as string[],
+        owner: item.owner ||
+          (item.sourceId === "repository"
+            ? "Repository owner"
+            : "Shared-store owner"),
+        status: "current",
+        trust: failed ? "sync_failed" : "current",
+        searchText: item.searchText || `${item.title}\n${item.type}`,
+        path: item.path,
+        sourceRevision: item.sourceRevision,
+        importedAt: item.importedAt,
+        linkHrefs: JSON.parse(item.links) as string[],
+      });
+    }
+    return { documents, canIncludeArchived: Boolean(canEditHub) };
   }
 
   const fetch = async (request: Request): Promise<Response> => {
@@ -1002,6 +1202,101 @@ export async function createCollabApp({
           error: error instanceof Error ? error.message : "Storage unavailable",
         }, { status: 503, headers: cors(request) });
       }
+    }
+    if (url.pathname === "/api/search" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const query = (url.searchParams.get("q") ?? "").trim();
+      if (query.length > 120) {
+        return Response.json({ error: "Search is limited to 120 characters" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const type = (url.searchParams.get("type") ?? "").trim()
+        .toLocaleLowerCase();
+      const tag = (url.searchParams.get("tag") ?? "").trim()
+        .toLocaleLowerCase();
+      const { documents, canIncludeArchived } = await visibleSearchDocuments(
+        current.user.id,
+        current.user.name,
+        url.searchParams.get("includeArchived") === "true",
+      );
+      const visibleById = new Map(documents.map((item) => [item.id, item]));
+      const outgoing = new Map<string, Set<string>>();
+      const incoming = new Map<string, Set<string>>();
+      for (const item of documents) {
+        const targets = new Set<string>();
+        for (const href of item.linkHrefs) {
+          const id = resolveImportedLink(item, href);
+          if (id && id !== item.id && visibleById.has(id)) targets.add(id);
+        }
+        outgoing.set(item.id, targets);
+        for (const target of targets) {
+          const sources = incoming.get(target) ?? new Set<string>();
+          sources.add(item.id);
+          incoming.set(target, sources);
+        }
+      }
+      const relationship = (id: string) => {
+        const item = visibleById.get(id)!;
+        return {
+          id: item.id,
+          kind: item.kind,
+          sourceId: item.sourceId,
+          title: item.title,
+          path: item.path,
+          trust: item.trust,
+          sourceLabel: item.sourceLabel,
+        };
+      };
+      const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      const results = documents.filter((item) => {
+        if (type && item.type.toLocaleLowerCase() !== type) return false;
+        if (
+          tag &&
+          !item.tags.some((itemTag) => itemTag.toLocaleLowerCase() === tag)
+        ) return false;
+        const haystack = item.searchText.toLocaleLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      }).map((item) => {
+        const title = item.title.toLocaleLowerCase();
+        const loweredQuery = query.toLocaleLowerCase();
+        const score = !query
+          ? 0
+          : title === loweredQuery
+          ? 30
+          : title.startsWith(loweredQuery)
+          ? 20
+          : title.includes(loweredQuery)
+          ? 10
+          : 1;
+        const { searchText, linkHrefs: _linkHrefs, ...visible } = item;
+        return {
+          ...visible,
+          score,
+          snippet: searchSnippet(searchText, query),
+          links: Array.from(outgoing.get(item.id) ?? []).map(relationship),
+          backlinks: Array.from(incoming.get(item.id) ?? []).map(relationship),
+        };
+      }).sort((left, right) =>
+        right.score - left.score || left.title.localeCompare(right.title)
+      );
+      return Response.json({
+        query,
+        results,
+        facets: {
+          types: Array.from(new Set(documents.map((item) => item.type))).sort(),
+          tags: Array.from(new Set(documents.flatMap((item) => item.tags)))
+            .sort(),
+        },
+        canIncludeArchived,
+      }, { headers: cors(request) });
     }
 
     if (url.pathname === "/api/concepts" && request.method === "GET") {

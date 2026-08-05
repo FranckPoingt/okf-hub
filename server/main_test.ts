@@ -112,6 +112,12 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
         .map((row) => ({ ...row })),
       [{ sourceId: "repository", path: "guide.md" }],
     );
+    assert.equal(
+      (migrated.prepare(
+        "SELECT searchText FROM okf_imported_concept",
+      ).get() as { searchText: string }).searchText,
+      "guide guide",
+    );
     assert.deepEqual(
       migrated.prepare("SELECT sourceId, path FROM okf_import_issue").all()
         .map((row) => ({ ...row })),
@@ -143,6 +149,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     title: string,
     content: string,
     hash: string,
+    options: { tags?: string[]; owner?: string; links?: string[] } = {},
   ) => ({
     path,
     title,
@@ -151,6 +158,16 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       path === "operations.md" ? '"type"' : "type"
     }: Runbook\ntitle: ${title}\n---\n\n${content}`,
     body: content,
+    tags: options.tags ?? [],
+    owner: options.owner ?? "Platform",
+    links: options.links ?? [],
+    searchText: [
+      title,
+      "Runbook",
+      options.owner ?? "Platform",
+      (options.tags ?? []).join(" "),
+      content,
+    ].join("\n"),
     hash,
   });
   const app = await createCollabApp({
@@ -223,12 +240,18 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
             "Shared operations",
             "# Shared operations\n",
             "shared-ops",
+            { tags: ["shared", "operations"], owner: "Operations" },
           ),
           imported(
             "handbook.md",
             "Company handbook",
-            "# Handbook\n",
+            "# Handbook\n\nSee [Shared operations](operations.md).\n",
             "handbook",
+            {
+              tags: ["shared", "handbook"],
+              owner: "People team",
+              links: ["operations.md"],
+            },
           ),
         ],
         issues: [{ path: "bad.md", error: "Missing YAML frontmatter" }],
@@ -250,6 +273,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await fetch(`${base}/api/concepts/incident-communication`)).status,
       401,
     );
+    assert.equal((await fetch(`${base}/api/search`)).status, 401);
     await owner.signUp("Owner", "owner@example.com");
     assert.equal(
       (await (await owner.request("/api/bootstrap")).json()).setupRequired,
@@ -448,6 +472,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         path: "operations.md",
         title: "Operations",
         type: "Runbook",
+        tags: [],
+        owner: "Platform",
         status: "current",
         sourceRevision: "commit-one",
         importedAt: undefined,
@@ -575,6 +601,53 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await (await viewer.request("/api/imports")).json()).length,
       4,
     );
+    const search = async (client: Client, query = "") => {
+      const response = await client.request(`/api/search?${query}`);
+      const text = await response.text();
+      assert.equal(response.status, 200, text);
+      return JSON.parse(text);
+    };
+    const sharedSearch = await search(viewer, "q=shared%20operations");
+    assert.equal(sharedSearch.results.length, 2);
+    assert.equal(sharedSearch.results[0].id, "shared/operations");
+    assert.equal(sharedSearch.results[0].kind, "imported");
+    assert.equal(sharedSearch.results[0].sourceId, "shared");
+    assert.equal(sharedSearch.results[0].owner, "Operations");
+    assert.equal(sharedSearch.results[0].trust, "current");
+    assert.deepEqual(
+      sharedSearch.results[0].backlinks.map((item: { id: string }) => item.id),
+      ["shared/handbook"],
+    );
+    assert.equal(sharedSearch.results[0].backlinks[0].trust, "current");
+    const filteredSearch = await search(
+      viewer,
+      "type=Runbook&tag=shared",
+    );
+    assert.deepEqual(
+      filteredSearch.results.map((item: { id: string }) => item.id),
+      ["shared/handbook", "shared/operations"],
+    );
+    assert.deepEqual(filteredSearch.facets.tags, [
+      "handbook",
+      "operations",
+      "shared",
+    ]);
+    const hubSearch = await search(viewer, "q=second%20published");
+    assert.equal(hubSearch.results[0].kind, "hub-native");
+    assert.equal(hubSearch.results[0].sourceLabel, "OKF Hub");
+    const repositorySearch = await search(viewer, "q=operations&type=Runbook");
+    assert.equal(
+      repositorySearch.results.find((item: { sourceId: string }) =>
+        item.sourceId === "repository"
+      ).trust,
+      "sync_failed",
+    );
+    assert.deepEqual(await search(outsider), {
+      query: "",
+      results: [],
+      facets: { types: [], tags: [] },
+      canIncludeArchived: false,
+    });
     const sharedUnavailable = await owner.request(
       "/api/sources/shared/refresh",
       { method: "POST" },
@@ -587,6 +660,37 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(
       (await (await viewer.request("/api/imports")).json()).length,
       4,
+    );
+    assert.equal(
+      (await search(viewer, "q=shared%20operations")).results[0].trust,
+      "sync_failed",
+    );
+    assert.equal(
+      (await editor.request(
+        "/api/concepts/incident-communication/archive",
+        { method: "POST" },
+      )).status,
+      200,
+    );
+    assert.equal(
+      (await search(viewer, "q=second%20published")).results.length,
+      0,
+    );
+    assert.equal(
+      (await search(editor, "q=first%20published")).results.length,
+      0,
+    );
+    const archivedSearch = await search(
+      editor,
+      "q=second%20published&includeArchived=true",
+    );
+    assert.equal(archivedSearch.canIncludeArchived, true);
+    assert.equal(archivedSearch.results[0].status, "archived");
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication/restore", {
+        method: "POST",
+      })).status,
+      200,
     );
     assert.deepEqual(
       await (await outsider.request("/api/concepts")).json(),
