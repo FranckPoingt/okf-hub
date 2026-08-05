@@ -226,12 +226,13 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
 
 - **Type:** AFK
 - **Blocked by:** KH-06, KH-09
+- **Status:** Source checks, bounded retries, job history, and broken-link proposals delivered; stale-review tasks remain deferred with KH-06.
 - **What to build:** Scheduled source checks, broken-link detection, stale-review tasks, and a review queue.
 - **Acceptance criteria:**
-  - [ ] A source failure does not mark unrelated sources failed.
-  - [ ] Automatic work is retry-bounded and observable.
-  - [ ] Automation proposes actions and never silently rewrites a published concept.
-  - [ ] Operators can inspect jobs, failures, and retry history.
+  - [x] A source failure does not mark unrelated sources failed.
+  - [x] Automatic work is retry-bounded and observable.
+  - [x] Automation proposes actions and never silently rewrites a published concept.
+  - [x] Operators can inspect jobs, failures, and retry history.
 
 #### KH-11 — Add an optional enterprise identity connector
 

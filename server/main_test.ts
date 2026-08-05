@@ -130,6 +130,39 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
   }
 });
 
+Deno.test("runs scheduled checks and records their history", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const app = await createCollabApp({ dataDir, automationIntervalMs: 10 });
+  try {
+    const db = new DatabaseSync(`${dataDir}/hub.db`);
+    db.exec("PRAGMA foreign_keys=OFF");
+    db.prepare(
+      "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', ?)",
+    ).run("member", "organization", "owner", new Date().toISOString());
+    db.close();
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    await app.close();
+    const history = new DatabaseSync(`${dataDir}/hub.db`);
+    const run = history.prepare(
+      "SELECT trigger, status FROM okf_automation_run ORDER BY id LIMIT 1",
+    ).get() as { trigger: string; status: string };
+    assert.deepEqual({ ...run }, {
+      trigger: "scheduled",
+      status: "succeeded",
+    });
+    assert.equal(
+      (history.prepare(
+        "SELECT job FROM okf_automation_attempt WHERE runId = 1",
+      ).get() as { job: string }).job,
+      "broken_links",
+    );
+    history.close();
+  } finally {
+    await app.close().catch(() => {});
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("enforces access and preserves the published lifecycle", async () => {
   const dataDir = await Deno.makeTempDir();
   const staticDir = `${dataDir}/dist`;
@@ -187,9 +220,10 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           : Promise.resolve(markdown);
       },
     },
+    automationIntervalMs: 0,
     repositorySync() {
       repositorySyncs++;
-      if (repositorySyncs === 3) {
+      if (repositorySyncs >= 3) {
         return Promise.reject(new Error("Repository unavailable"));
       }
       return Promise.resolve(
@@ -229,7 +263,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     sharedSourceSync(config) {
       sharedSyncs++;
       sharedConfig = config;
-      if (sharedSyncs === 2) {
+      if (sharedSyncs === 2 || sharedSyncs === 3) {
         return Promise.reject(new Error("Shared store unavailable"));
       }
       return Promise.resolve({
@@ -245,12 +279,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           imported(
             "handbook.md",
             "Company handbook",
-            "# Handbook\n\nSee [Shared operations](operations.md).\n",
+            "# Handbook\n\nSee [Shared operations](operations.md) and [Missing guide](missing.md).\n",
             "handbook",
             {
               tags: ["shared", "handbook"],
               owner: "People team",
-              links: ["operations.md"],
+              links: ["operations.md", "missing.md"],
             },
           ),
         ],
@@ -664,6 +698,65 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(
       (await search(viewer, "q=shared%20operations")).results[0].trust,
       "sync_failed",
+    );
+    assert.equal(
+      (await editor.request("/api/automation/run", { method: "POST" })).status,
+      403,
+    );
+    const publishedBeforeAutomation = (await (await viewer.request(
+      "/api/concepts/incident-communication",
+    )).json()).published;
+    const automationResponse = await owner.request("/api/automation/run", {
+      method: "POST",
+    });
+    assert.equal(
+      automationResponse.status,
+      200,
+      await automationResponse.text(),
+    );
+    const automation = await (await owner.request("/api/automation")).json();
+    assert.equal(automation.intervalMs, 0);
+    assert.equal(automation.running, false);
+    assert.equal(automation.runs[0].trigger, "manual");
+    assert.equal(automation.runs[0].status, "partial");
+    const sourceAttempts = automation.runs[0].attempts.filter(
+      (item: { job: string }) => item.job === "source_check",
+    );
+    assert.deepEqual(
+      sourceAttempts.filter((item: { sourceId: string }) =>
+        item.sourceId === "repository"
+      ).map((item: { status: string }) => item.status),
+      ["failed", "failed"],
+    );
+    assert.deepEqual(
+      sourceAttempts.filter((item: { sourceId: string }) =>
+        item.sourceId === "shared"
+      ).map((item: { status: string }) => item.status),
+      ["failed", "succeeded"],
+    );
+    const linkCheck = automation.runs[0].attempts.find(
+      (item: { job: string }) => item.job === "broken_links",
+    );
+    assert.deepEqual(linkCheck.result.proposals, [{
+      sourceId: "shared",
+      path: "handbook.md",
+      href: "missing.md",
+      target: "missing.md",
+      action: "fix_broken_link",
+    }]);
+    const sourcesAfterAutomation = await (await owner.request("/api/sources"))
+      .json();
+    assert.equal(sourcesAfterAutomation.repository.status, "sync_failed");
+    assert.equal(sourcesAfterAutomation.shared.status, "current");
+    assert.equal(
+      (await (await viewer.request(
+        "/api/concepts/incident-communication",
+      )).json()).published,
+      publishedBeforeAutomation,
+    );
+    assert.equal(
+      (await search(viewer, "q=shared%20operations")).results[0].trust,
+      "current",
     );
     assert.equal(
       (await editor.request(

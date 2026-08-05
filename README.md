@@ -47,3 +47,9 @@ Use **Refresh shared store** to retry or index a changed bundle. The connector u
 Open **Search** to browse hub-native, Git, and shared-store concepts together. Lexical search covers titles, types, owners, tags, and Markdown content; type and tag filters are derived only from concepts the current user can view. Results identify their source, owner, lifecycle/trust status, links, and backlinks.
 
 Every search candidate and relationship target passes the same OpenFGA concept check as direct reads. Archived hub-native concepts stay out of normal results; authorised editors can opt into them with **Include archived**. Imported content is re-indexed on source refresh, and existing imports receive a startup metadata backfill from their stored revision.
+
+## KH-10 source automation
+
+Organisation owners can inspect and run source checks under **Sources → Checks and proposals**. The in-process scheduler checks each connected source independently every 15 minutes, records every attempt, retries a failed source once, and leaves unrelated sources running. Set `OKF_AUTOMATION_INTERVAL_MS=0` to disable scheduled runs.
+
+Each run also scans authorised imported concepts for broken internal Markdown links. Findings are stored as `fix_broken_link` proposals for operators; automation never changes hub-native drafts or published revisions. Review-date tasks remain deferred with KH-06.

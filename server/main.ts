@@ -16,6 +16,8 @@ import { type SharedSourceConfig, syncSharedSource } from "./shared-source.ts";
 const DOCUMENT_UPDATE = 0;
 const AWARENESS_UPDATE = 1;
 const MAX_MARKDOWN_BYTES = 512 * 1024;
+const DEFAULT_AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
+const MAX_SOURCE_ATTEMPTS = 2;
 
 class MarkdownTooLarge extends Error {}
 
@@ -77,6 +79,7 @@ type AppOptions = {
   sharedSourceSync?: (
     config: SharedSourceConfig,
   ) => Promise<RepositorySnapshot>;
+  automationIntervalMs?: number;
 };
 
 type ConceptRow = {
@@ -179,6 +182,27 @@ function searchSnippet(text: string, query: string) {
   }`;
 }
 
+function relativeOkfPath(fromPath: string, href: string) {
+  const target = href.split(/[?#]/, 1)[0];
+  if (
+    !target || target.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(target)
+  ) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    return null;
+  }
+  const path = normalize(
+    decoded.startsWith("/")
+      ? decoded.slice(1)
+      : join(dirname(fromPath), decoded),
+  );
+  return !path || path === ".." || path.startsWith("../") ? null : path;
+}
+
 export function publishedMarkdown(
   body: string,
   actorUserId: string,
@@ -258,6 +282,7 @@ export async function createCollabApp({
   objectStore,
   repositorySync = syncRepository,
   sharedSourceSync = syncSharedSource,
+  automationIntervalMs = DEFAULT_AUTOMATION_INTERVAL_MS,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const security = await createSecurity({
@@ -344,6 +369,26 @@ export async function createCollabApp({
       path TEXT NOT NULL,
       error TEXT NOT NULL,
       PRIMARY KEY (sourceId, path)
+    );
+    CREATE TABLE IF NOT EXISTS okf_automation_run (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial')),
+      startedAt TEXT NOT NULL,
+      finishedAt TEXT
+    );
+    CREATE TABLE IF NOT EXISTS okf_automation_attempt (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      runId INTEGER NOT NULL,
+      job TEXT NOT NULL CHECK (job IN ('source_check', 'broken_links')),
+      sourceId TEXT,
+      attempt INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+      startedAt TEXT NOT NULL,
+      finishedAt TEXT,
+      error TEXT,
+      result TEXT,
+      FOREIGN KEY (runId) REFERENCES okf_automation_run(id)
     );
   `);
   const importedColumns = db.prepare("PRAGMA table_info(okf_imported_concept)")
@@ -686,6 +731,182 @@ export async function createCollabApp({
       ).run(`${item.title}\n${item.type}`, item.id);
     }
   }
+
+  function automationOwner() {
+    const members = db.prepare("SELECT userId, role FROM member").all() as {
+      userId: string;
+      role: string;
+    }[];
+    return members.find((item) => item.role.split(",").includes("owner"))
+      ?.userId;
+  }
+
+  function automationHistory() {
+    const runs = db.prepare(
+      "SELECT * FROM okf_automation_run ORDER BY id DESC LIMIT 20",
+    ).all() as (Record<string, unknown> & { id: number })[];
+    const attempts = db.prepare(
+      "SELECT * FROM okf_automation_attempt WHERE runId = ? ORDER BY id",
+    );
+    return runs.map((run) => ({
+      ...run,
+      attempts: (attempts.all(run.id) as Record<string, unknown>[]).map(
+        (attempt) => ({
+          ...attempt,
+          result: attempt.result ? JSON.parse(String(attempt.result)) : null,
+        }),
+      ),
+    }));
+  }
+
+  async function checkSource(
+    runId: number,
+    sourceId: "repository" | "shared",
+  ) {
+    for (let attempt = 1; attempt <= MAX_SOURCE_ATTEMPTS; attempt++) {
+      const startedAt = new Date().toISOString();
+      const id = Number(
+        db.prepare(
+          "INSERT INTO okf_automation_attempt (runId, job, sourceId, attempt, status, startedAt) VALUES (?, 'source_check', ?, ?, 'running', ?)",
+        ).run(runId, sourceId, attempt, startedAt).lastInsertRowid,
+      );
+      try {
+        await (sourceId === "repository"
+          ? refreshRepository()
+          : refreshSharedStore());
+        const source = sourcePayload(sourceId)!;
+        db.prepare(
+          "UPDATE okf_automation_attempt SET status = 'succeeded', finishedAt = ?, result = ? WHERE id = ?",
+        ).run(
+          new Date().toISOString(),
+          JSON.stringify({
+            revision: source.revision,
+            conceptCount: source.conceptCount,
+          }),
+          id,
+        );
+        return true;
+      } catch (error) {
+        db.prepare(
+          "UPDATE okf_automation_attempt SET status = 'failed', finishedAt = ?, error = ? WHERE id = ?",
+        ).run(
+          new Date().toISOString(),
+          (error instanceof Error ? error.message : "Source check failed")
+            .slice(
+              0,
+              500,
+            ),
+          id,
+        );
+      }
+    }
+    return false;
+  }
+
+  async function checkBrokenLinks(runId: number, actorUserId: string) {
+    const startedAt = new Date().toISOString();
+    const id = Number(
+      db.prepare(
+        "INSERT INTO okf_automation_attempt (runId, job, attempt, status, startedAt) VALUES (?, 'broken_links', 1, 'running', ?)",
+      ).run(runId, startedAt).lastInsertRowid,
+    );
+    try {
+      const visible = [];
+      for (const item of importedConcepts()) {
+        if (await security.check(actorUserId, "view", item.id)) {
+          visible.push(item);
+        }
+      }
+      const paths = new Set(
+        visible.map((item) => `${item.sourceId}:${item.path}`),
+      );
+      const proposals = [];
+      for (const item of visible) {
+        for (const href of JSON.parse(item.links) as string[]) {
+          const target = relativeOkfPath(item.path, href);
+          if (!target || paths.has(`${item.sourceId}:${target}`)) continue;
+          proposals.push({
+            sourceId: item.sourceId,
+            path: item.path,
+            href,
+            target,
+            action: "fix_broken_link",
+          });
+        }
+      }
+      db.prepare(
+        "UPDATE okf_automation_attempt SET status = 'succeeded', finishedAt = ?, result = ? WHERE id = ?",
+      ).run(
+        new Date().toISOString(),
+        JSON.stringify({ checkedConcepts: visible.length, proposals }),
+        id,
+      );
+      return true;
+    } catch (error) {
+      db.prepare(
+        "UPDATE okf_automation_attempt SET status = 'failed', finishedAt = ?, error = ? WHERE id = ?",
+      ).run(
+        new Date().toISOString(),
+        (error instanceof Error ? error.message : "Link check failed").slice(
+          0,
+          500,
+        ),
+        id,
+      );
+      return false;
+    }
+  }
+
+  let activeAutomation: Promise<void> | undefined;
+  function startAutomation(
+    trigger: "manual" | "scheduled",
+    actorUserId: string,
+  ) {
+    if (activeAutomation) return null;
+    const work = async () => {
+      const startedAt = new Date().toISOString();
+      const runId = Number(
+        db.prepare(
+          "INSERT INTO okf_automation_run (trigger, status, startedAt) VALUES (?, 'running', ?)",
+        ).run(trigger, startedAt).lastInsertRowid,
+      );
+      try {
+        const jobs: Promise<boolean>[] = [];
+        if (repositorySource()) jobs.push(checkSource(runId, "repository"));
+        if (sharedSource()) jobs.push(checkSource(runId, "shared"));
+        jobs.push(checkBrokenLinks(runId, actorUserId));
+        const results = await Promise.all(jobs);
+        db.prepare(
+          "UPDATE okf_automation_run SET status = ?, finishedAt = ? WHERE id = ?",
+        ).run(
+          results.every(Boolean) ? "succeeded" : "partial",
+          new Date().toISOString(),
+          runId,
+        );
+      } catch (error) {
+        db.prepare(
+          "UPDATE okf_automation_run SET status = 'partial', finishedAt = ? WHERE id = ?",
+        ).run(new Date().toISOString(), runId);
+        throw error;
+      }
+    };
+    activeAutomation = work().finally(() => {
+      activeAutomation = undefined;
+    });
+    return activeAutomation;
+  }
+
+  const automationTimer = automationIntervalMs > 0
+    ? setInterval(() => {
+      const owner = automationOwner();
+      const run = owner ? startAutomation("scheduled", owner) : null;
+      if (run) {
+        void run.catch((error) =>
+          console.error("Scheduled source checks failed", error)
+        );
+      }
+    }, automationIntervalMs)
+    : undefined;
 
   let markdown: string;
   let legacyConcept = false;
@@ -1140,6 +1361,62 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+    }
+    if (url.pathname === "/api/automation" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      return Response.json({
+        intervalMs: automationIntervalMs,
+        running: Boolean(activeAutomation),
+        runs: automationHistory(),
+      }, { headers: cors(request) });
+    }
+    if (
+      url.pathname === "/api/automation/run" && request.method === "POST"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const automation = startAutomation("manual", current.user.id);
+      if (!automation) {
+        return Response.json({ error: "An automation run is already active" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      try {
+        await automation;
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Automation failed",
+        }, { status: 503, headers: cors(request) });
+      }
+      return Response.json({
+        intervalMs: automationIntervalMs,
+        running: false,
+        runs: automationHistory(),
+      }, { headers: cors(request) });
     }
     if (url.pathname === "/api/imports" && request.method === "GET") {
       const current = await security.session(request);
@@ -1646,6 +1923,8 @@ export async function createCollabApp({
   return {
     fetch,
     close: async () => {
+      if (automationTimer !== undefined) clearInterval(automationTimer);
+      await activeAutomation;
       clients.forEach((client) => client.close());
       await stateWrite;
       doc.destroy();
@@ -1658,8 +1937,15 @@ export async function createCollabApp({
 if (import.meta.main) {
   const hostname = Deno.env.get("OKF_HOST") ?? "127.0.0.1";
   const port = Number(Deno.env.get("OKF_PORT") ?? "8788");
+  const automationIntervalMs = Number(
+    Deno.env.get("OKF_AUTOMATION_INTERVAL_MS") ??
+      DEFAULT_AUTOMATION_INTERVAL_MS,
+  );
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("OKF_PORT must be a valid TCP port");
+  }
+  if (!Number.isFinite(automationIntervalMs) || automationIntervalMs < 0) {
+    throw new Error("OKF_AUTOMATION_INTERVAL_MS must be zero or greater");
   }
   const app = await createCollabApp({
     dataDir: Deno.env.get("OKF_DATA_DIR") ?? ".okf-data",
@@ -1672,6 +1958,7 @@ if (import.meta.main) {
     s3AccessKey: Deno.env.get("OKF_S3_ACCESS_KEY") ?? undefined,
     s3SecretKey: Deno.env.get("OKF_S3_SECRET_KEY") ?? undefined,
     s3Bucket: Deno.env.get("OKF_S3_BUCKET") ?? undefined,
+    automationIntervalMs,
   });
   Deno.serve({ hostname, port }, app.fetch);
 }

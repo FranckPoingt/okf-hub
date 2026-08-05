@@ -140,6 +140,40 @@ type SearchResponse = {
   facets: { types: string[]; tags: string[] };
   canIncludeArchived: boolean;
 };
+type AutomationProposal = {
+  sourceId: "repository" | "shared";
+  path: string;
+  href: string;
+  target: string;
+  action: "fix_broken_link";
+};
+type AutomationAttempt = {
+  id: number;
+  job: "source_check" | "broken_links";
+  sourceId: "repository" | "shared" | null;
+  attempt: number;
+  status: "running" | "succeeded" | "failed";
+  error: string | null;
+  result: {
+    revision?: string;
+    conceptCount?: number;
+    checkedConcepts?: number;
+    proposals?: AutomationProposal[];
+  } | null;
+};
+type AutomationRun = {
+  id: number;
+  trigger: "manual" | "scheduled";
+  status: "running" | "succeeded" | "partial";
+  startedAt: string;
+  finishedAt: string | null;
+  attempts: AutomationAttempt[];
+};
+type AutomationState = {
+  intervalMs: number;
+  running: boolean;
+  runs: AutomationRun[];
+};
 
 function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
@@ -787,6 +821,115 @@ function SharedStorePanel(
         )}
       {error && <p className="source-error" role="alert">{error}</p>}
       <ImportGrid sourceId="shared" imports={imports} onOpen={onOpen} />
+    </section>
+  );
+}
+
+function AutomationPanel() {
+  const [state, setState] = useState<AutomationState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    const response = await api("/api/automation");
+    const result = await response.json() as AutomationState & {
+      error?: string;
+    };
+    if (!response.ok) throw new Error(result.error ?? "Automation unavailable");
+    setState(result);
+  }, []);
+  useEffect(() => {
+    load().catch((cause) => setError(cause.message));
+  }, [load]);
+  const run = async () => {
+    setBusy(true);
+    setError("");
+    const response = await api("/api/automation/run", { method: "POST" });
+    const result = await response.json() as AutomationState & {
+      error?: string;
+    };
+    setBusy(false);
+    if (!response.ok) {
+      setError(result.error ?? "Source checks failed");
+      return;
+    }
+    setState(result);
+  };
+  const schedule = !state?.intervalMs
+    ? "Scheduled checks disabled"
+    : `Scheduled every ${Math.round(state.intervalMs / 60_000)} minutes`;
+  return (
+    <section className="automation-panel" aria-labelledby="automation-heading">
+      <div className="source-heading">
+        <div>
+          <p className="eyebrow">Source operations</p>
+          <h2 id="automation-heading">Checks and proposals</h2>
+          <p>
+            {schedule}. Each source is isolated and receives at most one
+            automatic retry.
+          </p>
+        </div>
+        <button
+          className="primary"
+          type="button"
+          disabled={busy || state?.running}
+          onClick={() =>
+            void run()}
+        >
+          {busy || state?.running ? "Running checks…" : "Run checks now"}
+        </button>
+      </div>
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <div className="automation-runs">
+        {state?.runs.map((run, index) => (
+          <details key={run.id} open={index === 0}>
+            <summary>
+              <strong className={`automation-status ${run.status}`}>
+                {run.status}
+              </strong>
+              <span>{run.trigger}</span>
+              <time>{new Date(run.startedAt).toLocaleString()}</time>
+            </summary>
+            <div className="automation-attempts">
+              {run.attempts.map((attempt) => (
+                <section key={attempt.id}>
+                  <div>
+                    <strong>
+                      {attempt.job === "source_check"
+                        ? `${attempt.sourceId} source`
+                        : "Broken links"}
+                    </strong>
+                    <span>
+                      Attempt {attempt.attempt} · {attempt.status}
+                    </span>
+                  </div>
+                  {attempt.error && <p>{attempt.error}</p>}
+                  {attempt.result?.conceptCount !== undefined && (
+                    <p>
+                      {attempt.result.conceptCount} healthy concepts indexed
+                    </p>
+                  )}
+                  {attempt.result?.checkedConcepts !== undefined && (
+                    <p>{attempt.result.checkedConcepts} concepts checked</p>
+                  )}
+                  {attempt.result?.proposals?.map((proposal) => (
+                    <div
+                      className="automation-proposal"
+                      key={`${proposal.sourceId}-${proposal.path}-${proposal.href}`}
+                    >
+                      <strong>Fix broken link</strong>
+                      <code>{proposal.path}</code>
+                      <span>{proposal.href} → {proposal.target}</span>
+                    </div>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </details>
+        ))}
+        {state && state.runs.length === 0 && (
+          <p className="source-empty">No source checks have run yet.</p>
+        )}
+      </div>
     </section>
   );
 }
@@ -1500,6 +1643,7 @@ export default function App() {
                 onRefresh={refreshSharedSource}
                 onOpen={openImported}
               />
+              {bootstrap.access === "owner" && <AutomationPanel />}
             </div>
           )
           : imported?.markdown
