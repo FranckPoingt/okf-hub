@@ -18,7 +18,14 @@ function fakeOpenFga() {
       return Response.json({ authorization_model_id: "model" });
     }
     if (url.pathname.endsWith("/write")) {
-      tuples.push(...body.writes.tuple_keys);
+      for (const deleted of body.deletes?.tuple_keys ?? []) {
+        const index = tuples.findIndex((tuple) =>
+          tuple.user === deleted.user && tuple.relation === deleted.relation &&
+          tuple.object === deleted.object
+        );
+        if (index >= 0) tuples.splice(index, 1);
+      }
+      tuples.push(...(body.writes?.tuple_keys ?? []));
       return new Response(null, { status: 204 });
     }
     if (url.pathname.endsWith("/check")) {
@@ -979,6 +986,14 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       404,
     );
     assert.equal(
+      (await viewer.request("/api/concepts/new-starter-guide/export")).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/new-starter-guide/export")).status,
+      409,
+    );
+    assert.equal(
       (await editor.request("/api/concepts/new-starter-guide", {
         method: "PUT",
         body: "# Welcome aboard\n",
@@ -1034,6 +1049,111 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       ).count,
       1,
     );
+    assert.equal(
+      (await viewer.request("/api/spaces/onboarding", {
+        method: "PUT",
+        body: JSON.stringify({ name: "People onboarding" }),
+      })).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request("/api/spaces/onboarding", {
+        method: "PUT",
+        body: JSON.stringify({ name: "People onboarding" }),
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await editor.request("/api/spaces/onboarding", {
+        method: "DELETE",
+      })).status,
+      409,
+    );
+    assert.equal(
+      (await viewer.request("/api/concepts/new-starter-guide/metadata", {
+        method: "PUT",
+        body: JSON.stringify({
+          spaceId: "policies",
+          title: "Employee onboarding",
+          type: "Handbook",
+        }),
+      })).status,
+      404,
+    );
+    const moved = await editor.request(
+      "/api/concepts/new-starter-guide/metadata",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          spaceId: "policies",
+          title: "Employee onboarding",
+          type: "Handbook",
+        }),
+      },
+    );
+    assert.equal(moved.status, 200, await moved.text());
+    const movedBody = await (await editor.request(
+      "/api/concepts/new-starter-guide",
+    )).json();
+    assert.equal(movedBody.title, "Employee onboarding");
+    assert.equal(movedBody.space, "Policies");
+    assert.equal(movedBody.revisions.length, 1);
+    assert.equal(
+      fga.tuples.some((tuple) =>
+        tuple.user === "space:onboarding" && tuple.relation === "parent" &&
+        tuple.object === "concept:new-starter-guide"
+      ),
+      false,
+    );
+    assert.equal(
+      fga.tuples.some((tuple) =>
+        tuple.user === "space:policies" && tuple.relation === "parent" &&
+        tuple.object === "concept:new-starter-guide"
+      ),
+      true,
+    );
+    assert.equal(
+      (await editor.request("/api/spaces/onboarding", {
+        method: "DELETE",
+      })).status,
+      204,
+    );
+    assert.equal(
+      (await editor.request("/api/spaces/policies", {
+        method: "DELETE",
+      })).status,
+      409,
+    );
+    const republished = await editor.request(
+      "/api/concepts/new-starter-guide/publish",
+      {
+        method: "POST",
+        body: JSON.stringify({ markdown: "# Welcome aboard\n" }),
+      },
+    );
+    assert.equal((await republished.json()).revisions.length, 2);
+    const exported = await viewer.request(
+      "/api/concepts/new-starter-guide/export",
+    );
+    assert.equal(exported.status, 200);
+    assert.equal(
+      exported.headers.get("content-disposition"),
+      'attachment; filename="new-starter-guide.md"',
+    );
+    assert.match(
+      await exported.text(),
+      /^---\ntype: Handbook\ntitle: "Employee onboarding"[\s\S]*# Welcome aboard\n$/,
+    );
+    assert.equal(
+      (await outsider.request("/api/concepts/new-starter-guide/export")).status,
+      404,
+    );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/artifacts?conceptId=new-starter-guide",
+      )).json()).artifacts[0].title,
+      "First-week checklist",
+    );
 
     const audit = await (await owner.request("/api/audit")).json();
     assert.deepEqual(
@@ -1049,12 +1169,16 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "artifact.revised",
         "concept.created",
         "concept.created",
+        "concept.exported",
+        "concept.updated",
         "invitation.accepted",
         "invitation.accepted",
         "invitation.created",
         "invitation.created",
         "organization.created",
         "space.created",
+        "space.deleted",
+        "space.renamed",
       ],
     );
   } finally {

@@ -35,10 +35,14 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Create draft artifact/);
   assert.match(bundle, /Make version/);
   assert.match(bundle, /allow-scripts/);
-  assert.match(bundle, /Create knowledge/);
+  assert.match(bundle, /Create and manage knowledge/);
   assert.match(bundle, /New document/);
   assert.match(bundle, /Documents inherit access from their space/);
   assert.match(bundle, /Create space/);
+  assert.match(bundle, /Document settings/);
+  assert.match(bundle, /Download OKF/);
+  assert.match(bundle, /Delete empty space/);
+  assert.match(bundle, /Moving a document keeps every draft/);
   assert.doesNotMatch(
     await Deno.readTextFile("src/App.tsx"),
     /dangerouslySetInnerHTML/,

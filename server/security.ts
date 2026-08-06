@@ -212,6 +212,8 @@ export async function createSecurity({
     db.prepare(
       "INSERT INTO okf_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(key, value);
+  const unset = (key: string) =>
+    db.prepare("DELETE FROM okf_config WHERE key = ?").run(key);
   if (get("organization_id")) {
     set(`openfga_hub_space:${SPACE}`, "1");
     set(`openfga_hub_concept:${CONCEPT}`, "1");
@@ -425,6 +427,60 @@ export async function createSecurity({
     set(key, "1");
   }
 
+  async function moveHubConcept(
+    conceptId: string,
+    fromSpaceId: string,
+    toSpaceId: string,
+  ) {
+    if (fromSpaceId === toSpaceId) return;
+    await ensureHubSpace(toSpaceId);
+    const { storeId, modelId } = await authorization();
+    await fga(`/stores/${storeId}/write`, {
+      method: "POST",
+      body: JSON.stringify({
+        writes: {
+          tuple_keys: [{
+            user: `space:${toSpaceId}`,
+            relation: "parent",
+            object: `concept:${conceptId}`,
+          }],
+        },
+        deletes: {
+          tuple_keys: [{
+            user: `space:${fromSpaceId}`,
+            relation: "parent",
+            object: `concept:${conceptId}`,
+          }],
+        },
+        authorization_model_id: modelId,
+      }),
+    });
+  }
+
+  async function deleteHubSpace(spaceId: string) {
+    const viewerTeamId = get("viewer_team_id");
+    if (!viewerTeamId) throw new Error("Finish organization setup first");
+    const { storeId, modelId } = await authorization();
+    await fga(`/stores/${storeId}/write`, {
+      method: "POST",
+      body: JSON.stringify({
+        deletes: {
+          tuple_keys: [{
+            user: `source:${SOURCE}`,
+            relation: "parent",
+            object: `space:${spaceId}`,
+          }, {
+            user: `group:${viewerTeamId}#member`,
+            relation: "viewer",
+            object: `space:${spaceId}`,
+          }],
+        },
+        authorization_model_id: modelId,
+      }),
+    });
+    unset(`openfga_hub_space:${spaceId}`);
+  }
+
   async function ensureImportedConcept(conceptId: string) {
     const viewerTeamId = get("viewer_team_id");
     if (!get("openfga_imported_space")) {
@@ -613,6 +669,8 @@ export async function createSecurity({
     audit,
     ensureHubSpace,
     ensureHubConcept,
+    moveHubConcept,
+    deleteHubSpace,
     ensureImportedConcept,
     close: () => db.close(),
   };

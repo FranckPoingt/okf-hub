@@ -258,7 +258,7 @@ function allowedOrigin(request: Request) {
 function cors(request: Request) {
   return {
     "access-control-allow-origin": request.headers.get("origin") ?? "*",
-    "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     "access-control-allow-headers": "content-type",
     "access-control-allow-credentials": "true",
   };
@@ -1951,6 +1951,83 @@ export async function createCollabApp({
         }, { status: 503, headers: cors(request) });
       }
     }
+    const spaceRoute = url.pathname.match(/^\/api\/spaces\/([a-z0-9-]+)$/);
+    if (spaceRoute && request.method === "PUT") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const spaceId = spaceRoute[1];
+      const item = space(spaceId);
+      if (
+        !item || !await security.checkSpace(current.user.id, "edit", spaceId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        name?: unknown;
+      };
+      const name = String(body.name ?? "").trim();
+      if (!name || name.length > 60) {
+        return Response.json({ error: "Space name must be 1–60 characters" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      db.prepare("UPDATE okf_space SET name = ? WHERE id = ?").run(
+        name,
+        spaceId,
+      );
+      security.audit(current.user.id, "space.renamed", `space:${spaceId}`);
+      return Response.json({ ...item, name }, { headers: cors(request) });
+    }
+    if (spaceRoute && request.method === "DELETE") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const spaceId = spaceRoute[1];
+      const item = space(spaceId);
+      if (
+        !item || !await security.checkSpace(current.user.id, "edit", spaceId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (spaceId === "policies") {
+        return Response.json({ error: "The default space cannot be deleted" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      if (concepts().some((row) => row.spaceId === spaceId)) {
+        return Response.json({ error: "Move every document out first" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      try {
+        await security.deleteHubSpace(spaceId);
+        db.prepare("DELETE FROM okf_space WHERE id = ?").run(spaceId);
+        security.audit(current.user.id, "space.deleted", `space:${spaceId}`);
+        return new Response(null, { status: 204, headers: cors(request) });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Deletion failed",
+        }, { status: 503, headers: cors(request) });
+      }
+    }
 
     if (url.pathname === "/api/concepts" && request.method === "GET") {
       const current = await security.session(request);
@@ -2053,6 +2130,70 @@ export async function createCollabApp({
     const conceptRoute = url.pathname.match(
       /^\/api\/concepts\/([^/]+)(?:\/(.+))?$/,
     );
+    if (
+      conceptRoute && request.method === "GET" && conceptRoute[2] === "export"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return new Response("Sign in required", {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = conceptRoute[1];
+      if (!await security.check(current.user.id, "view", conceptId)) {
+        return new Response("Not found", {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const row = concept(conceptId);
+      const canEdit = await security.check(current.user.id, "edit", conceptId);
+      if (
+        !row ||
+        (!canEdit && (row.status === "archived" || !row.publishedRevision))
+      ) {
+        return new Response("Not found", {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (!row.publishedRevision) {
+        return new Response("Publish the document before exporting", {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const revision = revisions(conceptId).find((item) =>
+        item.number === row.publishedRevision
+      );
+      if (!revision) {
+        return new Response("Published revision not found", {
+          status: 503,
+          headers: cors(request),
+        });
+      }
+      try {
+        const markdown = await store.get(revision.objectKey);
+        const headers = new Headers(cors(request));
+        headers.set("content-type", "text/markdown; charset=utf-8");
+        headers.set(
+          "content-disposition",
+          `attachment; filename="${conceptId}.md"`,
+        );
+        security.audit(
+          current.user.id,
+          "concept.exported",
+          `concept:${conceptId}:revision:${row.publishedRevision}`,
+        );
+        return new Response(markdown, { headers });
+      } catch (error) {
+        return new Response(
+          error instanceof Error ? error.message : "Export failed",
+          { status: 503, headers: cors(request) },
+        );
+      }
+    }
     if (conceptRoute && request.method === "GET" && !conceptRoute[2]) {
       const current = await security.session(request);
       if (!current) {
@@ -2086,6 +2227,75 @@ export async function createCollabApp({
       } catch (error) {
         return Response.json({
           error: error instanceof Error ? error.message : "Storage unavailable",
+        }, { status: 503, headers: cors(request) });
+      }
+    }
+    if (
+      conceptRoute && request.method === "PUT" &&
+      conceptRoute[2] === "metadata"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = conceptRoute[1];
+      const row = concept(conceptId);
+      if (
+        !row || !await security.check(current.user.id, "edit", conceptId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      const title = String(body.title ?? "").trim();
+      const type = String(body.type ?? "").trim();
+      const spaceId = String(body.spaceId ?? "");
+      if (
+        !title || title.length > 100 ||
+        !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)
+      ) {
+        return Response.json({
+          error: "Title and type are required and must fit their fields",
+        }, { status: 400, headers: cors(request) });
+      }
+      if (
+        !space(spaceId) ||
+        !await security.checkSpace(current.user.id, "edit", spaceId)
+      ) {
+        return Response.json({ error: "Destination space not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      try {
+        await security.moveHubConcept(conceptId, row.spaceId, spaceId);
+        db.prepare(
+          "UPDATE okf_concept SET title = ?, type = ?, spaceId = ?, updatedAt = ? WHERE id = ?",
+        ).run(title, type, spaceId, new Date().toISOString(), conceptId);
+        if (row.spaceId !== spaceId) {
+          (await loadDocument(row)).clients.forEach((client) =>
+            client.close(1000, "Concept moved")
+          );
+        }
+        security.audit(
+          current.user.id,
+          "concept.updated",
+          `concept:${conceptId}`,
+        );
+        return Response.json(await payload(concept(conceptId)!, true), {
+          headers: cors(request),
+        });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Update failed",
         }, { status: 503, headers: cors(request) });
       }
     }

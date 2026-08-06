@@ -272,6 +272,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Every space and concept read or mutation follows its OpenFGA relationship.
   - [x] Existing Incident communication data migrates without moving or resetting it.
 
+#### KH-14 — Complete document management and portability
+
+- **Type:** AFK
+- **Blocked by:** KH-13
+- **Status:** Document rename/move, space rename and safe deletion, and canonical published OKF export delivered.
+- **What to build:** Let editors organise hub-native knowledge without losing history and let authorised users download the portable published OKF document.
+- **Acceptance criteria:**
+  - [x] Editors can rename and move a concept without changing its stable identifier.
+  - [x] Moving a concept swaps its OpenFGA parent and preserves drafts, revisions, artifacts, and audit history.
+  - [x] Editors can rename spaces and delete only non-default spaces containing no concepts, including archived concepts.
+  - [x] Authorised users can download the current published revision as canonical OKF Markdown.
+  - [x] Drafts and inaccessible or archived concepts are not leaked through export.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-13 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-14 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

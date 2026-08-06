@@ -1398,12 +1398,26 @@ function SearchPanel(
 }
 
 function HubCreatePanel(
-  { spaces, busy, error, onCreateSpace, onCreateConcept, onCancel }: {
+  {
+    spaces,
+    busy,
+    error,
+    onCreateSpace,
+    onCreateConcept,
+    onRenameSpace,
+    onDeleteSpace,
+    onCancel,
+  }: {
     spaces: Space[];
     busy: boolean;
     error: string;
     onCreateSpace: (event: FormEvent<HTMLFormElement>) => Promise<void>;
     onCreateConcept: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+    onRenameSpace: (
+      event: FormEvent<HTMLFormElement>,
+      space: Space,
+    ) => Promise<void>;
+    onDeleteSpace: (space: Space) => Promise<void>;
     onCancel: () => void;
   },
 ) {
@@ -1411,7 +1425,7 @@ function HubCreatePanel(
     <section className="hub-create-panel">
       <div className="source-page-heading">
         <p className="eyebrow">Hub-native knowledge</p>
-        <h1>Create knowledge</h1>
+        <h1>Create and manage knowledge</h1>
         <p>Documents inherit access from their space.</p>
       </div>
       <form onSubmit={(event) => void onCreateConcept(event)}>
@@ -1444,6 +1458,36 @@ function HubCreatePanel(
         </label>
         <button type="submit" disabled={busy}>Create space</button>
       </form>
+      <section className="space-management">
+        <h2>Manage spaces</h2>
+        {spaces.map((space) => (
+          <form
+            key={space.id}
+            onSubmit={(event) => void onRenameSpace(event, space)}
+          >
+            <label>
+              Space name
+              <input
+                name="name"
+                maxLength={60}
+                defaultValue={space.name}
+                required
+              />
+            </label>
+            <span>{space.count} documents</span>
+            <button type="submit" disabled={busy}>Rename</button>
+            {space.id !== "policies" && (
+              <button
+                type="button"
+                disabled={busy || space.count > 0}
+                onClick={() => void onDeleteSpace(space)}
+              >
+                Delete empty space
+              </button>
+            )}
+          </form>
+        ))}
+      </section>
       {error && <p className="source-error" role="alert">{error}</p>}
       <button className="text-button" type="button" onClick={onCancel}>
         Cancel
@@ -1460,6 +1504,7 @@ export default function App() {
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [conceptLoaded, setConceptLoaded] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -1523,6 +1568,7 @@ export default function App() {
     setEditorVersion((current) => current + 1);
     setConceptLoaded(true);
     setCreateOpen(false);
+    setDocumentSettingsOpen(false);
     setImported(null);
     setSourceOpen(false);
     setSearchOpen(false);
@@ -1550,6 +1596,7 @@ export default function App() {
     if (!bootstrap?.canView) return;
     const load = async () => {
       setConceptLoaded(false);
+      setDocumentSettingsOpen(false);
       const nextConcepts = await refreshHubLists();
       if (!nextConcepts.length) {
         setConcept(null);
@@ -1635,6 +1682,43 @@ export default function App() {
     await refreshHubLists();
   };
 
+  const renameSpace = async (
+    event: FormEvent<HTMLFormElement>,
+    space: Space,
+  ) => {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get("name") ?? "");
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(`/api/spaces/${space.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    });
+    const result = await response.json() as Space & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) return setActionError(result.error ?? "Rename failed");
+    if (concept?.spaceId === space.id) {
+      setConcept({ ...concept, space: result.name });
+    }
+    await refreshHubLists();
+  };
+
+  const deleteSpace = async (space: Space) => {
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(`/api/spaces/${space.id}`, {
+      method: "DELETE",
+    });
+    setActionBusy(false);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as {
+        error?: string;
+      };
+      return setActionError(result.error ?? "Deletion failed");
+    }
+    await refreshHubLists();
+  };
+
   const createConcept = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
@@ -1653,6 +1737,28 @@ export default function App() {
     if (!response.ok) return setActionError(result.error ?? "Creation failed");
     await refreshHubLists();
     await openHubConcept(result.id);
+  };
+
+  const updateConcept = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!concept) return;
+    const fields = new FormData(event.currentTarget);
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(`${conceptPath(concept.id)}/metadata`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: fields.get("title"),
+        type: fields.get("type"),
+        spaceId: fields.get("spaceId"),
+      }),
+    });
+    const result = await response.json() as Concept & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) return setActionError(result.error ?? "Update failed");
+    setConcept(result);
+    setDocumentSettingsOpen(false);
+    await refreshHubLists();
   };
 
   const publish = async () => {
@@ -1769,6 +1875,7 @@ export default function App() {
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
+    setDocumentSettingsOpen(false);
     if (id && id !== concept?.id) {
       void openHubConcept(id).catch((error) => setActionError(error.message));
     }
@@ -1928,13 +2035,14 @@ export default function App() {
               type="button"
               onClick={() => {
                 setCreateOpen(true);
+                setDocumentSettingsOpen(false);
                 setImported(null);
                 setSourceOpen(false);
                 setSearchOpen(false);
                 setAccessOpen(false);
               }}
             >
-              New
+              Manage
             </button>
           )}
         </div>
@@ -2038,6 +2146,8 @@ export default function App() {
               error={actionError}
               onCreateSpace={createSpace}
               onCreateConcept={createConcept}
+              onRenameSpace={renameSpace}
+              onDeleteSpace={deleteSpace}
               onCancel={() => setCreateOpen(false)}
             />
           )
@@ -2171,6 +2281,14 @@ export default function App() {
                   <small>{collaborators.length} online</small>
                 </div>
                 <span className="access-badge">{bootstrap.access}</span>
+                {concept.publishedRevision && (
+                  <a
+                    className="export-link"
+                    href={`${SERVICE}${conceptPath(concept.id)}/export`}
+                  >
+                    Download OKF
+                  </a>
+                )}
                 {bootstrap.canEdit && (
                   <div className="lifecycle-actions">
                     {concept.status === "active" && (
@@ -2199,6 +2317,13 @@ export default function App() {
                       onClick={() => setHistoryOpen(!historyOpen)}
                     >
                       History ({concept.revisions.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDocumentSettingsOpen(!documentSettingsOpen)}
+                    >
+                      Document settings
                     </button>
                     {concept.status === "active"
                       ? (
@@ -2233,6 +2358,56 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {documentSettingsOpen && bootstrap.canEdit && (
+                <section className="document-settings">
+                  <form onSubmit={(event) => void updateConcept(event)}>
+                    <strong>Document settings</strong>
+                    <label>
+                      Title
+                      <input
+                        name="title"
+                        maxLength={100}
+                        defaultValue={concept.title}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Type
+                      <input
+                        name="type"
+                        maxLength={50}
+                        defaultValue={concept.type}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Space
+                      <select
+                        name="spaceId"
+                        defaultValue={concept.spaceId}
+                        required
+                      >
+                        {spaces.map((space) => (
+                          <option key={space.id} value={space.id}>
+                            {space.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="primary"
+                      type="submit"
+                      disabled={actionBusy}
+                    >
+                      Save settings
+                    </button>
+                  </form>
+                  <p>
+                    Moving a document keeps every draft, revision, artifact, and
+                    audit event.
+                  </p>
+                </section>
+              )}
               {historyOpen && bootstrap.canEdit && (
                 <section
                   className="revision-panel"

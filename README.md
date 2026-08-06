@@ -62,6 +62,12 @@ Inline HTML runs in an `allow-scripts` iframe with network, nested frames, objec
 
 ## KH-13 spaces and documents
 
-Editors can create knowledge spaces and hub-native documents from **Spaces → New**. Each document has its own Markdown draft, Yjs collaboration state, publication history, lifecycle, and interactive artifacts. Search results and sidebar navigation open the selected document.
+Editors can create knowledge spaces and hub-native documents from **Spaces → Manage**. Each document has its own Markdown draft, Yjs collaboration state, publication history, lifecycle, and interactive artifacts. Search results and sidebar navigation open the selected document.
 
 OpenFGA links each concept to its space and each space to the hub source. Editors inherit edit access from the source; viewers inherit view access from each space and only see published, active concepts. Existing Incident communication files remain at their original paths during migration.
+
+## KH-14 document management and export
+
+Editors can rename or move a hub-native document under **Document settings**. A move swaps the concept's OpenFGA parent while retaining its stable ID, Markdown draft, Yjs state, published revisions, artifacts, and audit history. **Spaces → Manage** supports space renaming and deletion only after every active or archived document has been moved out; the default Policies space cannot be deleted.
+
+**Download OKF** returns the current published revision with canonical frontmatter as a Markdown attachment. Draft-only documents remain unavailable to viewers, archived documents remain unavailable to viewers, and exports never substitute the mutable working draft for the published object.
