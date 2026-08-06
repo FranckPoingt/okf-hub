@@ -298,6 +298,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Source health and imported counts link to source management.
   - [x] The dashboard remains usable on narrow screens without a second data model or endpoint.
 
+#### KH-16 — Add shareable URLs and browser navigation
+
+- **Type:** AFK
+- **Blocked by:** KH-09, KH-13, KH-15
+- **Status:** Stable native routes, direct loading, and browser back/forward navigation delivered without a router dependency.
+- **What to build:** Give primary app views and knowledge documents durable URLs that replay the existing permission-checked loaders.
+- **Acceptance criteria:**
+  - [x] Home, Search, Sources, management, hub-native concepts, and imported concepts have stable paths.
+  - [x] Direct links load the requested accessible view after authentication.
+  - [x] Back and forward navigation restore app views without a full page reload.
+  - [x] Inaccessible, malformed, and unknown paths use one generic unavailable state.
+  - [x] Nested imported paths round-trip without introducing a routing dependency.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-15 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-16 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

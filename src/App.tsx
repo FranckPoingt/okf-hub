@@ -15,11 +15,22 @@ import {
   type ConnectionStatus,
   DenoCollabProvider,
 } from "./collab-provider.ts";
+import { type AppRoute, parseAppRoute, routePath } from "./routes.ts";
 
 const SERVICE = globalThis.location.port === "8788"
   ? globalThis.location.origin
   : "http://127.0.0.1:8788";
 const conceptPath = (id: string) => `/api/concepts/${encodeURIComponent(id)}`;
+const setBrowserRoute = (
+  route: Exclude<AppRoute, { kind: "not_found" }>,
+  replace = false,
+) => {
+  const path = routePath(route);
+  if (globalThis.location.pathname === path && !globalThis.location.search) {
+    return;
+  }
+  globalThis.history[replace ? "replaceState" : "pushState"]({}, "", path);
+};
 const PROFILE_MARKERS = [
   "- [x]",
   "| Severity",
@@ -576,7 +587,10 @@ function ImportGrid(
   { sourceId, imports, onOpen }: {
     sourceId: "repository" | "shared";
     imports: ImportedConcept[];
-    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
+    onOpen: (
+      sourceId: "repository" | "shared",
+      path: string,
+    ) => Promise<unknown>;
   },
 ) {
   return (
@@ -605,7 +619,10 @@ function RepositoryPanel(
     error: string;
     onConnect: (repositoryUrl: string, folder: string) => Promise<void>;
     onRefresh: () => Promise<void>;
-    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
+    onOpen: (
+      sourceId: "repository" | "shared",
+      path: string,
+    ) => Promise<unknown>;
   },
 ) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
@@ -722,7 +739,10 @@ function SharedStorePanel(
     error: string;
     onConnect: (values: Record<string, string>) => Promise<void>;
     onRefresh: () => Promise<void>;
-    onOpen: (sourceId: "repository" | "shared", path: string) => Promise<void>;
+    onOpen: (
+      sourceId: "repository" | "shared",
+      path: string,
+    ) => Promise<unknown>;
   },
 ) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
@@ -1220,7 +1240,7 @@ function SearchPanel(
     onOpenImported: (
       sourceId: "repository" | "shared",
       path: string,
-    ) => Promise<void>;
+    ) => Promise<unknown>;
   },
 ) {
   const [query, setQuery] = useState("");
@@ -1421,7 +1441,7 @@ function HomePanel(
     onOpenImported: (
       sourceId: "repository" | "shared",
       path: string,
-    ) => Promise<void>;
+    ) => Promise<unknown>;
     onCreate: () => void;
     onSearch: () => void;
     onSources: () => void;
@@ -1658,6 +1678,9 @@ export default function App() {
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [conceptLoaded, setConceptLoaded] = useState(false);
+  const [hubReady, setHubReady] = useState(false);
+  const [sourcesReady, setSourcesReady] = useState(false);
+  const [routeError, setRouteError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
@@ -1711,8 +1734,9 @@ export default function App() {
     setSharedSource(sources.shared);
     setImports(await importsResponse.json());
   }, []);
-  const openHubConcept = useCallback(async (id: string) => {
+  const openHubConcept = useCallback(async (id: string, record = true) => {
     setConceptLoaded(false);
+    setRouteError("");
     const response = await api(conceptPath(id));
     const result = await response.json() as Concept & { error?: string };
     if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
@@ -1730,6 +1754,7 @@ export default function App() {
     setSourceOpen(false);
     setSearchOpen(false);
     setAccessOpen(false);
+    if (record) setBrowserRoute({ kind: "concept", id });
   }, [bootstrap?.canEdit]);
   const refreshHubLists = useCallback(async () => {
     const [spacesResponse, conceptsResponse] = await Promise.all([
@@ -1754,20 +1779,17 @@ export default function App() {
     const load = async () => {
       setConceptLoaded(false);
       setDocumentSettingsOpen(false);
-      const nextConcepts = await refreshHubLists();
-      if (!nextConcepts.length) {
-        setConcept(null);
-        setInitialMarkdown(null);
-        setConceptLoaded(true);
-        return;
-      }
-      await openHubConcept(nextConcepts[0].id);
+      await refreshHubLists();
+      setConceptLoaded(true);
+      setHubReady(true);
     };
     load().catch((error) => setFatal(error.message));
-  }, [bootstrap?.canView, openHubConcept, refreshHubLists]);
+  }, [bootstrap?.canView, refreshHubLists]);
   useEffect(() => {
     if (!bootstrap?.canView) return;
-    loadSources().catch((error) => setSourceError(error.message));
+    loadSources().catch((error) => setSourceError(error.message)).finally(() =>
+      setSourcesReady(true)
+    );
   }, [bootstrap?.canView, loadSources]);
 
   const signOut = () => {
@@ -1777,6 +1799,9 @@ export default function App() {
       setConcepts([]);
       setSpaces([]);
       setConceptLoaded(false);
+      setHubReady(false);
+      setSourcesReady(false);
+      setRouteError("");
       setInitialMarkdown(null);
       setSource(null);
       setSharedSource(null);
@@ -2011,8 +2036,10 @@ export default function App() {
   const openImported = async (
     sourceId: "repository" | "shared",
     path: string,
+    record = true,
   ) => {
     setSourceError("");
+    setRouteError("");
     const response = await api(
       `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
     );
@@ -2020,16 +2047,20 @@ export default function App() {
       error?: string;
     };
     if (!response.ok) {
-      return setSourceError(result.error ?? "Import unavailable");
+      setSourceError(result.error ?? "Import unavailable");
+      return false;
     }
     setImported(result);
     setHomeOpen(false);
     setSourceOpen(false);
     setSearchOpen(false);
     setAccessOpen(false);
+    if (record) setBrowserRoute({ kind: "imported", sourceId, path });
+    return true;
   };
 
-  const showHubConcept = (id?: string) => {
+  const showHubConcept = (id?: string, record = true) => {
+    setRouteError("");
     setImported(null);
     setHomeOpen(false);
     setSourceOpen(false);
@@ -2037,10 +2068,20 @@ export default function App() {
     setCreateOpen(false);
     setDocumentSettingsOpen(false);
     if (id && id !== concept?.id) {
-      void openHubConcept(id).catch((error) => setActionError(error.message));
+      void openHubConcept(id, record).catch((error) =>
+        setActionError(error.message)
+      );
+    } else if (id && record) {
+      setBrowserRoute({ kind: "concept", id });
+    } else if (!id && concept) {
+      if (record) setBrowserRoute({ kind: "concept", id: concept.id });
+    } else if (!id) {
+      setHomeOpen(true);
+      if (record) setBrowserRoute({ kind: "home" });
     }
   };
-  const showHome = () => {
+  const showHome = (record = true) => {
+    setRouteError("");
     setHomeOpen(true);
     setImported(null);
     setSourceOpen(false);
@@ -2048,24 +2089,30 @@ export default function App() {
     setCreateOpen(false);
     setDocumentSettingsOpen(false);
     setAccessOpen(false);
+    if (record) setBrowserRoute({ kind: "home" });
   };
-  const showSearch = () => {
+  const showSearch = (record = true) => {
+    setRouteError("");
     setHomeOpen(false);
     setSearchOpen(true);
     setSourceOpen(false);
     setImported(null);
     setCreateOpen(false);
     setAccessOpen(false);
+    if (record) setBrowserRoute({ kind: "search" });
   };
-  const showSources = () => {
+  const showSources = (record = true) => {
+    setRouteError("");
     setHomeOpen(false);
     setImported(null);
     setSourceOpen(true);
     setSearchOpen(false);
     setCreateOpen(false);
     setAccessOpen(false);
+    if (record) setBrowserRoute({ kind: "sources" });
   };
-  const showCreate = () => {
+  const showCreate = (record = true) => {
+    setRouteError("");
     setHomeOpen(false);
     setCreateOpen(true);
     setDocumentSettingsOpen(false);
@@ -2074,7 +2121,61 @@ export default function App() {
     setSearchOpen(false);
     setAccessOpen(false);
     setActionError("");
+    if (record) setBrowserRoute({ kind: "manage" });
   };
+
+  useEffect(() => {
+    if (!bootstrap?.canView || !hubReady || !sourcesReady) return;
+    let active = true;
+    const unavailable = () => {
+      if (!active) return;
+      setRouteError("This knowledge page is unavailable.");
+      setHomeOpen(false);
+      setSearchOpen(false);
+      setSourceOpen(false);
+      setCreateOpen(false);
+      setImported(null);
+      setConceptLoaded(true);
+    };
+    const apply = async () => {
+      const route = parseAppRoute(globalThis.location.pathname);
+      try {
+        if (route.kind === "home") return showHome(false);
+        if (route.kind === "search") return showSearch(false);
+        if (route.kind === "sources") return showSources(false);
+        if (route.kind === "manage") {
+          if (!bootstrap.canEdit) return unavailable();
+          return showCreate(false);
+        }
+        if (route.kind === "concept") {
+          await openHubConcept(route.id, false);
+          return;
+        }
+        if (route.kind === "imported") {
+          if (!await openImported(route.sourceId, route.path, false)) {
+            unavailable();
+          }
+          return;
+        }
+        unavailable();
+      } catch {
+        unavailable();
+      }
+    };
+    const onPopState = () => void apply();
+    void apply();
+    globalThis.addEventListener("popstate", onPopState);
+    return () => {
+      active = false;
+      globalThis.removeEventListener("popstate", onPopState);
+    };
+  }, [
+    bootstrap?.canView,
+    bootstrap?.canEdit,
+    hubReady,
+    sourcesReady,
+    openHubConcept,
+  ]);
 
   if (fatal) {
     return (
@@ -2133,7 +2234,15 @@ export default function App() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <a className="brand" href="/" aria-label="OKF Hub home">
+        <a
+          className="brand"
+          href="/"
+          aria-label="OKF Hub home"
+          onClick={(event) => {
+            event.preventDefault();
+            showHome();
+          }}
+        >
           <span>O</span> OKF Hub
         </a>
         <button
@@ -2216,14 +2325,14 @@ export default function App() {
           <button
             type="button"
             className={searchOpen ? "active" : ""}
-            onClick={showSearch}
+            onClick={() => showSearch()}
           >
             ⌕ <span>Search</span>
           </button>
           <button
             type="button"
             className={homeOpen ? "active" : ""}
-            onClick={showHome}
+            onClick={() => showHome()}
           >
             ⌂ <span>Home</span>
           </button>
@@ -2233,7 +2342,7 @@ export default function App() {
           {bootstrap.canEdit && (
             <button
               type="button"
-              onClick={showCreate}
+              onClick={() => showCreate()}
             >
               Manage
             </button>
@@ -2272,7 +2381,7 @@ export default function App() {
           <button
             type="button"
             className={!searchOpen && (imported || sourceOpen) ? "active" : ""}
-            onClick={showSources}
+            onClick={() => showSources()}
           >
             <i className="space-dot green" /> <span>Sources</span>
             <b>{imports.length}</b>
@@ -2306,13 +2415,7 @@ export default function App() {
           {bootstrap.access === "owner" && (
             <button
               type="button"
-              onClick={() => {
-                setAccessOpen(!accessOpen);
-                setHomeOpen(false);
-                setSourceOpen(false);
-                setSearchOpen(false);
-                setImported(null);
-              }}
+              onClick={() => setAccessOpen(!accessOpen)}
             >
               Manage access
             </button>
@@ -2328,7 +2431,22 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        {homeOpen
+        {routeError
+          ? (
+            <section className="empty-state route-unavailable">
+              <p className="eyebrow">Unavailable</p>
+              <h1>Knowledge page not found</h1>
+              <p>{routeError}</p>
+              <button
+                className="primary"
+                type="button"
+                onClick={() => showHome()}
+              >
+                Back to Home
+              </button>
+            </section>
+          )
+          : homeOpen
           ? (
             <HomePanel
               concepts={concepts}
@@ -2354,7 +2472,7 @@ export default function App() {
               onCreateConcept={createConcept}
               onRenameSpace={renameSpace}
               onDeleteSpace={deleteSpace}
-              onCancel={() => setCreateOpen(false)}
+              onCancel={() => concept ? showHubConcept(concept.id) : showHome()}
             />
           )
           : searchOpen
@@ -2409,11 +2527,7 @@ export default function App() {
                 <span className="access-badge">Read only</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setImported(null);
-                    setSourceOpen(true);
-                    setSearchOpen(false);
-                  }}
+                  onClick={() => showSources()}
                 >
                   Source details
                 </button>

@@ -77,3 +77,9 @@ Editors can rename or move a hub-native document under **Document settings**. A 
 **Home** provides a permission-filtered overview using the same concept, space, import, and source responses already loaded by the app. It shows recent accessible documents, knowledge-space and imported totals, unpublished and archived counts for editors, and connected-source health without introducing a separate dashboard index.
 
 Recent items open their existing document views. **Search knowledge**, **Create document**, and the connected-source health card route to the current search, creation, and source-management flows.
+
+## KH-16 shareable navigation
+
+The app uses the browser History API for stable routes without a routing dependency: `/` for Home, `/search`, `/sources`, `/manage`, `/knowledge/<concept-id>`, and `/imports/<source>/<path>`. Nested imported paths are encoded segment by segment so links remain readable and reversible.
+
+Direct URLs wait for authentication and the initial permission-filtered lists, then call the same concept or import API used by in-app navigation. Browser back and forward replay those loaders. Inaccessible, malformed, and unknown paths all render the same generic unavailable page.

@@ -51,6 +51,9 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Recently updated/);
   assert.match(bundle, /Unpublished drafts/);
   assert.match(bundle, /Search knowledge/);
+  assert.match(bundle, /Knowledge page not found/);
+  assert.match(bundle, /This knowledge page is unavailable/);
+  assert.match(bundle, /popstate/);
   assert.doesNotMatch(
     await Deno.readTextFile("src/App.tsx"),
     /dangerouslySetInnerHTML/,
