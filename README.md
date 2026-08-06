@@ -95,3 +95,9 @@ Existing installations retain the original `repository` source ID and URLs durin
 Organisation owners can disconnect a Git source under **Sources → Update repository access**. The browser asks for confirmation and the API independently requires the stable source ID before removing anything. Active refreshes block disconnect.
 
 Disconnect removes that source's imports, revision index, validation issues, encrypted credentials, checkout, and OpenFGA relationships without touching sibling repositories or retained automation history. Mirrored RustFS/S3 objects are deleted best-effort after the metadata transaction; they are no longer addressable through the hub even if external object cleanup fails.
+
+## KH-20 document intent and work traces
+
+Hub-native documents independently declare their intent as maintained **canonical knowledge**, a **working document**, supporting **evidence**, or **ephemeral notes**. Intent does not replace draft, published, or archived lifecycle state, and existing documents migrate to canonical intent.
+
+Editors can append immutable dated change, decision, incident, and outcome records under **Work trace**, including reasons and an optional HTTPS ticket, PR, or research link. A trace can be folded once into an editable canonical document: the explicitly entered lasting knowledge is appended to that document's draft, while the trace remains visible from its source and destination. Nothing is automatically published, expired, summarised, or copied from the external tracker.

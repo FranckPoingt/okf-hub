@@ -20,6 +20,15 @@ const AWARENESS_UPDATE = 1;
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const DEFAULT_AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 const MAX_SOURCE_ATTEMPTS = 2;
+const DOCUMENT_INTENTS = [
+  "canonical",
+  "working",
+  "evidence",
+  "ephemeral",
+] as const;
+const TRACE_KINDS = ["change", "decision", "incident", "outcome"] as const;
+type DocumentIntent = typeof DOCUMENT_INTENTS[number];
+type WorkTraceKind = typeof TRACE_KINDS[number];
 
 class MarkdownTooLarge extends Error {}
 
@@ -92,9 +101,25 @@ type ConceptRow = {
   spaceId: string;
   title: string;
   type: string;
+  intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
   updatedAt: string;
+};
+
+type WorkTraceRow = {
+  id: string;
+  conceptId: string;
+  kind: WorkTraceKind;
+  title: string;
+  summary: string;
+  occurredAt: string;
+  sourceUrl: string;
+  actorUserId: string;
+  createdAt: string;
+  foldedIntoConceptId: string | null;
+  foldedAt: string | null;
+  foldedKnowledge: string | null;
 };
 
 type SpaceRow = {
@@ -333,6 +358,7 @@ export async function createCollabApp({
       spaceId TEXT NOT NULL DEFAULT 'policies',
       title TEXT NOT NULL,
       type TEXT NOT NULL,
+      intent TEXT NOT NULL DEFAULT 'canonical' CHECK (intent IN ('canonical', 'working', 'evidence', 'ephemeral')),
       status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
       publishedRevision INTEGER,
       createdAt TEXT NOT NULL,
@@ -347,6 +373,22 @@ export async function createCollabApp({
       actorUserId TEXT NOT NULL,
       PRIMARY KEY (conceptId, number),
       FOREIGN KEY (conceptId) REFERENCES okf_concept(id)
+    );
+    CREATE TABLE IF NOT EXISTS okf_work_trace (
+      id TEXT PRIMARY KEY,
+      conceptId TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('change', 'decision', 'incident', 'outcome')),
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      occurredAt TEXT NOT NULL,
+      sourceUrl TEXT NOT NULL DEFAULT '',
+      actorUserId TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      foldedIntoConceptId TEXT,
+      foldedAt TEXT,
+      foldedKnowledge TEXT,
+      FOREIGN KEY (conceptId) REFERENCES okf_concept(id),
+      FOREIGN KEY (foldedIntoConceptId) REFERENCES okf_concept(id)
     );
     CREATE TABLE IF NOT EXISTS okf_repository_source (
       id TEXT PRIMARY KEY,
@@ -431,6 +473,11 @@ export async function createCollabApp({
   if (!conceptColumns.some(({ name }) => name === "spaceId")) {
     db.exec(
       "ALTER TABLE okf_concept ADD COLUMN spaceId TEXT NOT NULL DEFAULT 'policies'",
+    );
+  }
+  if (!conceptColumns.some(({ name }) => name === "intent")) {
+    db.exec(
+      "ALTER TABLE okf_concept ADD COLUMN intent TEXT NOT NULL DEFAULT 'canonical' CHECK (intent IN ('canonical', 'working', 'evidence', 'ephemeral'))",
     );
   }
   const repositoryColumns = db.prepare(
@@ -602,6 +649,10 @@ export async function createCollabApp({
     db.prepare(
       "SELECT number, objectKey, publishedAt, actorUserId FROM okf_revision WHERE conceptId = ? ORDER BY number DESC",
     ).all(conceptId) as RevisionRow[];
+  const workTrace = (id: string) =>
+    db.prepare("SELECT * FROM okf_work_trace WHERE id = ?").get(id) as
+      | WorkTraceRow
+      | undefined;
   const repositorySource = (id: string) =>
     db.prepare("SELECT * FROM okf_repository_source WHERE id = ?")
       .get(id) as RepositorySourceRow | undefined;
@@ -1190,9 +1241,36 @@ export async function createCollabApp({
     await Deno.writeTextFile(markdownPath(conceptId), live.markdown);
   }
 
-  async function payload(row: ConceptRow, canEdit: boolean) {
+  async function visibleWorkTraces(conceptId: string, userId: string) {
+    const rows = db.prepare(
+      "SELECT trace.*, source.title AS conceptTitle, target.title AS foldedIntoTitle FROM okf_work_trace trace JOIN okf_concept source ON source.id = trace.conceptId LEFT JOIN okf_concept target ON target.id = trace.foldedIntoConceptId WHERE trace.conceptId = ? OR trace.foldedIntoConceptId = ? ORDER BY trace.occurredAt DESC, trace.createdAt DESC",
+    ).all(conceptId, conceptId) as (WorkTraceRow & {
+      conceptTitle: string;
+      foldedIntoTitle: string | null;
+    })[];
+    const visible = [];
+    for (const trace of rows) {
+      if (await security.check(userId, "view", trace.conceptId)) {
+        const targetVisible = !trace.foldedIntoConceptId ||
+          await security.check(userId, "view", trace.foldedIntoConceptId);
+        visible.push(
+          targetVisible ? trace : {
+            ...trace,
+            foldedIntoConceptId: null,
+            foldedIntoTitle: null,
+            foldedAt: null,
+            foldedKnowledge: null,
+          },
+        );
+      }
+    }
+    return visible;
+  }
+
+  async function payload(row: ConceptRow, canEdit: boolean, userId: string) {
     const live = await loadDocument(row);
     const history = revisions(row.id);
+    const traces = await visibleWorkTraces(row.id, userId);
     const published = row.publishedRevision
       ? await store.get(
         history.find((item) => item.number === row.publishedRevision)!
@@ -1205,6 +1283,9 @@ export async function createCollabApp({
       draft: canEdit ? live.markdown : null,
       published: published ? bodyOnly(published) : null,
       revisions: canEdit ? history : [],
+      workTraces: canEdit
+        ? traces
+        : traces.map((trace) => ({ ...trace, foldedKnowledge: null })),
     };
   }
 
@@ -2348,9 +2429,11 @@ export async function createCollabApp({
       }
       const title = String(body.title ?? "Incident communication").trim();
       const type = String(body.type ?? "Policy").trim();
+      const intent = String(body.intent ?? "canonical") as DocumentIntent;
       if (
         !title || title.length > 100 ||
-        !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)
+        !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type) ||
+        !DOCUMENT_INTENTS.includes(intent)
       ) {
         return Response.json({
           error: "Title and type are required and must fit their fields",
@@ -2373,8 +2456,8 @@ export async function createCollabApp({
         await security.ensureHubConcept(id, spaceId);
         const now = new Date().toISOString();
         db.prepare(
-          "INSERT INTO okf_concept (id, spaceId, title, type, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?)",
-        ).run(id, spaceId, title, type, now, now);
+          "INSERT INTO okf_concept (id, spaceId, title, type, intent, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
+        ).run(id, spaceId, title, type, intent, now, now);
         const row = concept(id)!;
         const initial = id === CONCEPT && Object.keys(body).length === 0
           ? DEFAULT_MARKDOWN
@@ -2382,7 +2465,7 @@ export async function createCollabApp({
         await loadDocument(row, initial);
         await saveDraft(id, initial);
         security.audit(current.user.id, "concept.created", `concept:${id}`);
-        return Response.json(await payload(row, true), {
+        return Response.json(await payload(row, true, current.user.id), {
           status: 201,
           headers: cors(request),
         });
@@ -2391,6 +2474,180 @@ export async function createCollabApp({
           error: error instanceof Error ? error.message : "Creation failed",
         }, { status: 503, headers: cors(request) });
       }
+    }
+
+    const traceCollectionRoute = url.pathname.match(
+      /^\/api\/concepts\/([^/]+)\/traces$/,
+    );
+    if (traceCollectionRoute && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = traceCollectionRoute[1];
+      const row = concept(conceptId);
+      if (
+        !row || !await security.check(current.user.id, "edit", conceptId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (row.status !== "active") {
+        return Response.json({ error: "Restore the concept first" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      const kind = String(body.kind ?? "change") as WorkTraceKind;
+      const title = String(body.title ?? "").trim();
+      const summary = String(body.summary ?? "").trim();
+      const occurredAt = String(body.occurredAt ?? "").trim();
+      const sourceUrl = String(body.sourceUrl ?? "").trim();
+      const occurredDate = new Date(`${occurredAt}T00:00:00Z`);
+      if (
+        !TRACE_KINDS.includes(kind) || !title || title.length > 100 ||
+        !summary || summary.length > 4000 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(occurredAt) ||
+        Number.isNaN(occurredDate.valueOf()) ||
+        occurredDate.toISOString().slice(0, 10) !== occurredAt
+      ) {
+        return Response.json({ error: "Complete the trace fields" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (sourceUrl) {
+        let parsed: URL;
+        try {
+          parsed = new URL(sourceUrl);
+        } catch {
+          return Response.json({ error: "Enter a valid HTTPS source link" }, {
+            status: 400,
+            headers: cors(request),
+          });
+        }
+        if (
+          parsed.protocol !== "https:" || parsed.username || parsed.password ||
+          sourceUrl.length > 500
+        ) {
+          return Response.json({ error: "Enter a valid HTTPS source link" }, {
+            status: 400,
+            headers: cors(request),
+          });
+        }
+      }
+      const id = `trace-${crypto.randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      db.prepare(
+        "INSERT INTO okf_work_trace (id, conceptId, kind, title, summary, occurredAt, sourceUrl, actorUserId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        id,
+        conceptId,
+        kind,
+        title,
+        summary,
+        occurredAt,
+        sourceUrl,
+        current.user.id,
+        createdAt,
+      );
+      security.audit(current.user.id, "trace.created", `trace:${id}`);
+      return Response.json(
+        await payload(concept(conceptId)!, true, current.user.id),
+        { status: 201, headers: cors(request) },
+      );
+    }
+
+    const traceFoldRoute = url.pathname.match(
+      /^\/api\/concepts\/([^/]+)\/traces\/(trace-[a-f0-9-]+)\/fold$/,
+    );
+    if (traceFoldRoute && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = traceFoldRoute[1];
+      const trace = workTrace(traceFoldRoute[2]);
+      if (
+        !trace || trace.conceptId !== conceptId ||
+        !await security.check(current.user.id, "edit", conceptId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (trace.foldedAt) {
+        return Response.json({ error: "Trace already folded" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      const targetConceptId = String(body.targetConceptId ?? "");
+      const knowledge = String(body.knowledge ?? "").trim();
+      const target = concept(targetConceptId);
+      if (
+        !target || target.status !== "active" ||
+        target.intent !== "canonical" ||
+        !await security.check(current.user.id, "edit", targetConceptId)
+      ) {
+        return Response.json(
+          { error: "Choose an editable canonical document" },
+          {
+            status: 400,
+            headers: cors(request),
+          },
+        );
+      }
+      if (!knowledge || knowledge.length > 10000) {
+        return Response.json({ error: "Enter the lasting knowledge to fold" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const targetDocument = await loadDocument(target);
+      const baseMarkdown = targetConceptId === conceptId &&
+          typeof body.targetMarkdown === "string"
+        ? body.targetMarkdown
+        : targetDocument.markdown;
+      const sourceNote = trace.sourceUrl
+        ? `> Folded from [${trace.kind} work](${trace.sourceUrl}) dated ${trace.occurredAt}.`
+        : `> Folded from ${trace.kind} work dated ${trace.occurredAt}.`;
+      const next =
+        `${baseMarkdown.trimEnd()}\n\n## ${trace.title}\n\n${knowledge}\n\n${sourceNote}\n`;
+      try {
+        await saveDraft(targetConceptId, next);
+      } catch (error) {
+        const status = error instanceof MarkdownTooLarge ? 413 : 503;
+        return Response.json({
+          error: error instanceof Error ? error.message : "Fold failed",
+        }, { status, headers: cors(request) });
+      }
+      const foldedAt = new Date().toISOString();
+      db.prepare(
+        "UPDATE okf_work_trace SET foldedIntoConceptId = ?, foldedAt = ?, foldedKnowledge = ? WHERE id = ? AND foldedAt IS NULL",
+      ).run(targetConceptId, foldedAt, knowledge, trace.id);
+      security.audit(current.user.id, "trace.folded", `trace:${trace.id}`);
+      return Response.json(
+        await payload(concept(conceptId)!, true, current.user.id),
+        { headers: cors(request) },
+      );
     }
 
     const conceptRoute = url.pathname.match(
@@ -2487,7 +2744,7 @@ export async function createCollabApp({
         });
       }
       try {
-        return Response.json(await payload(row, canEdit), {
+        return Response.json(await payload(row, canEdit, current.user.id), {
           headers: cors(request),
         });
       } catch (error) {
@@ -2524,9 +2781,11 @@ export async function createCollabApp({
       const title = String(body.title ?? "").trim();
       const type = String(body.type ?? "").trim();
       const spaceId = String(body.spaceId ?? "");
+      const intent = String(body.intent ?? row.intent) as DocumentIntent;
       if (
         !title || title.length > 100 ||
-        !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)
+        !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type) ||
+        !DOCUMENT_INTENTS.includes(intent)
       ) {
         return Response.json({
           error: "Title and type are required and must fit their fields",
@@ -2544,8 +2803,15 @@ export async function createCollabApp({
       try {
         await security.moveHubConcept(conceptId, row.spaceId, spaceId);
         db.prepare(
-          "UPDATE okf_concept SET title = ?, type = ?, spaceId = ?, updatedAt = ? WHERE id = ?",
-        ).run(title, type, spaceId, new Date().toISOString(), conceptId);
+          "UPDATE okf_concept SET title = ?, type = ?, intent = ?, spaceId = ?, updatedAt = ? WHERE id = ?",
+        ).run(
+          title,
+          type,
+          intent,
+          spaceId,
+          new Date().toISOString(),
+          conceptId,
+        );
         if (row.spaceId !== spaceId) {
           (await loadDocument(row)).clients.forEach((client) =>
             client.close(1000, "Concept moved")
@@ -2556,9 +2822,12 @@ export async function createCollabApp({
           "concept.updated",
           `concept:${conceptId}`,
         );
-        return Response.json(await payload(concept(conceptId)!, true), {
-          headers: cors(request),
-        });
+        return Response.json(
+          await payload(concept(conceptId)!, true, current.user.id),
+          {
+            headers: cors(request),
+          },
+        );
       } catch (error) {
         return Response.json({
           error: error instanceof Error ? error.message : "Update failed",
@@ -2692,9 +2961,12 @@ export async function createCollabApp({
             db.exec("ROLLBACK");
             throw error;
           }
-          return Response.json(await payload(concept(conceptId)!, true), {
-            headers: cors(request),
-          });
+          return Response.json(
+            await payload(concept(conceptId)!, true, current.user.id),
+            {
+              headers: cors(request),
+            },
+          );
         }
         if (action === "archive") {
           db.prepare(
@@ -2703,17 +2975,23 @@ export async function createCollabApp({
           (await loadDocument(row)).clients.forEach((client) =>
             client.close(1000, "Concept archived")
           );
-          return Response.json(await payload(concept(conceptId)!, true), {
-            headers: cors(request),
-          });
+          return Response.json(
+            await payload(concept(conceptId)!, true, current.user.id),
+            {
+              headers: cors(request),
+            },
+          );
         }
         if (action === "restore") {
           db.prepare(
             "UPDATE okf_concept SET status = 'active', updatedAt = ? WHERE id = ?",
           ).run(new Date().toISOString(), conceptId);
-          return Response.json(await payload(concept(conceptId)!, true), {
-            headers: cors(request),
-          });
+          return Response.json(
+            await payload(concept(conceptId)!, true, current.user.id),
+            {
+              headers: cors(request),
+            },
+          );
         }
         const revision = url.pathname.match(/\/revisions\/(\d+)\/restore$/);
         if (revision) {
@@ -2735,9 +3013,12 @@ export async function createCollabApp({
             });
           }
           await saveDraft(conceptId, bodyOnly(await store.get(item.objectKey)));
-          return Response.json(await payload(concept(conceptId)!, true), {
-            headers: cors(request),
-          });
+          return Response.json(
+            await payload(concept(conceptId)!, true, current.user.id),
+            {
+              headers: cors(request),
+            },
+          );
         }
       } catch (error) {
         const status = error instanceof MarkdownTooLarge ? 413 : 503;

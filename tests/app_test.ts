@@ -24,6 +24,9 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Private credentials stored/);
   assert.match(bundle, /Access token/);
   assert.match(bundle, /Disconnect repository/);
+  assert.match(bundle, /Historical truth/);
+  assert.match(bundle, /Fold lasting knowledge/);
+  assert.match(bundle, /Maintained knowledge/);
   assert.match(bundle, /Shared controlled OKF/);
   assert.match(bundle, /Refresh shared store/);
   assert.match(bundle, /Search company knowledge/);

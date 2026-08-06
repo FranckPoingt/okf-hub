@@ -149,6 +149,24 @@ Deno.test("migrates fixed source constraints for multiple repositories", async (
   const dataDir = await Deno.makeTempDir();
   const legacy = new DatabaseSync(`${dataDir}/hub.db`);
   legacy.exec(`
+    CREATE TABLE okf_space (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      createdAt TEXT NOT NULL
+    );
+    INSERT INTO okf_space VALUES ('policies', 'Policies', '2026-01-01');
+    CREATE TABLE okf_concept (
+      id TEXT PRIMARY KEY,
+      spaceId TEXT NOT NULL,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      publishedRevision INTEGER,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+    INSERT INTO okf_concept VALUES
+      ('legacy-policy', 'policies', 'Legacy policy', 'Policy', 'active', NULL, '2026-01-01', '2026-01-01');
     CREATE TABLE okf_repository_source (
       id TEXT PRIMARY KEY CHECK (id = 'repository'),
       repositoryUrl TEXT NOT NULL,
@@ -195,6 +213,12 @@ Deno.test("migrates fixed source constraints for multiple repositories", async (
     ).all().map((row) => String((row as { sql: string }).sql)).join("\n");
     assert.equal(schemas.includes("id = 'repository'"), false);
     assert.equal(schemas.includes("sourceId IN"), false);
+    assert.equal(
+      (migrated.prepare(
+        "SELECT intent FROM okf_concept WHERE id = 'legacy-policy'",
+      ).get() as { intent: string }).intent,
+      "canonical",
+    );
     migrated.prepare(
       "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status) VALUES ('repository-second', 'https://example.com/second.git', 'okf', 'syncing')",
     ).run();
@@ -1097,6 +1121,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         spaceId: "onboarding",
         title: "New starter guide",
         type: "Guide",
+        intent: "working",
       }),
     });
     assert.equal(starter.status, 201, await starter.text());
@@ -1104,6 +1129,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       "/api/concepts/new-starter-guide",
     )).json();
     assert.equal(starterBody.space, "Onboarding");
+    assert.equal(starterBody.intent, "working");
     assert.equal(starterBody.draft, "# New starter guide\n");
     assert.equal(
       (await viewer.request("/api/concepts/new-starter-guide")).status,
@@ -1135,6 +1161,130 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await (await viewer.request("/api/concepts/new-starter-guide")).json())
         .published,
       "# Welcome aboard\n",
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/new-starter-guide/traces", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "decision",
+          title: "Choose onboarding vendor",
+          summary: "Moved to Vendor B for regional support.",
+          occurredAt: "2026-02-31",
+          sourceUrl: "http://tickets.example.com/123",
+        }),
+      })).status,
+      400,
+    );
+    const traceCreated = await editor.request(
+      "/api/concepts/new-starter-guide/traces",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "decision",
+          title: "Choose onboarding vendor",
+          summary: "Moved to Vendor B for regional support.",
+          occurredAt: "2026-02-20",
+          sourceUrl: "https://tickets.example.com/123",
+        }),
+      },
+    );
+    assert.equal(traceCreated.status, 201, await traceCreated.text());
+    const tracedConcept = await (await editor.request(
+      "/api/concepts/new-starter-guide",
+    )).json();
+    const traceId = tracedConcept.workTraces[0].id;
+    assert.equal(tracedConcept.workTraces[0].kind, "decision");
+    assert.equal(
+      (await viewer.request("/api/concepts/new-starter-guide/traces", {
+        method: "POST",
+        body: JSON.stringify({}),
+      })).status,
+      404,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/concepts/new-starter-guide")).json())
+        .workTraces[0].title,
+      "Choose onboarding vendor",
+    );
+    assert.equal(
+      (await viewer.request(
+        `/api/concepts/new-starter-guide/traces/${traceId}/fold`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetConceptId: "incident-communication",
+            knowledge: "Vendor B is the approved onboarding provider.",
+          }),
+        },
+      )).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request(
+        `/api/concepts/new-starter-guide/traces/${traceId}/fold`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetConceptId: "new-starter-guide",
+            knowledge: "Working documents cannot receive folded knowledge.",
+          }),
+        },
+      )).status,
+      400,
+    );
+    const folded = await editor.request(
+      `/api/concepts/new-starter-guide/traces/${traceId}/fold`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          targetConceptId: "incident-communication",
+          knowledge: "Vendor B is the approved onboarding provider.",
+        }),
+      },
+    );
+    assert.equal(folded.status, 200, await folded.text());
+    const foldedSource = await (await editor.request(
+      "/api/concepts/new-starter-guide",
+    )).json();
+    assert.equal(
+      foldedSource.workTraces[0].foldedIntoConceptId,
+      "incident-communication",
+    );
+    const foldedTarget = await (await editor.request(
+      "/api/concepts/incident-communication",
+    )).json();
+    assert.match(foldedTarget.draft, /## Choose onboarding vendor/);
+    assert.match(foldedTarget.draft, /Vendor B is the approved/);
+    assert.match(foldedTarget.draft, /tickets\.example\.com\/123/);
+    assert.equal(
+      foldedTarget.workTraces.find((trace: { id: string }) =>
+        trace.id === traceId
+      ).conceptTitle,
+      "New starter guide",
+    );
+    const viewerFoldedTarget = await (await viewer.request(
+      "/api/concepts/incident-communication",
+    )).json();
+    assert.equal(viewerFoldedTarget.draft, null);
+    assert.equal(
+      viewerFoldedTarget.workTraces.find((trace: { id: string }) =>
+        trace.id === traceId
+      ).foldedKnowledge,
+      null,
+    );
+    assert.equal(viewerFoldedTarget.published.includes("Vendor B"), false);
+    assert.equal(
+      (await editor.request(
+        `/api/concepts/new-starter-guide/traces/${traceId}/fold`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetConceptId: "incident-communication",
+            knowledge: "Duplicate",
+          }),
+        },
+      )).status,
+      409,
     );
     const starterArtifact = await editor.request("/api/artifacts", {
       method: "POST",
@@ -1220,6 +1370,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       "/api/concepts/new-starter-guide",
     )).json();
     assert.equal(movedBody.title, "Employee onboarding");
+    assert.equal(movedBody.intent, "working");
     assert.equal(movedBody.space, "Policies");
     assert.equal(movedBody.revisions.length, 1);
     assert.equal(
@@ -1466,6 +1617,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "space.created",
         "space.deleted",
         "space.renamed",
+        "trace.created",
+        "trace.folded",
       ],
     );
   } finally {

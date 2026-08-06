@@ -28,10 +28,11 @@ They need to find trusted knowledge across those repositories, create company-le
 
 ## Lifecycle and governance
 
-Use three independent dimensions rather than one complex state machine:
+Use four independent dimensions rather than one complex state machine:
 
 | Dimension | Values |
 | --- | --- |
+| Intent | `canonical`, `working`, `evidence`, `ephemeral` |
 | Content | `draft`, `published`, `archived` |
 | Review | `not required`, `requested`, `approved`, `changes requested` |
 | Trust | `current`, `verified`, `stale`, `sync failed`, `source missing` |
@@ -350,6 +351,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Mirrored objects are deleted on a best-effort basis and become inaccessible immediately even if object cleanup fails.
   - [x] Other repositories, hub-native documents, the shared store, and retained automation history are unchanged.
 
+#### KH-20 — Add document intent, work traces, and folding
+
+- **Type:** AFK
+- **Blocked by:** KH-05, KH-13
+- **Status:** Documents now declare their working intent; immutable dated work traces can fold explicit lasting knowledge into canonical drafts.
+- **What to build:** Separate maintained knowledge from temporary work and historical truth without turning OKF Hub into an issue tracker.
+- **Acceptance criteria:**
+  - [x] Hub-native documents declare canonical, working, evidence, or ephemeral intent independently of draft/published/archive state.
+  - [x] Editors can record immutable change, decision, incident, and outcome traces with a date, reasons, and optional HTTPS source link.
+  - [x] Trace visibility and creation follow the attached document's OpenFGA permissions.
+  - [x] An editor can fold explicitly supplied lasting knowledge only into an editable canonical draft, preserving the source trace and backlink on both documents.
+  - [x] External tickets and PRs remain source-owned; automatic expiry, ticket synchronisation, and AI summarisation remain deferred.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-19 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-20 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

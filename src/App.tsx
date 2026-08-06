@@ -62,18 +62,37 @@ type Revision = {
   publishedAt: string;
   actorUserId: string;
 };
+type DocumentIntent = "canonical" | "working" | "evidence" | "ephemeral";
+type WorkTrace = {
+  id: string;
+  conceptId: string;
+  conceptTitle: string;
+  kind: "change" | "decision" | "incident" | "outcome";
+  title: string;
+  summary: string;
+  occurredAt: string;
+  sourceUrl: string;
+  actorUserId: string;
+  createdAt: string;
+  foldedIntoConceptId: string | null;
+  foldedIntoTitle: string | null;
+  foldedAt: string | null;
+  foldedKnowledge: string | null;
+};
 type Concept = {
   id: string;
   spaceId: string;
   space: string;
   title: string;
   type: string;
+  intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
   updatedAt: string;
   draft: string | null;
   published: string | null;
   revisions: Revision[];
+  workTraces: WorkTrace[];
 };
 type Space = { id: string; name: string; count: number };
 type SourceIssue = {
@@ -1576,7 +1595,9 @@ function HomePanel(
             >
               <span className="knowledge-kind">{item.type}</span>
               <strong>{item.title}</strong>
-              <small>{item.space} · {item.status.replace("_", " ")}</small>
+              <small>
+                {item.intent} · {item.space} · {item.status.replace("_", " ")}
+              </small>
               <time>{new Date(item.updatedAt).toLocaleDateString()}</time>
             </button>
           ))}
@@ -1632,6 +1653,153 @@ function HomePanel(
   );
 }
 
+function WorkTracePanel(
+  { concept, concepts, canEdit, busy, onCreate, onFold }: {
+    concept: Concept;
+    concepts: Concept[];
+    canEdit: boolean;
+    busy: boolean;
+    onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+    onFold: (
+      trace: WorkTrace,
+      event: FormEvent<HTMLFormElement>,
+    ) => Promise<void>;
+  },
+) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${
+    String(now.getMonth() + 1).padStart(
+      2,
+      "0",
+    )
+  }-${String(now.getDate()).padStart(2, "0")}`;
+  const canonicalTargets = concepts.filter((item) =>
+    item.intent === "canonical" && item.status === "active"
+  );
+  return (
+    <section className="work-trace-panel" aria-labelledby="work-trace-heading">
+      <header>
+        <p className="eyebrow">Historical truth</p>
+        <h2 id="work-trace-heading">Work trace</h2>
+        <p>
+          Keep dated reasons and outcomes without turning the current document
+          into a work log.
+        </p>
+      </header>
+      {canEdit && concept.status === "active" && (
+        <details className="trace-create">
+          <summary>Record work</summary>
+          <form
+            onSubmit={(event) =>
+              void onCreate(event)}
+          >
+            <label>
+              Kind
+              <select name="kind" defaultValue="change">
+                <option value="change">Change</option>
+                <option value="decision">Decision</option>
+                <option value="incident">Incident</option>
+                <option value="outcome">Outcome</option>
+              </select>
+            </label>
+            <label>
+              Date
+              <input
+                name="occurredAt"
+                type="date"
+                defaultValue={today}
+                required
+              />
+            </label>
+            <label className="trace-title">
+              Title
+              <input name="title" maxLength={100} required />
+            </label>
+            <label className="trace-summary">
+              What happened and why
+              <textarea name="summary" rows={4} maxLength={4000} required />
+            </label>
+            <label className="trace-source">
+              Ticket, PR, or source link <span>(optional)</span>
+              <input
+                name="sourceUrl"
+                type="url"
+                maxLength={500}
+                placeholder="https://github.com/company/project/issues/123"
+              />
+            </label>
+            <button className="primary" type="submit" disabled={busy}>
+              Record trace
+            </button>
+          </form>
+        </details>
+      )}
+      <div className="work-trace-list">
+        {concept.workTraces.map((trace) => (
+          <article key={trace.id}>
+            <div className="trace-heading">
+              <span>{trace.kind}</span>
+              <time dateTime={trace.occurredAt}>{trace.occurredAt}</time>
+            </div>
+            <h3>{trace.title}</h3>
+            {trace.conceptId !== concept.id && (
+              <p className="trace-origin">From {trace.conceptTitle}</p>
+            )}
+            <p>{trace.summary}</p>
+            {trace.sourceUrl && (
+              <a href={trace.sourceUrl} target="_blank" rel="noreferrer">
+                Open source work
+              </a>
+            )}
+            {trace.foldedIntoConceptId
+              ? (
+                <div className="trace-folded">
+                  Folded into <strong>{trace.foldedIntoTitle}</strong>
+                  {trace.foldedKnowledge && <p>{trace.foldedKnowledge}</p>}
+                </div>
+              )
+              : canEdit && trace.conceptId === concept.id &&
+                  canonicalTargets.length > 0
+              ? (
+                <details className="trace-fold">
+                  <summary>Fold lasting knowledge</summary>
+                  <form onSubmit={(event) => void onFold(trace, event)}>
+                    <label>
+                      Canonical destination
+                      <select name="targetConceptId" required>
+                        {canonicalTargets.map((target) => (
+                          <option key={target.id} value={target.id}>
+                            {target.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Lasting knowledge
+                      <textarea
+                        name="knowledge"
+                        rows={4}
+                        maxLength={10000}
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={busy}>
+                      Fold into document
+                    </button>
+                  </form>
+                </details>
+              )
+              : null}
+          </article>
+        ))}
+        {!concept.workTraces.length && (
+          <p className="trace-empty">No work trace has been recorded.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function HubCreatePanel(
   {
     spaces,
@@ -1672,6 +1840,15 @@ function HubCreatePanel(
         <label>
           Type
           <input name="type" maxLength={50} defaultValue="Policy" required />
+        </label>
+        <label>
+          Intent
+          <select name="intent" defaultValue="canonical" required>
+            <option value="canonical">Maintained knowledge</option>
+            <option value="working">Working document</option>
+            <option value="evidence">Evidence</option>
+            <option value="ephemeral">Ephemeral notes</option>
+          </select>
         </label>
         <label>
           Space
@@ -1972,6 +2149,7 @@ export default function App() {
       body: JSON.stringify({
         title: fields.get("title"),
         type: fields.get("type"),
+        intent: fields.get("intent"),
         spaceId: fields.get("spaceId"),
       }),
     });
@@ -1985,7 +2163,8 @@ export default function App() {
   const updateConcept = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!concept) return;
-    const fields = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const fields = new FormData(form);
     setActionBusy(true);
     setActionError("");
     const response = await api(`${conceptPath(concept.id)}/metadata`, {
@@ -1993,6 +2172,7 @@ export default function App() {
       body: JSON.stringify({
         title: fields.get("title"),
         type: fields.get("type"),
+        intent: fields.get("intent"),
         spaceId: fields.get("spaceId"),
       }),
     });
@@ -2017,6 +2197,67 @@ export default function App() {
     setEditorVersion((current) => current + 1);
     setView("draft");
     setHistoryOpen(false);
+  };
+
+  const createWorkTrace = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!concept) return;
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(`${conceptPath(concept.id)}/traces`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: fields.get("kind"),
+        title: fields.get("title"),
+        summary: fields.get("summary"),
+        occurredAt: fields.get("occurredAt"),
+        sourceUrl: fields.get("sourceUrl"),
+      }),
+    });
+    const result = await response.json() as Concept & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) {
+      return setActionError(result.error ?? "Work trace failed");
+    }
+    setConcept(result);
+    form.reset();
+  };
+
+  const foldWorkTrace = async (
+    trace: WorkTrace,
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (!concept) return;
+    const fields = new FormData(event.currentTarget);
+    const targetConceptId = String(fields.get("targetConceptId") ?? "");
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(
+      `${conceptPath(concept.id)}/traces/${trace.id}/fold`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          targetConceptId,
+          knowledge: fields.get("knowledge"),
+          ...(targetConceptId === concept.id
+            ? { targetMarkdown: markdown }
+            : {}),
+        }),
+      },
+    );
+    const result = await response.json() as Concept & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) return setActionError(result.error ?? "Fold failed");
+    setConcept(result);
+    if (targetConceptId === concept.id && result.draft) {
+      setInitialMarkdown(result.draft);
+      setMarkdown(result.draft);
+      setEditorVersion((current) => current + 1);
+    }
+    await refreshHubLists();
   };
 
   const connectRepository = async (
@@ -2810,6 +3051,19 @@ export default function App() {
                       />
                     </label>
                     <label>
+                      Intent
+                      <select
+                        name="intent"
+                        defaultValue={concept.intent}
+                        required
+                      >
+                        <option value="canonical">Maintained knowledge</option>
+                        <option value="working">Working document</option>
+                        <option value="evidence">Evidence</option>
+                        <option value="ephemeral">Ephemeral notes</option>
+                      </select>
+                    </label>
+                    <label>
                       Space
                       <select
                         name="spaceId"
@@ -2888,7 +3142,7 @@ export default function App() {
                     <>
                       <div className="editor-context">
                         <span className="draft-label">
-                          POLICY · SHARED DRAFT
+                          {concept.intent.toUpperCase()} · SHARED DRAFT
                         </span>
                         <span>
                           {concept.publishedRevision
@@ -2913,7 +3167,7 @@ export default function App() {
                     <>
                       <div className="editor-context">
                         <span className="published-label">
-                          POLICY · PUBLISHED
+                          {concept.intent.toUpperCase()} · PUBLISHED
                         </span>
                         <span>Revision {concept.publishedRevision}</span>
                       </div>
@@ -2937,6 +3191,14 @@ export default function App() {
               <ArtifactPanel
                 conceptId={concept.id}
                 conceptActive={concept.status === "active"}
+              />
+              <WorkTracePanel
+                concept={concept}
+                concepts={concepts}
+                canEdit={Boolean(bootstrap.canEdit)}
+                busy={actionBusy}
+                onCreate={createWorkTrace}
+                onFold={foldWorkTrace}
               />
             </MilkdownProvider>
           )}
