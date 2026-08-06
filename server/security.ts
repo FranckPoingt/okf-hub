@@ -529,6 +529,59 @@ export async function createSecurity({
     set(key, "1");
   }
 
+  async function deleteImportedSource(sourceId: string, conceptIds: string[]) {
+    const deletes = [];
+    const settings = [];
+    const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
+    for (const conceptId of conceptIds) {
+      const currentKey = `openfga_imported_concept_v2:${conceptId}`;
+      if (get(currentKey)) {
+        deletes.push({
+          user: `space:${importedSpace}`,
+          relation: "parent",
+          object: `concept:${conceptId}`,
+        });
+        settings.push(currentKey);
+      }
+      const legacyKey = `openfga_imported_concept:${conceptId}`;
+      if (get(legacyKey)) {
+        deletes.push({
+          user: `space:${IMPORTED_SPACE}`,
+          relation: "parent",
+          object: `concept:${conceptId}`,
+        });
+        settings.push(legacyKey);
+      }
+    }
+    const spaceKey = `openfga_imported_space:${sourceId}`;
+    if (get(spaceKey)) {
+      const viewerTeamId = get("viewer_team_id");
+      deletes.push({
+        user: `source:${SOURCE}`,
+        relation: "parent",
+        object: `space:${importedSpace}`,
+      });
+      if (viewerTeamId) {
+        deletes.push({
+          user: `group:${viewerTeamId}#member`,
+          relation: "viewer",
+          object: `space:${importedSpace}`,
+        });
+      }
+      settings.push(spaceKey);
+    }
+    if (!deletes.length) return;
+    const { storeId, modelId } = await authorization();
+    await fga(`/stores/${storeId}/write`, {
+      method: "POST",
+      body: JSON.stringify({
+        deletes: { tuple_keys: deletes },
+        authorization_model_id: modelId,
+      }),
+    });
+    for (const key of settings) unset(key);
+  }
+
   async function bootstrap(current: NonNullable<Session>) {
     const membership = member(current.user.id);
     const configured = Boolean(get("organization_id"));
@@ -695,6 +748,7 @@ export async function createSecurity({
     moveHubConcept,
     deleteHubSpace,
     ensureImportedConcept,
+    deleteImportedSource,
     close: () => db.close(),
   };
 }

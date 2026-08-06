@@ -91,7 +91,7 @@ export function createObjectStore({
   const base = new URL(endpoint);
 
   async function request(
-    method: "GET" | "PUT",
+    method: "DELETE" | "GET" | "PUT",
     key = "",
     body = "",
     query: Record<string, string> = {},
@@ -168,6 +168,14 @@ export function createObjectStore({
         );
       }
       return response.text();
+    },
+    async remove(key: string) {
+      const response = await request("DELETE", key);
+      if (!response.ok && response.status !== 404) {
+        throw new Error(
+          `Object storage ${response.status}: ${await response.text()}`,
+        );
+      }
     },
     async list(prefix = ""): Promise<StoredObject[]> {
       const objects: StoredObject[] = [];

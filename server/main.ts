@@ -72,6 +72,7 @@ type AppOptions = {
   objectStore?: {
     put(key: string, markdown: string): Promise<void>;
     get(key: string): Promise<string>;
+    remove(key: string): Promise<void>;
   };
   repositorySync?: (
     checkout: string,
@@ -580,6 +581,8 @@ export async function createCollabApp({
           Promise.reject(new Error("Object storage is not configured")),
         get: () =>
           Promise.reject(new Error("Object storage is not configured")),
+        remove: () =>
+          Promise.reject(new Error("Object storage is not configured")),
       });
 
   const concept = (id = CONCEPT) =>
@@ -821,6 +824,50 @@ export async function createCollabApp({
     });
     repositoryRefreshes.set(sourceId, refresh);
     return refresh;
+  }
+
+  async function disconnectRepository(sourceId: string) {
+    const concepts = importedConcepts(sourceId, [
+      "current",
+      "invalid",
+      "deleted",
+      "renamed",
+    ]);
+    const objects = db.prepare(
+      "SELECT revision.objectKey FROM okf_imported_revision revision JOIN okf_imported_concept concept ON concept.id = revision.conceptId WHERE concept.sourceId = ? UNION SELECT objectKey FROM okf_imported_concept WHERE sourceId = ?",
+    ).all(sourceId, sourceId) as { objectKey: string }[];
+    await security.deleteImportedSource(
+      sourceId,
+      concepts.map((concept) => concept.id),
+    );
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        "DELETE FROM okf_imported_revision WHERE conceptId IN (SELECT id FROM okf_imported_concept WHERE sourceId = ?)",
+      ).run(sourceId);
+      db.prepare("DELETE FROM okf_import_issue WHERE sourceId = ?").run(
+        sourceId,
+      );
+      db.prepare("DELETE FROM okf_imported_concept WHERE sourceId = ?").run(
+        sourceId,
+      );
+      db.prepare("DELETE FROM okf_repository_source WHERE id = ?").run(
+        sourceId,
+      );
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    // ponytail: inaccessible orphan cleanup is best-effort; persist cleanup jobs if failures become operationally relevant.
+    await Promise.allSettled([
+      ...objects.map(({ objectKey }) => store.remove(objectKey)),
+      Deno.remove(`${dataDir}/sources/${sourceId}`, { recursive: true }).catch(
+        (error) => {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        },
+      ),
+    ]);
   }
 
   async function syncSharedStoreSource() {
@@ -1325,6 +1372,48 @@ export async function createCollabApp({
     const repositoryPath = url.pathname.match(
       /^\/api\/sources\/repositories(?:\/([a-z0-9-]+))?$/,
     );
+    if (repositoryPath?.[1] && request.method === "DELETE") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const sourceId = repositoryPath[1];
+      if (!repositorySource(sourceId)) {
+        return Response.json({ error: "Repository not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        confirm?: unknown;
+      };
+      if (body.confirm !== sourceId) {
+        return Response.json({ error: "Confirm the repository source ID" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (repositoryRefreshes.has(sourceId)) {
+        return Response.json(
+          { error: "Wait for repository refresh to finish" },
+          {
+            status: 409,
+            headers: cors(request),
+          },
+        );
+      }
+      await disconnectRepository(sourceId);
+      return new Response(null, { status: 204, headers: cors(request) });
+    }
     if (repositoryPath && request.method === "POST") {
       const current = await security.session(request);
       if (!current) {

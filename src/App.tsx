@@ -612,7 +612,17 @@ function ImportGrid(
 }
 
 function RepositoryPanel(
-  { source, imports, canManage, busy, error, onConnect, onRefresh, onOpen }: {
+  {
+    source,
+    imports,
+    canManage,
+    busy,
+    error,
+    onConnect,
+    onRefresh,
+    onDisconnect,
+    onOpen,
+  }: {
     source: RepositorySource | null;
     imports: ImportedConcept[];
     canManage: boolean;
@@ -626,6 +636,7 @@ function RepositoryPanel(
       token: string,
     ) => Promise<void>;
     onRefresh: (sourceId: string) => Promise<void>;
+    onDisconnect: (source: RepositorySource) => Promise<void>;
     onOpen: (
       sourceId: string,
       path: string,
@@ -753,6 +764,20 @@ function RepositoryPanel(
               <details>
                 <summary>Update repository access</summary>
                 {connectionForm}
+                <button
+                  className="disconnect-source"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      globalThis.confirm(
+                        `Disconnect ${source.repositoryUrl}? This removes ${source.conceptCount} imported documents from OKF Hub.`,
+                      )
+                    ) void onDisconnect(source);
+                  }}
+                >
+                  Disconnect repository
+                </button>
               </details>
             )}
           </>
@@ -2047,6 +2072,23 @@ export default function App() {
     }
   };
 
+  const disconnectRepository = async (source: RepositorySource) => {
+    setSourceBusy(true);
+    setSourceError("");
+    const response = await api(`/api/sources/repositories/${source.id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm: source.id }),
+    });
+    setSourceBusy(false);
+    if (!response.ok) {
+      const result = await response.json() as { error?: string };
+      setSourceError(result.error ?? "Repository disconnect failed");
+      return;
+    }
+    if (imported?.sourceId === source.id) setImported(null);
+    await loadSources().catch(() => {});
+  };
+
   const connectSharedSource = async (values: Record<string, string>) => {
     setSharedBusy(true);
     setSharedError("");
@@ -2553,6 +2595,7 @@ export default function App() {
                   error=""
                   onConnect={connectRepository}
                   onRefresh={refreshRepository}
+                  onDisconnect={disconnectRepository}
                   onOpen={openImported}
                 />
               ))}
@@ -2565,6 +2608,7 @@ export default function App() {
                   error=""
                   onConnect={connectRepository}
                   onRefresh={refreshRepository}
+                  onDisconnect={disconnectRepository}
                   onOpen={openImported}
                 />
               )}

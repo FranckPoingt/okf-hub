@@ -1,16 +1,25 @@
 /// <reference lib="deno.ns" />
 
 import assert from "node:assert/strict";
+import { createObjectStore } from "./object-store.ts";
 import { syncSharedSource } from "./shared-source.ts";
 
 Deno.test("indexes a paginated S3 OKF bundle and isolates bad objects", async () => {
   const requests: URL[] = [];
+  let deleted = false;
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0, onListen() {} },
     (request) => {
       const url = new URL(request.url);
       requests.push(url);
       assert.match(request.headers.get("authorization") ?? "", /^AWS4-HMAC/);
+      if (
+        request.method === "DELETE" &&
+        url.pathname.endsWith("/company/okf/good.md")
+      ) {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
       if (url.searchParams.get("list-type") === "2") {
         assert.equal(url.searchParams.get("prefix"), "company/okf/");
         if (!url.searchParams.has("continuation-token")) {
@@ -80,6 +89,14 @@ Deno.test("indexes a paginated S3 OKF bundle and isolates bad objects", async ()
       requests.some((url) => url.pathname.endsWith("/large.md")),
       false,
     );
+    await createObjectStore({
+      endpoint: `http://127.0.0.1:${port}`,
+      bucket: "bundle",
+      region: "us-east-1",
+      accessKey: "access",
+      secretKey: "secret",
+    }).remove("company/okf/good.md");
+    assert.equal(deleted, true);
   } finally {
     await server.shutdown();
   }

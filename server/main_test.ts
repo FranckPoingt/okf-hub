@@ -323,6 +323,10 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           ? Promise.reject(new Error("Object not found"))
           : Promise.resolve(markdown);
       },
+      remove(key) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
     },
     automationIntervalMs: 0,
     allowedArtifactHosts: ["apps.example.com"],
@@ -1309,6 +1313,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         body: JSON.stringify({
           repositoryUrl: "https://example.com/company/engineering.git",
           folder: "okf",
+          username: "engineering-user",
+          token: "engineering-token",
         }),
       },
     );
@@ -1354,6 +1360,86 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           attempt.job === "source_check" && attempt.status === "succeeded",
       ).map((attempt: { sourceId: string }) => attempt.sourceId).sort(),
       ["repository", secondRepositoryBody.id, "shared"].sort(),
+    );
+    assert.equal(
+      (await owner.request(
+        `/api/sources/repositories/${secondRepositoryBody.id}`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ confirm: "wrong-source" }),
+        },
+      )).status,
+      400,
+    );
+    assert.equal(
+      (await editor.request(
+        `/api/sources/repositories/${secondRepositoryBody.id}`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ confirm: secondRepositoryBody.id }),
+        },
+      )).status,
+      403,
+    );
+    assert.equal(
+      [...objects.keys()].some((key) =>
+        key.startsWith(`sources/${secondRepositoryBody.id}/`)
+      ),
+      true,
+    );
+    const disconnected = await owner.request(
+      `/api/sources/repositories/${secondRepositoryBody.id}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ confirm: secondRepositoryBody.id }),
+      },
+    );
+    assert.equal(disconnected.status, 204, await disconnected.text());
+    assert.equal(
+      (await (await owner.request("/api/sources")).json()).repositories.length,
+      1,
+    );
+    assert.equal(
+      (await viewer.request(
+        `/api/imported?source=${secondRepositoryBody.id}&path=operations.md`,
+      )).status,
+      404,
+    );
+    assert.equal(
+      [...objects.keys()].some((key) =>
+        key.startsWith(`sources/${secondRepositoryBody.id}/`)
+      ),
+      false,
+    );
+    const disconnectedDb = new DatabaseSync(`${dataDir}/hub.db`);
+    assert.equal(
+      (disconnectedDb.prepare(
+        "SELECT COUNT(*) AS count FROM okf_repository_source WHERE id = ?",
+      ).get(secondRepositoryBody.id) as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (disconnectedDb.prepare(
+        "SELECT COUNT(*) AS count FROM okf_imported_concept WHERE sourceId = ?",
+      ).get(secondRepositoryBody.id) as { count: number }).count,
+      0,
+    );
+    disconnectedDb.close();
+    assert.equal(
+      fga.tuples.some((tuple) =>
+        tuple.object === `concept:${secondRepositoryBody.id}/operations` ||
+        tuple.object === `space:imported-${secondRepositoryBody.id}`
+      ),
+      false,
+    );
+    assert.equal(
+      (await (await owner.request("/api/automation")).json()).runs.some(
+        (run: { attempts: { sourceId: string }[] }) =>
+          run.attempts.some((attempt) =>
+            attempt.sourceId === secondRepositoryBody.id
+          ),
+      ),
+      true,
     );
 
     const audit = await (await owner.request("/api/audit")).json();

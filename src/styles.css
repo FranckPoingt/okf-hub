@@ -41,3 +41,4 @@ button:focus-visible,a:focus-visible { outline:3px solid rgba(231,111,81,.35); o
 @media (max-width:800px) { .automation-runs summary { align-items:flex-start; flex-wrap:wrap; }.automation-runs summary time { width:100%; margin:0; }.automation-proposal { grid-template-columns:1fr; } }
 @media (max-width:800px) { .artifact-panel { padding:24px 12px; }.artifact-form { grid-template-columns:1fr; }.artifact-content,.artifact-hosts { grid-column:1; }.artifact-grid { grid-template-columns:1fr; } }
 @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; } }
+.disconnect-source { margin-top:-18px; padding:9px 11px; border:1px solid #dfb5ab; border-radius:5px; background:#fff; color:#a44f3f; font-size:10px; cursor:pointer; }.disconnect-source:disabled { opacity:.45; cursor:default; }

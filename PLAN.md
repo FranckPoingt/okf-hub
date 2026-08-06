@@ -337,6 +337,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Existing `repository` imports and their stable URLs migrate without being reset or moved.
   - [x] The Home and Sources views count and display every accessible repository without adding a generic connector framework.
 
+#### KH-19 — Safely disconnect repository sources
+
+- **Type:** AFK
+- **Blocked by:** KH-18
+- **Status:** Owners can explicitly disconnect a repository without affecting sibling sources or retaining accessible mirrored knowledge.
+- **What to build:** Add a confirmed repository disconnect flow that removes the source-owned mirror while preserving operational history.
+- **Acceptance criteria:**
+  - [x] Only owners can disconnect a repository and the API requires its stable source ID as confirmation.
+  - [x] A repository cannot be disconnected while its refresh is running.
+  - [x] Disconnect removes imported concepts, revisions, issues, credentials, checkout data, and OpenFGA relationships for that source.
+  - [x] Mirrored objects are deleted on a best-effort basis and become inaccessible immediately even if object cleanup fails.
+  - [x] Other repositories, hub-native documents, the shared store, and retained automation history are unchanged.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-18 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-19 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

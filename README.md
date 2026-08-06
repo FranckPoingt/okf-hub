@@ -89,3 +89,9 @@ Direct URLs wait for authentication and the initial permission-filtered lists, t
 Owners can connect multiple Git repositories under **Sources**. Each repository receives a stable source ID and isolated encrypted credentials, checkout, imported paths, OpenFGA space, sync status, retry lock, automation attempts, and `/imports/<source-id>/<path>` URLs. Repositories may contain the same relative OKF paths without colliding.
 
 Existing installations retain the original `repository` source ID and URLs during the automatic SQLite migration. The shared controlled store remains a single source; a generic connector framework is intentionally not introduced.
+
+## KH-19 repository disconnect
+
+Organisation owners can disconnect a Git source under **Sources → Update repository access**. The browser asks for confirmation and the API independently requires the stable source ID before removing anything. Active refreshes block disconnect.
+
+Disconnect removes that source's imports, revision index, validation issues, encrypted credentials, checkout, and OpenFGA relationships without touching sibling repositories or retained automation history. Mirrored RustFS/S3 objects are deleted best-effort after the metadata transaction; they are no longer addressable through the hub even if external object cleanup fails.
