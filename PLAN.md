@@ -285,6 +285,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Authorised users can download the current published revision as canonical OKF Markdown.
   - [x] Drafts and inaccessible or archived concepts are not leaked through export.
 
+#### KH-15 — Build the permission-filtered Home dashboard
+
+- **Type:** AFK
+- **Blocked by:** KH-09, KH-13
+- **Status:** Home now surfaces accessible recent knowledge, draft and archive counts, connected-source health, and quick actions.
+- **What to build:** Replace the inert Home navigation item with an actionable overview assembled from already-authorised hub and source data.
+- **Acceptance criteria:**
+  - [x] Home only counts and lists concepts and imports already returned to the current user.
+  - [x] Recent hub-native and imported documents open their existing detail views.
+  - [x] Editors can see unpublished and archived counts and start document creation.
+  - [x] Source health and imported counts link to source management.
+  - [x] The dashboard remains usable on narrow screens without a second data model or endpoint.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-14 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-15 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

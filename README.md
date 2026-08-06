@@ -71,3 +71,9 @@ OpenFGA links each concept to its space and each space to the hub source. Editor
 Editors can rename or move a hub-native document under **Document settings**. A move swaps the concept's OpenFGA parent while retaining its stable ID, Markdown draft, Yjs state, published revisions, artifacts, and audit history. **Spaces → Manage** supports space renaming and deletion only after every active or archived document has been moved out; the default Policies space cannot be deleted.
 
 **Download OKF** returns the current published revision with canonical frontmatter as a Markdown attachment. Draft-only documents remain unavailable to viewers, archived documents remain unavailable to viewers, and exports never substitute the mutable working draft for the published object.
+
+## KH-15 Home dashboard
+
+**Home** provides a permission-filtered overview using the same concept, space, import, and source responses already loaded by the app. It shows recent accessible documents, knowledge-space and imported totals, unpublished and archived counts for editors, and connected-source health without introducing a separate dashboard index.
+
+Recent items open their existing document views. **Search knowledge**, **Create document**, and the connected-source health card route to the current search, creation, and source-management flows.

@@ -43,6 +43,14 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Download OKF/);
   assert.match(bundle, /Delete empty space/);
   assert.match(bundle, /Moving a document keeps every draft/);
+  assert.match(bundle, /Your knowledge hub/);
+  assert.match(
+    bundle,
+    /Everything here already follows your access permissions/,
+  );
+  assert.match(bundle, /Recently updated/);
+  assert.match(bundle, /Unpublished drafts/);
+  assert.match(bundle, /Search knowledge/);
   assert.doesNotMatch(
     await Deno.readTextFile("src/App.tsx"),
     /dangerouslySetInnerHTML/,

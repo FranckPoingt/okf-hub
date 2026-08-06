@@ -1397,6 +1397,161 @@ function SearchPanel(
   );
 }
 
+function HomePanel(
+  {
+    concepts,
+    spaces,
+    imports,
+    repository,
+    shared,
+    canEdit,
+    onOpenConcept,
+    onOpenImported,
+    onCreate,
+    onSearch,
+    onSources,
+  }: {
+    concepts: Concept[];
+    spaces: Space[];
+    imports: ImportedConcept[];
+    repository: RepositorySource | null;
+    shared: SharedSource | null;
+    canEdit: boolean;
+    onOpenConcept: (id: string) => void;
+    onOpenImported: (
+      sourceId: "repository" | "shared",
+      path: string,
+    ) => Promise<void>;
+    onCreate: () => void;
+    onSearch: () => void;
+    onSources: () => void;
+  },
+) {
+  const recentConcepts = [...concepts].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt)
+  ).slice(0, 6);
+  const recentImports = [...imports].sort((left, right) =>
+    right.importedAt.localeCompare(left.importedAt)
+  ).slice(0, 4);
+  const unpublished =
+    concepts.filter((item) =>
+      item.status === "active" && !item.publishedRevision
+    ).length;
+  const archived = concepts.filter((item) => item.status === "archived")
+    .length;
+  const connected = [repository, shared].filter(Boolean);
+  const sourceAttention =
+    connected.filter((item) => item?.status !== "current").length;
+
+  return (
+    <section className="home-panel">
+      <header className="home-heading">
+        <div>
+          <p className="eyebrow">Company knowledge</p>
+          <h1>Your knowledge hub</h1>
+          <p>Everything here already follows your access permissions.</p>
+        </div>
+        <div className="home-actions">
+          <button type="button" onClick={onSearch}>Search knowledge</button>
+          {canEdit && (
+            <button className="primary" type="button" onClick={onCreate}>
+              Create document
+            </button>
+          )}
+        </div>
+      </header>
+      <div className="home-metrics">
+        <button type="button" onClick={onSearch}>
+          <strong>{concepts.length + imports.length}</strong>
+          <span>Accessible documents</span>
+        </button>
+        <div>
+          <strong>{spaces.length}</strong>
+          <span>Knowledge spaces</span>
+        </div>
+        {canEdit && (
+          <div>
+            <strong>{unpublished}</strong>
+            <span>Unpublished drafts</span>
+          </div>
+        )}
+        {canEdit && (
+          <div>
+            <strong>{archived}</strong>
+            <span>Archived documents</span>
+          </div>
+        )}
+      </div>
+      <div className="home-columns">
+        <section className="home-recent">
+          <div className="home-section-heading">
+            <h2>Recently updated</h2>
+            {canEdit && <button type="button" onClick={onCreate}>New</button>}
+          </div>
+          {recentConcepts.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              onClick={() => onOpenConcept(item.id)}
+            >
+              <span className="knowledge-kind">{item.type}</span>
+              <strong>{item.title}</strong>
+              <small>{item.space} · {item.status.replace("_", " ")}</small>
+              <time>{new Date(item.updatedAt).toLocaleDateString()}</time>
+            </button>
+          ))}
+          {!recentConcepts.length && (
+            <p className="home-empty">
+              No hub-native documents are visible yet.
+            </p>
+          )}
+        </section>
+        <section className="home-overview">
+          <div className="home-section-heading">
+            <h2>Connected sources</h2>
+            <button type="button" onClick={onSources}>Open</button>
+          </div>
+          <button
+            className="source-health-card"
+            type="button"
+            onClick={onSources}
+          >
+            <strong>{connected.length} connected</strong>
+            <span>
+              {sourceAttention
+                ? `${sourceAttention} need attention`
+                : connected.length
+                ? "All connected sources are healthy"
+                : "Connect your first source"}
+            </span>
+            <small>{imports.length} imported documents</small>
+          </button>
+          {recentImports.length > 0 && (
+            <>
+              <h3>Recently imported</h3>
+              <div className="home-imports">
+                {recentImports.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    onClick={() =>
+                      void onOpenImported(item.sourceId, item.path)}
+                  >
+                    <strong>{item.title}</strong>
+                    <small>
+                      {item.sourceId === "shared" ? "Shared store" : "Git"}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function HubCreatePanel(
   {
     spaces,
@@ -1522,6 +1677,7 @@ export default function App() {
   const [sharedSource, setSharedSource] = useState<SharedSource | null>(null);
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
+  const [homeOpen, setHomeOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
@@ -1570,6 +1726,7 @@ export default function App() {
     setCreateOpen(false);
     setDocumentSettingsOpen(false);
     setImported(null);
+    setHomeOpen(false);
     setSourceOpen(false);
     setSearchOpen(false);
     setAccessOpen(false);
@@ -1625,6 +1782,7 @@ export default function App() {
       setSharedSource(null);
       setImports([]);
       setImported(null);
+      setHomeOpen(false);
       setSearchOpen(false);
     });
   };
@@ -1865,6 +2023,7 @@ export default function App() {
       return setSourceError(result.error ?? "Import unavailable");
     }
     setImported(result);
+    setHomeOpen(false);
     setSourceOpen(false);
     setSearchOpen(false);
     setAccessOpen(false);
@@ -1872,6 +2031,7 @@ export default function App() {
 
   const showHubConcept = (id?: string) => {
     setImported(null);
+    setHomeOpen(false);
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
@@ -1879,6 +2039,41 @@ export default function App() {
     if (id && id !== concept?.id) {
       void openHubConcept(id).catch((error) => setActionError(error.message));
     }
+  };
+  const showHome = () => {
+    setHomeOpen(true);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDocumentSettingsOpen(false);
+    setAccessOpen(false);
+  };
+  const showSearch = () => {
+    setHomeOpen(false);
+    setSearchOpen(true);
+    setSourceOpen(false);
+    setImported(null);
+    setCreateOpen(false);
+    setAccessOpen(false);
+  };
+  const showSources = () => {
+    setHomeOpen(false);
+    setImported(null);
+    setSourceOpen(true);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setAccessOpen(false);
+  };
+  const showCreate = () => {
+    setHomeOpen(false);
+    setCreateOpen(true);
+    setDocumentSettingsOpen(false);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setAccessOpen(false);
+    setActionError("");
   };
 
   if (fatal) {
@@ -1946,11 +2141,7 @@ export default function App() {
           type="button"
           onClick={() => {
             if (imported || sourceOpen || searchOpen) showHubConcept();
-            else {
-              setSourceOpen(true);
-              setSearchOpen(false);
-              setAccessOpen(false);
-            }
+            else showSources();
           }}
         >
           {imported || sourceOpen || searchOpen
@@ -1959,14 +2150,18 @@ export default function App() {
         </button>
         <div className="document-title">
           <small>
-            {searchOpen
+            {homeOpen
+              ? "Company knowledge /"
+              : searchOpen
               ? "Company knowledge /"
               : imported
               ? `${importedSourceLabel} /`
               : `${concept?.space ?? "Hub-native knowledge"} /`}
           </small>
           <strong>
-            {searchOpen
+            {homeOpen
+              ? "Home"
+              : searchOpen
               ? "Search"
               : imported?.title ?? concept?.title ?? "Hub-native knowledge"}
           </strong>
@@ -1974,7 +2169,9 @@ export default function App() {
         <div className="header-status">
           <span
             className={`connection ${
-              searchOpen
+              homeOpen
+                ? "online"
+                : searchOpen
                 ? "online"
                 : imported
                 ? imported.source?.status === "sync_failed"
@@ -1988,6 +2185,8 @@ export default function App() {
             <i />
             {searchOpen
               ? "permission filtered"
+              : homeOpen
+              ? "permission filtered"
               : imported
               ? "read only"
               : concept?.status === "archived"
@@ -1997,7 +2196,9 @@ export default function App() {
               : "published"}
           </span>
           <span className="save-state">
-            {searchOpen
+            {homeOpen
+              ? "Knowledge overview"
+              : searchOpen
               ? "Authorised results"
               : imported
               ? imported.sourceId === "shared"
@@ -2015,16 +2216,15 @@ export default function App() {
           <button
             type="button"
             className={searchOpen ? "active" : ""}
-            onClick={() => {
-              setSearchOpen(true);
-              setSourceOpen(false);
-              setImported(null);
-              setAccessOpen(false);
-            }}
+            onClick={showSearch}
           >
             ⌕ <span>Search</span>
           </button>
-          <button type="button">
+          <button
+            type="button"
+            className={homeOpen ? "active" : ""}
+            onClick={showHome}
+          >
             ⌂ <span>Home</span>
           </button>
         </nav>
@@ -2033,14 +2233,7 @@ export default function App() {
           {bootstrap.canEdit && (
             <button
               type="button"
-              onClick={() => {
-                setCreateOpen(true);
-                setDocumentSettingsOpen(false);
-                setImported(null);
-                setSourceOpen(false);
-                setSearchOpen(false);
-                setAccessOpen(false);
-              }}
+              onClick={showCreate}
             >
               Manage
             </button>
@@ -2059,7 +2252,8 @@ export default function App() {
                   .map((candidate) => (
                     <button
                       type="button"
-                      className={!imported && !sourceOpen && !searchOpen &&
+                      className={!homeOpen && !imported && !sourceOpen &&
+                          !searchOpen &&
                           !createOpen && concept?.id === candidate.id
                         ? "active"
                         : ""}
@@ -2078,12 +2272,7 @@ export default function App() {
           <button
             type="button"
             className={!searchOpen && (imported || sourceOpen) ? "active" : ""}
-            onClick={() => {
-              setImported(null);
-              setSourceOpen(true);
-              setSearchOpen(false);
-              setAccessOpen(false);
-            }}
+            onClick={showSources}
           >
             <i className="space-dot green" /> <span>Sources</span>
             <b>{imports.length}</b>
@@ -2119,6 +2308,7 @@ export default function App() {
               type="button"
               onClick={() => {
                 setAccessOpen(!accessOpen);
+                setHomeOpen(false);
                 setSourceOpen(false);
                 setSearchOpen(false);
                 setImported(null);
@@ -2138,7 +2328,23 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        {createOpen && bootstrap.canEdit
+        {homeOpen
+          ? (
+            <HomePanel
+              concepts={concepts}
+              spaces={spaces}
+              imports={imports}
+              repository={source}
+              shared={sharedSource}
+              canEdit={Boolean(bootstrap.canEdit)}
+              onOpenConcept={showHubConcept}
+              onOpenImported={openImported}
+              onCreate={showCreate}
+              onSearch={showSearch}
+              onSources={showSources}
+            />
+          )
+          : createOpen && bootstrap.canEdit
           ? (
             <HubCreatePanel
               spaces={spaces}
