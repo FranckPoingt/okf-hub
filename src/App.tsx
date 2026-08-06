@@ -86,6 +86,7 @@ type RepositorySource = {
   id: "repository";
   repositoryUrl: string;
   folder: string;
+  credentialsConfigured: boolean;
   status: "syncing" | "current" | "sync_failed";
   revision: string | null;
   lastSyncedAt: string | null;
@@ -617,7 +618,12 @@ function RepositoryPanel(
     canManage: boolean;
     busy: boolean;
     error: string;
-    onConnect: (repositoryUrl: string, folder: string) => Promise<void>;
+    onConnect: (
+      repositoryUrl: string,
+      folder: string,
+      username: string,
+      token: string,
+    ) => Promise<void>;
     onRefresh: () => Promise<void>;
     onOpen: (
       sourceId: "repository" | "shared",
@@ -631,12 +637,14 @@ function RepositoryPanel(
     void onConnect(
       String(fields.get("repositoryUrl") ?? ""),
       String(fields.get("folder") ?? "okf"),
+      String(fields.get("username") ?? ""),
+      String(fields.get("token") ?? ""),
     );
   };
   const connectionForm = (
     <form className="source-form" onSubmit={connect}>
       <label>
-        Public HTTPS Git URL
+        HTTPS Git URL
         <input
           name="repositoryUrl"
           type="url"
@@ -648,6 +656,14 @@ function RepositoryPanel(
       <label>
         OKF folder
         <input name="folder" defaultValue={source?.folder ?? "okf"} required />
+      </label>
+      <label>
+        Git username <span>(private repositories only)</span>
+        <input name="username" autoComplete="username" />
+      </label>
+      <label>
+        Access token <span>(private repositories only)</span>
+        <input name="token" type="password" autoComplete="new-password" />
       </label>
       <button className="primary" type="submit" disabled={busy}>
         {busy
@@ -702,6 +718,14 @@ function RepositoryPanel(
                 <dd>{source.folder}</dd>
               </div>
               <div>
+                <dt>Access</dt>
+                <dd>
+                  {source.credentialsConfigured
+                    ? "Private credentials stored"
+                    : "Public HTTPS"}
+                </dd>
+              </div>
+              <div>
                 <dt>Source revision</dt>
                 <dd>
                   <code>{source.revision?.slice(0, 12) ?? "None"}</code>
@@ -720,8 +744,12 @@ function RepositoryPanel(
               <p className="source-error" role="alert">{source.error}</p>
             )}
             <SourceIssues issues={source.issues} />
-            {canManage && source.status === "sync_failed" &&
-              !source.revision && connectionForm}
+            {canManage && (
+              <details>
+                <summary>Update repository access</summary>
+                {connectionForm}
+              </details>
+            )}
           </>
         )}
       {error && <p className="source-error" role="alert">{error}</p>}
@@ -1959,12 +1987,17 @@ export default function App() {
     setHistoryOpen(false);
   };
 
-  const connectRepository = async (repositoryUrl: string, folder: string) => {
+  const connectRepository = async (
+    repositoryUrl: string,
+    folder: string,
+    username: string,
+    token: string,
+  ) => {
     setSourceBusy(true);
     setSourceError("");
     const response = await api("/api/sources/repository", {
       method: "POST",
-      body: JSON.stringify({ repositoryUrl, folder }),
+      body: JSON.stringify({ repositoryUrl, folder, username, token }),
     });
     const result = await response.json() as RepositorySource & {
       error?: string;

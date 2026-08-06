@@ -32,9 +32,9 @@ Authors work in a private, autosaved visual draft. **Publish** writes a versione
 
 ## KH-07 repository source
 
-The organisation owner can connect one public HTTPS Git repository and repository-relative OKF folder under **Repository**. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
+The organisation owner can connect one HTTPS Git repository and repository-relative OKF folder under **Repository**. Public repositories need no credentials; private repositories accept a Git username and HTTPS access token. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
 
-The Docker image includes Git. Install `git` separately when running `deno task start` outside Docker. Private-repository credentials and provider webhooks are intentionally deferred until manual refresh is insufficient.
+Private-repository credentials are write-only in the browser API and AES-GCM encrypted with the same local `source-credentials.key` used by shared-store credentials. Git receives a host-scoped authorization header through its child-process environment, so tokens are not stored in the remote URL or command arguments. The Docker image includes Git; install it separately when running `deno task start` outside Docker. Provider webhooks remain deferred until manual refresh is insufficient.
 
 ## KH-08 shared controlled store
 

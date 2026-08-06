@@ -54,3 +54,39 @@ Deno.test("clones, refreshes, and isolates invalid OKF files", async () => {
     await Deno.remove(root, { recursive: true });
   }
 });
+
+Deno.test("sends private repository credentials outside Git arguments", async () => {
+  let authorization = "";
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    (request) => {
+      authorization = request.headers.get("authorization") ?? "";
+      return new Response("Authentication required", {
+        status: 401,
+        headers: { "www-authenticate": 'Basic realm="private"' },
+      });
+    },
+  );
+  const checkout = await Deno.makeTempDir();
+  await Deno.remove(checkout);
+  try {
+    const repositoryUrl = `http://127.0.0.1:${
+      (server.addr as Deno.NetAddr).port
+    }/private.git`;
+    let error: unknown;
+    try {
+      await syncRepository(checkout, repositoryUrl, "okf", {
+        username: "git-user",
+        token: "private-token",
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    assert.ok(error instanceof Error);
+    assert.equal(error.message.includes("private-token"), false);
+    assert.equal(authorization, "Basic Z2l0LXVzZXI6cHJpdmF0ZS10b2tlbg==");
+  } finally {
+    await server.shutdown();
+    await Deno.remove(checkout, { recursive: true }).catch(() => {});
+  }
+});

@@ -311,6 +311,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Inaccessible, malformed, and unknown paths use one generic unavailable state.
   - [x] Nested imported paths round-trip without introducing a routing dependency.
 
+#### KH-17 — Connect private Git repositories
+
+- **Type:** AFK
+- **Blocked by:** KH-07
+- **Status:** Optional HTTPS credentials are encrypted at rest and used for clone and refresh without entering Git URLs or command arguments.
+- **What to build:** Extend the existing repository source with write-only username and access-token credentials while preserving public repository imports.
+- **Acceptance criteria:**
+  - [x] Public HTTPS repositories still connect without credentials.
+  - [x] Owners can connect or refresh a private repository with a username and access token.
+  - [x] Repository credentials are encrypted at rest and never returned by source APIs.
+  - [x] Git authentication is scoped to the repository host and does not place secrets in command arguments or the stored remote URL.
+  - [x] Owners can replace expired credentials without replacing imported knowledge.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-16 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-17 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

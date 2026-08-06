@@ -8,6 +8,7 @@ import { createCredentialVault } from "./credential-vault.ts";
 import { createObjectStore } from "./object-store.ts";
 import {
   inspectOkf,
+  type RepositoryCredentials,
   type RepositorySnapshot,
   syncRepository,
 } from "./repository-source.ts";
@@ -76,6 +77,7 @@ type AppOptions = {
     checkout: string,
     repositoryUrl: string,
     folder: string,
+    credentials?: RepositoryCredentials,
   ) => Promise<RepositorySnapshot>;
   sharedSourceSync?: (
     config: SharedSourceConfig,
@@ -117,6 +119,7 @@ type RevisionRow = {
 type RepositorySourceRow = {
   repositoryUrl: string;
   folder: string;
+  credentialsCipher: string | null;
   status: "syncing" | "current" | "sync_failed";
   revision: string | null;
   lastSyncedAt: string | null;
@@ -347,6 +350,7 @@ export async function createCollabApp({
       id TEXT PRIMARY KEY CHECK (id = 'repository'),
       repositoryUrl TEXT NOT NULL,
       folder TEXT NOT NULL,
+      credentialsCipher TEXT,
       status TEXT NOT NULL CHECK (status IN ('syncing', 'current', 'sync_failed')),
       revision TEXT,
       lastSyncedAt TEXT,
@@ -425,6 +429,14 @@ export async function createCollabApp({
   if (!conceptColumns.some(({ name }) => name === "spaceId")) {
     db.exec(
       "ALTER TABLE okf_concept ADD COLUMN spaceId TEXT NOT NULL DEFAULT 'policies'",
+    );
+  }
+  const repositoryColumns = db.prepare(
+    "PRAGMA table_info(okf_repository_source)",
+  ).all() as { name: string }[];
+  if (!repositoryColumns.some(({ name }) => name === "credentialsCipher")) {
+    db.exec(
+      "ALTER TABLE okf_repository_source ADD COLUMN credentialsCipher TEXT",
     );
   }
   const importedColumns = db.prepare("PRAGMA table_info(okf_imported_concept)")
@@ -584,6 +596,9 @@ export async function createCollabApp({
         kind: "git",
         repositoryUrl: (source as RepositorySourceRow).repositoryUrl,
         folder: (source as RepositorySourceRow).folder,
+        credentialsConfigured: Boolean(
+          (source as RepositorySourceRow).credentialsCipher,
+        ),
       }
       : {
         ...common,
@@ -685,10 +700,16 @@ export async function createCollabApp({
       "UPDATE okf_repository_source SET status = 'syncing', error = NULL WHERE id = 'repository'",
     ).run();
     try {
+      const credentials = source.credentialsCipher
+        ? await credentialVault.decrypt<RepositoryCredentials>(
+          source.credentialsCipher,
+        )
+        : undefined;
       const snapshot = await repositorySync(
         `${dataDir}/sources/repository`,
         source.repositoryUrl,
         source.folder,
+        credentials,
       );
       await importSnapshot("repository", snapshot, (revision, now) => {
         db.prepare(
@@ -1217,15 +1238,11 @@ export async function createCollabApp({
         });
       }
       const existing = repositorySource();
-      if (existing?.revision) {
-        return Response.json({ error: "Repository already connected" }, {
-          status: 409,
-          headers: cors(request),
-        });
-      }
       const body = await request.json().catch(() => ({})) as {
         repositoryUrl?: unknown;
         folder?: unknown;
+        username?: unknown;
+        token?: unknown;
       };
       const repositoryUrl = String(body.repositoryUrl ?? "").trim();
       const folder = String(body.folder ?? "okf").trim().replace(/^\.\//, "") ||
@@ -1243,7 +1260,7 @@ export async function createCollabApp({
         parsed.protocol !== "https:" || parsed.username || parsed.password
       ) {
         return Response.json({
-          error: "Use a public HTTPS Git URL without embedded credentials",
+          error: "Use an HTTPS Git URL without embedded credentials",
         }, { status: 400, headers: cors(request) });
       }
       if (
@@ -1255,18 +1272,47 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+      const username = String(body.username ?? "").trim();
+      const token = String(body.token ?? "");
+      if (Boolean(username) !== Boolean(token)) {
+        return Response.json({
+          error: "Enter both Git username and access token",
+        }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (username.length > 256 || token.length > 4096) {
+        return Response.json({ error: "Git credentials are too long" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (
+        existing?.revision &&
+        (existing.repositoryUrl !== parsed.toString() ||
+          existing.folder !== folder)
+      ) {
+        return Response.json({ error: "Repository already connected" }, {
+          status: 409,
+          headers: cors(request),
+        });
+      }
+      const credentialsCipher = username
+        ? await credentialVault.encrypt({ username, token })
+        : existing?.credentialsCipher ?? null;
       if (existing) {
         await Deno.remove(`${dataDir}/sources/repository`, { recursive: true })
           .catch((error) => {
             if (!(error instanceof Deno.errors.NotFound)) throw error;
           });
         db.prepare(
-          "UPDATE okf_repository_source SET repositoryUrl = ?, folder = ?, status = 'syncing', error = NULL WHERE id = 'repository'",
-        ).run(parsed.toString(), folder);
+          "UPDATE okf_repository_source SET repositoryUrl = ?, folder = ?, credentialsCipher = ?, status = 'syncing', error = NULL WHERE id = 'repository'",
+        ).run(parsed.toString(), folder, credentialsCipher);
       } else {
         db.prepare(
-          "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status) VALUES ('repository', ?, ?, 'syncing')",
-        ).run(parsed.toString(), folder);
+          "INSERT INTO okf_repository_source (id, repositoryUrl, folder, credentialsCipher, status) VALUES ('repository', ?, ?, ?, 'syncing')",
+        ).run(parsed.toString(), folder, credentialsCipher);
       }
       try {
         await refreshRepository();

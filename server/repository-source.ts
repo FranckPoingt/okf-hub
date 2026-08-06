@@ -26,10 +26,34 @@ export type RepositorySnapshot = {
   issues: RepositoryIssue[];
 };
 
-async function git(args: string[], cwd?: string) {
+export type RepositoryCredentials = { username: string; token: string };
+
+function gitAuthEnv(
+  repositoryUrl: string,
+  credentials?: RepositoryCredentials,
+): Record<string, string> {
+  if (!credentials) return { GIT_TERMINAL_PROMPT: "0" };
+  const origin = new URL(repositoryUrl).origin;
+  const encoded = btoa(
+    String.fromCharCode(
+      ...new TextEncoder().encode(
+        `${credentials.username}:${credentials.token}`,
+      ),
+    ),
+  );
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `http.${origin}/.extraHeader`,
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${encoded}`,
+  };
+}
+
+async function git(args: string[], cwd?: string, env?: Record<string, string>) {
   const output = await new Deno.Command("git", {
     args,
     cwd,
+    env,
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -158,6 +182,7 @@ export async function syncRepository(
   checkout: string,
   repositoryUrl: string,
   folder: string,
+  credentials?: RepositoryCredentials,
 ): Promise<RepositorySnapshot> {
   if (
     !folder || folder.startsWith("/") || folder.includes("\\") ||
@@ -165,21 +190,26 @@ export async function syncRepository(
   ) {
     throw new Error("OKF folder must be repository-relative");
   }
+  const env = gitAuthEnv(repositoryUrl, credentials);
   if (await exists(`${checkout}/.git`)) {
-    await git(["fetch", "--depth=1", "origin"], checkout);
+    await git(["fetch", "--depth=1", "origin"], checkout, env);
     await git(["reset", "--hard", "FETCH_HEAD"], checkout);
   } else {
     await Deno.remove(checkout, { recursive: true }).catch((error) => {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     });
     try {
-      await git([
-        "clone",
-        "--depth=1",
-        "--no-tags",
-        repositoryUrl,
-        checkout,
-      ]);
+      await git(
+        [
+          "clone",
+          "--depth=1",
+          "--no-tags",
+          repositoryUrl,
+          checkout,
+        ],
+        undefined,
+        env,
+      );
     } catch (error) {
       await Deno.remove(checkout, { recursive: true }).catch(() => {});
       throw error;

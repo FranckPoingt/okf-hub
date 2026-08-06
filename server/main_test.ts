@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
+import type { RepositoryCredentials } from "./repository-source.ts";
 
 type Tuple = { user: string; relation: string; object: string };
 
@@ -209,6 +210,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   const fgaPort = (fga.server.addr as Deno.NetAddr).port;
   const objects = new Map<string, string>();
   let repositorySyncs = 0;
+  let repositoryCredentials: RepositoryCredentials | undefined;
   let sharedSyncs = 0;
   let sharedConfig: Record<string, string> | undefined;
   const imported = (
@@ -256,9 +258,10 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     },
     automationIntervalMs: 0,
     allowedArtifactHosts: ["apps.example.com"],
-    repositorySync() {
+    repositorySync(_checkout, _repositoryUrl, _folder, credentials) {
       repositorySyncs++;
-      if (repositorySyncs >= 3) {
+      repositoryCredentials = credentials;
+      if (repositorySyncs >= 3 && credentials?.token !== "replacement-token") {
         return Promise.reject(new Error("Repository unavailable"));
       }
       return Promise.resolve(
@@ -617,11 +620,24 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       "# Second published revision\n",
     );
 
+    assert.equal(
+      (await owner.request("/api/sources/repository", {
+        method: "POST",
+        body: JSON.stringify({
+          repositoryUrl: "https://example.com/company/knowledge.git",
+          folder: "okf",
+          username: "git-user",
+        }),
+      })).status,
+      400,
+    );
     const connected = await owner.request("/api/sources/repository", {
       method: "POST",
       body: JSON.stringify({
         repositoryUrl: "https://example.com/company/knowledge.git",
         folder: "okf",
+        username: "git-user",
+        token: "private-git-token",
       }),
     });
     if (!connected.ok) assert.fail(await connected.text());
@@ -629,6 +645,26 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(firstSource.status, "current");
     assert.equal(firstSource.revision, "commit-one");
     assert.equal(firstSource.conceptCount, 3);
+    assert.equal(firstSource.credentialsConfigured, true);
+    assert.equal(
+      JSON.stringify(firstSource).includes("private-git-token"),
+      false,
+    );
+    assert.equal(JSON.stringify(firstSource).includes("git-user"), false);
+    assert.deepEqual(repositoryCredentials, {
+      username: "git-user",
+      token: "private-git-token",
+    });
+    const repositoryDb = new DatabaseSync(`${dataDir}/hub.db`);
+    const repositoryStored = repositoryDb.prepare(
+      "SELECT credentialsCipher FROM okf_repository_source WHERE id = 'repository'",
+    ).get() as { credentialsCipher: string };
+    assert.match(repositoryStored.credentialsCipher, /^v1:/);
+    assert.equal(
+      repositoryStored.credentialsCipher.includes("private-git-token"),
+      false,
+    );
+    repositoryDb.close();
     assert.deepEqual(firstSource.issues, [{
       path: "broken.md",
       status: "invalid",
@@ -773,6 +809,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     const allSourcesText = await (await owner.request("/api/sources")).text();
     assert.equal(allSourcesText.includes("browser-secret-key"), false);
     assert.equal(allSourcesText.includes("browser-access-key"), false);
+    assert.equal(allSourcesText.includes("private-git-token"), false);
+    assert.equal(allSourcesText.includes("git-user"), false);
     const sharedImported = await viewer.request(
       "/api/imported?source=shared&path=operations.md",
     );
@@ -1154,6 +1192,33 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       )).json()).artifacts[0].title,
       "First-week checklist",
     );
+
+    const replacedRepositoryCredentials = await owner.request(
+      "/api/sources/repository",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          repositoryUrl: "https://example.com/company/knowledge.git",
+          folder: "okf",
+          username: "replacement-user",
+          token: "replacement-token",
+        }),
+      },
+    );
+    assert.equal(
+      replacedRepositoryCredentials.status,
+      201,
+      await replacedRepositoryCredentials.text(),
+    );
+    assert.equal(
+      (await (await owner.request("/api/sources")).json()).repository
+        .conceptCount,
+      2,
+    );
+    assert.deepEqual(repositoryCredentials, {
+      username: "replacement-user",
+      token: "replacement-token",
+    });
 
     const audit = await (await owner.request("/api/audit")).json();
     assert.deepEqual(
