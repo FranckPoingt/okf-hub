@@ -83,7 +83,7 @@ type SourceIssue = {
   nextPath: string | null;
 };
 type RepositorySource = {
-  id: "repository";
+  id: string;
   repositoryUrl: string;
   folder: string;
   credentialsConfigured: boolean;
@@ -110,12 +110,12 @@ type SharedSource = {
   issues: SourceIssue[];
 };
 type Sources = {
-  repository: RepositorySource | null;
+  repositories: RepositorySource[];
   shared: SharedSource | null;
 };
 type ImportedConcept = {
   id: string;
-  sourceId: "repository" | "shared";
+  sourceId: string;
   path: string;
   title: string;
   type: string;
@@ -131,7 +131,7 @@ type ImportedConcept = {
 type SearchRelationship = {
   id: string;
   kind: "hub-native" | "imported";
-  sourceId: "hub" | "repository" | "shared";
+  sourceId: string;
   title: string;
   path?: string;
   trust: "current" | "sync_failed";
@@ -156,7 +156,7 @@ type SearchResponse = {
   canIncludeArchived: boolean;
 };
 type AutomationProposal = {
-  sourceId: "repository" | "shared";
+  sourceId: string;
   path: string;
   href: string;
   target: string;
@@ -165,7 +165,7 @@ type AutomationProposal = {
 type AutomationAttempt = {
   id: number;
   job: "source_check" | "broken_links";
-  sourceId: "repository" | "shared" | null;
+  sourceId: string | null;
   attempt: number;
   status: "running" | "succeeded" | "failed";
   error: string | null;
@@ -586,10 +586,10 @@ function SourceIssues({ issues }: { issues: SourceIssue[] }) {
 
 function ImportGrid(
   { sourceId, imports, onOpen }: {
-    sourceId: "repository" | "shared";
+    sourceId: string;
     imports: ImportedConcept[];
     onOpen: (
-      sourceId: "repository" | "shared",
+      sourceId: string,
       path: string,
     ) => Promise<unknown>;
   },
@@ -619,22 +619,27 @@ function RepositoryPanel(
     busy: boolean;
     error: string;
     onConnect: (
+      source: RepositorySource | null,
       repositoryUrl: string,
       folder: string,
       username: string,
       token: string,
     ) => Promise<void>;
-    onRefresh: () => Promise<void>;
+    onRefresh: (sourceId: string) => Promise<void>;
     onOpen: (
-      sourceId: "repository" | "shared",
+      sourceId: string,
       path: string,
     ) => Promise<unknown>;
   },
 ) {
+  const headingId = source
+    ? `repository-heading-${source.id}`
+    : "repository-heading-new";
   const connect = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     void onConnect(
+      source,
       String(fields.get("repositoryUrl") ?? ""),
       String(fields.get("folder") ?? "okf"),
       String(fields.get("username") ?? ""),
@@ -675,11 +680,11 @@ function RepositoryPanel(
     </form>
   );
   return (
-    <section className="source-card" aria-labelledby="repository-heading">
+    <section className="source-card" aria-labelledby={headingId}>
       <div className="source-heading">
         <div>
           <p className="eyebrow">Git source</p>
-          <h2 id="repository-heading">Repository-owned OKF</h2>
+          <h2 id={headingId}>Repository-owned OKF</h2>
           <p>
             Imported concepts stay read-only here. The Git repository remains
             authoritative.
@@ -690,7 +695,7 @@ function RepositoryPanel(
             className="primary"
             type="button"
             disabled={busy}
-            onClick={() => void onRefresh()}
+            onClick={() => void onRefresh(source.id)}
           >
             {busy ? "Refreshing…" : "Refresh repository"}
           </button>
@@ -753,7 +758,9 @@ function RepositoryPanel(
           </>
         )}
       {error && <p className="source-error" role="alert">{error}</p>}
-      <ImportGrid sourceId="repository" imports={imports} onOpen={onOpen} />
+      {source && (
+        <ImportGrid sourceId={source.id} imports={imports} onOpen={onOpen} />
+      )}
     </section>
   );
 }
@@ -768,7 +775,7 @@ function SharedStorePanel(
     onConnect: (values: Record<string, string>) => Promise<void>;
     onRefresh: () => Promise<void>;
     onOpen: (
-      sourceId: "repository" | "shared",
+      sourceId: string,
       path: string,
     ) => Promise<unknown>;
   },
@@ -1266,7 +1273,7 @@ function SearchPanel(
   { onOpenHub, onOpenImported }: {
     onOpenHub: (id: string) => void;
     onOpenImported: (
-      sourceId: "repository" | "shared",
+      sourceId: string,
       path: string,
     ) => Promise<unknown>;
   },
@@ -1450,7 +1457,7 @@ function HomePanel(
     concepts,
     spaces,
     imports,
-    repository,
+    repositories,
     shared,
     canEdit,
     onOpenConcept,
@@ -1462,12 +1469,12 @@ function HomePanel(
     concepts: Concept[];
     spaces: Space[];
     imports: ImportedConcept[];
-    repository: RepositorySource | null;
+    repositories: RepositorySource[];
     shared: SharedSource | null;
     canEdit: boolean;
     onOpenConcept: (id: string) => void;
     onOpenImported: (
-      sourceId: "repository" | "shared",
+      sourceId: string,
       path: string,
     ) => Promise<unknown>;
     onCreate: () => void;
@@ -1487,7 +1494,7 @@ function HomePanel(
     ).length;
   const archived = concepts.filter((item) => item.status === "archived")
     .length;
-  const connected = [repository, shared].filter(Boolean);
+  const connected = [...repositories, shared].filter(Boolean);
   const sourceAttention =
     connected.filter((item) => item?.status !== "current").length;
 
@@ -1724,7 +1731,7 @@ export default function App() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
-  const [source, setSource] = useState<RepositorySource | null>(null);
+  const [repositories, setRepositories] = useState<RepositorySource[]>([]);
   const [sharedSource, setSharedSource] = useState<SharedSource | null>(null);
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
@@ -1758,7 +1765,7 @@ export default function App() {
       throw new Error("Connected sources unavailable");
     }
     const sources = await sourceResponse.json() as Sources;
-    setSource(sources.repository);
+    setRepositories(sources.repositories);
     setSharedSource(sources.shared);
     setImports(await importsResponse.json());
   }, []);
@@ -1831,7 +1838,7 @@ export default function App() {
       setSourcesReady(false);
       setRouteError("");
       setInitialMarkdown(null);
-      setSource(null);
+      setRepositories([]);
       setSharedSource(null);
       setImports([]);
       setImported(null);
@@ -1988,6 +1995,7 @@ export default function App() {
   };
 
   const connectRepository = async (
+    source: RepositorySource | null,
     repositoryUrl: string,
     folder: string,
     username: string,
@@ -1995,32 +2003,36 @@ export default function App() {
   ) => {
     setSourceBusy(true);
     setSourceError("");
-    const response = await api("/api/sources/repository", {
-      method: "POST",
-      body: JSON.stringify({ repositoryUrl, folder, username, token }),
-    });
+    const response = await api(
+      `/api/sources/repositories${source ? `/${source.id}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ repositoryUrl, folder, username, token }),
+      },
+    );
     const result = await response.json() as RepositorySource & {
       error?: string;
     };
     setSourceBusy(false);
-    if (result?.id === "repository") setSource(result);
     if (!response.ok) {
       setSourceError(result.error ?? "Repository connection failed");
     }
     await loadSources().catch(() => {});
   };
 
-  const refreshRepository = async () => {
+  const refreshRepository = async (sourceId: string) => {
     setSourceBusy(true);
     setSourceError("");
-    const response = await api("/api/sources/repository/refresh", {
-      method: "POST",
-    });
+    const response = await api(
+      `/api/sources/repositories/${sourceId}/refresh`,
+      {
+        method: "POST",
+      },
+    );
     const result = await response.json() as RepositorySource & {
       error?: string;
     };
     setSourceBusy(false);
-    if (result?.id === "repository") setSource(result);
     if (!response.ok) {
       setSourceError(result.error ?? "Repository refresh failed");
     }
@@ -2067,7 +2079,7 @@ export default function App() {
   };
 
   const openImported = async (
-    sourceId: "repository" | "shared",
+    sourceId: string,
     path: string,
     record = true,
   ) => {
@@ -2259,10 +2271,12 @@ export default function App() {
   };
   const profileCoverage =
     PROFILE_MARKERS.filter((marker) => markdown.includes(marker)).length;
-  const connectedSourceCount = Number(Boolean(source)) +
+  const connectedSourceCount = repositories.length +
     Number(Boolean(sharedSource));
   const importedSourceLabel = imported?.sourceId === "shared"
     ? "Shared store"
+    : imported?.source && "repositoryUrl" in imported.source
+    ? imported.source.repositoryUrl
     : "Git repository";
   return (
     <main className="app-shell">
@@ -2485,7 +2499,7 @@ export default function App() {
               concepts={concepts}
               spaces={spaces}
               imports={imports}
-              repository={source}
+              repositories={repositories}
               shared={sharedSource}
               canEdit={Boolean(bootstrap.canEdit)}
               onOpenConcept={showHubConcept}
@@ -2526,16 +2540,34 @@ export default function App() {
                   healthy concepts
                 </p>
               </div>
-              <RepositoryPanel
-                source={source}
-                imports={imports}
-                canManage={bootstrap.access === "owner"}
-                busy={sourceBusy}
-                error={sourceError}
-                onConnect={connectRepository}
-                onRefresh={refreshRepository}
-                onOpen={openImported}
-              />
+              {sourceError && (
+                <p className="source-error" role="alert">{sourceError}</p>
+              )}
+              {repositories.map((repository) => (
+                <RepositoryPanel
+                  key={repository.id}
+                  source={repository}
+                  imports={imports}
+                  canManage={bootstrap.access === "owner"}
+                  busy={sourceBusy}
+                  error=""
+                  onConnect={connectRepository}
+                  onRefresh={refreshRepository}
+                  onOpen={openImported}
+                />
+              ))}
+              {(bootstrap.access === "owner" || !repositories.length) && (
+                <RepositoryPanel
+                  source={null}
+                  imports={imports}
+                  canManage={bootstrap.access === "owner"}
+                  busy={sourceBusy}
+                  error=""
+                  onConnect={connectRepository}
+                  onRefresh={refreshRepository}
+                  onOpen={openImported}
+                />
+              )}
               <SharedStorePanel
                 source={sharedSource}
                 imports={imports}

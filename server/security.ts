@@ -481,28 +481,51 @@ export async function createSecurity({
     unset(`openfga_hub_space:${spaceId}`);
   }
 
-  async function ensureImportedConcept(conceptId: string) {
+  async function ensureImportedConcept(sourceId: string, conceptId: string) {
     const viewerTeamId = get("viewer_team_id");
-    if (!get("openfga_imported_space")) {
+    const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
+    const spaceKey = `openfga_imported_space:${sourceId}`;
+    if (!get(spaceKey)) {
       if (!viewerTeamId) throw new Error("Finish organization setup first");
       await writeTuples([{
         user: `source:${SOURCE}`,
         relation: "parent",
-        object: `space:${IMPORTED_SPACE}`,
+        object: `space:${importedSpace}`,
       }, {
         user: `group:${viewerTeamId}#member`,
         relation: "viewer",
-        object: `space:${IMPORTED_SPACE}`,
+        object: `space:${importedSpace}`,
       }]);
-      set("openfga_imported_space", "1");
+      set(spaceKey, "1");
     }
-    const key = `openfga_imported_concept:${conceptId}`;
+    const key = `openfga_imported_concept_v2:${conceptId}`;
     if (get(key)) return;
-    await writeTuples([{
-      user: `space:${IMPORTED_SPACE}`,
+    const tuple = {
+      user: `space:${importedSpace}`,
       relation: "parent",
       object: `concept:${conceptId}`,
-    }]);
+    };
+    const legacyKey = `openfga_imported_concept:${conceptId}`;
+    if (get(legacyKey)) {
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          writes: { tuple_keys: [tuple] },
+          deletes: {
+            tuple_keys: [{
+              user: `space:${IMPORTED_SPACE}`,
+              relation: "parent",
+              object: `concept:${conceptId}`,
+            }],
+          },
+          authorization_model_id: modelId,
+        }),
+      });
+      unset(legacyKey);
+    } else {
+      await writeTuples([tuple]);
+    }
     set(key, "1");
   }
 

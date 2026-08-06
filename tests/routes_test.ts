@@ -12,7 +12,7 @@ Deno.test("round-trips stable app routes and rejects malformed paths", () => {
     { kind: "concept" as const, id: "incident-communication" },
     {
       kind: "imported" as const,
-      sourceId: "repository" as const,
+      sourceId: "repository-platform",
       path: "guides/on call.md",
     },
   ];

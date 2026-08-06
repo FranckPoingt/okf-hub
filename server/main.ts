@@ -117,6 +117,7 @@ type RevisionRow = {
 };
 
 type RepositorySourceRow = {
+  id: string;
   repositoryUrl: string;
   folder: string;
   credentialsCipher: string | null;
@@ -140,7 +141,7 @@ type SharedSourceRow = {
 
 type ImportedConceptRow = {
   id: string;
-  sourceId: "repository" | "shared";
+  sourceId: string;
   path: string;
   title: string;
   type: string;
@@ -159,7 +160,7 @@ type ImportedConceptRow = {
 type SearchDocument = {
   id: string;
   kind: "hub-native" | "imported";
-  sourceId: "hub" | "repository" | "shared";
+  sourceId: string;
   sourceLabel: string;
   sourceStatus: "current" | "sync_failed";
   title: string;
@@ -347,7 +348,7 @@ export async function createCollabApp({
       FOREIGN KEY (conceptId) REFERENCES okf_concept(id)
     );
     CREATE TABLE IF NOT EXISTS okf_repository_source (
-      id TEXT PRIMARY KEY CHECK (id = 'repository'),
+      id TEXT PRIMARY KEY,
       repositoryUrl TEXT NOT NULL,
       folder TEXT NOT NULL,
       credentialsCipher TEXT,
@@ -370,7 +371,7 @@ export async function createCollabApp({
     );
     CREATE TABLE IF NOT EXISTS okf_imported_concept (
       id TEXT PRIMARY KEY,
-      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      sourceId TEXT NOT NULL,
       path TEXT NOT NULL,
       title TEXT NOT NULL,
       type TEXT NOT NULL,
@@ -394,7 +395,7 @@ export async function createCollabApp({
       PRIMARY KEY (conceptId, sourceRevision)
     );
     CREATE TABLE IF NOT EXISTS okf_import_issue (
-      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      sourceId TEXT NOT NULL,
       path TEXT NOT NULL,
       error TEXT NOT NULL,
       PRIMARY KEY (sourceId, path)
@@ -439,6 +440,30 @@ export async function createCollabApp({
       "ALTER TABLE okf_repository_source ADD COLUMN credentialsCipher TEXT",
     );
   }
+  const repositorySchema = String(
+    (db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'okf_repository_source'",
+    ).get() as { sql?: string } | undefined)?.sql ?? "",
+  );
+  if (repositorySchema.includes("CHECK (id = 'repository')")) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE okf_repository_source RENAME TO okf_repository_source_legacy;
+      CREATE TABLE okf_repository_source (
+        id TEXT PRIMARY KEY,
+        repositoryUrl TEXT NOT NULL,
+        folder TEXT NOT NULL,
+        credentialsCipher TEXT,
+        status TEXT NOT NULL CHECK (status IN ('syncing', 'current', 'sync_failed')),
+        revision TEXT,
+        lastSyncedAt TEXT,
+        error TEXT
+      );
+      INSERT INTO okf_repository_source SELECT * FROM okf_repository_source_legacy;
+      DROP TABLE okf_repository_source_legacy;
+      COMMIT;
+    `);
+  }
   const importedColumns = db.prepare("PRAGMA table_info(okf_imported_concept)")
     .all() as { name: string }[];
   if (!importedColumns.some(({ name }) => name === "sourceId")) {
@@ -447,7 +472,7 @@ export async function createCollabApp({
       ALTER TABLE okf_imported_concept RENAME TO okf_imported_concept_legacy;
       CREATE TABLE okf_imported_concept (
         id TEXT PRIMARY KEY,
-        sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+        sourceId TEXT NOT NULL,
         path TEXT NOT NULL,
         title TEXT NOT NULL,
         type TEXT NOT NULL,
@@ -470,13 +495,54 @@ export async function createCollabApp({
       DROP TABLE okf_imported_concept_legacy;
       ALTER TABLE okf_import_issue RENAME TO okf_import_issue_legacy;
       CREATE TABLE okf_import_issue (
-        sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+        sourceId TEXT NOT NULL,
         path TEXT NOT NULL,
         error TEXT NOT NULL,
         PRIMARY KEY (sourceId, path)
       );
       INSERT INTO okf_import_issue (sourceId, path, error)
         SELECT 'repository', path, error FROM okf_import_issue_legacy;
+      DROP TABLE okf_import_issue_legacy;
+      COMMIT;
+    `);
+  }
+  const importedSchema = String(
+    (db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'okf_imported_concept'",
+    ).get() as { sql?: string } | undefined)?.sql ?? "",
+  );
+  if (importedSchema.includes("sourceId IN ('repository', 'shared')")) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE okf_imported_concept RENAME TO okf_imported_concept_legacy;
+      CREATE TABLE okf_imported_concept (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL,
+        path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('current', 'invalid', 'deleted', 'renamed')),
+        objectKey TEXT NOT NULL,
+        sourceRevision TEXT NOT NULL,
+        contentHash TEXT NOT NULL,
+        importedAt TEXT NOT NULL,
+        nextPath TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        owner TEXT NOT NULL DEFAULT '',
+        links TEXT NOT NULL DEFAULT '[]',
+        searchText TEXT NOT NULL DEFAULT '',
+        UNIQUE (sourceId, path)
+      );
+      INSERT INTO okf_imported_concept SELECT * FROM okf_imported_concept_legacy;
+      DROP TABLE okf_imported_concept_legacy;
+      ALTER TABLE okf_import_issue RENAME TO okf_import_issue_legacy;
+      CREATE TABLE okf_import_issue (
+        sourceId TEXT NOT NULL,
+        path TEXT NOT NULL,
+        error TEXT NOT NULL,
+        PRIMARY KEY (sourceId, path)
+      );
+      INSERT INTO okf_import_issue SELECT * FROM okf_import_issue_legacy;
       DROP TABLE okf_import_issue_legacy;
       COMMIT;
     `);
@@ -533,15 +599,18 @@ export async function createCollabApp({
     db.prepare(
       "SELECT number, objectKey, publishedAt, actorUserId FROM okf_revision WHERE conceptId = ? ORDER BY number DESC",
     ).all(conceptId) as RevisionRow[];
-  const repositorySource = () =>
-    db.prepare("SELECT * FROM okf_repository_source WHERE id = 'repository'")
-      .get() as RepositorySourceRow | undefined;
+  const repositorySource = (id: string) =>
+    db.prepare("SELECT * FROM okf_repository_source WHERE id = ?")
+      .get(id) as RepositorySourceRow | undefined;
+  const repositorySources = () =>
+    db.prepare("SELECT * FROM okf_repository_source ORDER BY repositoryUrl")
+      .all() as RepositorySourceRow[];
   const sharedSource = () =>
     db.prepare("SELECT * FROM okf_shared_source WHERE id = 'shared'").get() as
       | SharedSourceRow
       | undefined;
   const importedConcepts = (
-    sourceId?: "repository" | "shared",
+    sourceId?: string,
     statuses = ["current"],
   ) =>
     db.prepare(
@@ -573,10 +642,10 @@ export async function createCollabApp({
     owner: item.owner,
   });
 
-  function sourcePayload(sourceId: "repository" | "shared") {
-    const source = sourceId === "repository"
-      ? repositorySource()
-      : sharedSource();
+  function sourcePayload(sourceId: string) {
+    const source = sourceId === "shared"
+      ? sharedSource()
+      : repositorySource(sourceId);
     if (!source) return null;
     const issues = db.prepare(
       "SELECT path, 'invalid' AS status, error, NULL AS nextPath FROM okf_import_issue WHERE sourceId = ? UNION ALL SELECT path, status, NULL AS error, nextPath FROM okf_imported_concept WHERE sourceId = ? AND status IN ('deleted', 'renamed') ORDER BY path",
@@ -590,7 +659,7 @@ export async function createCollabApp({
       conceptCount: importedConcepts(sourceId).length,
       issues,
     };
-    return sourceId === "repository"
+    return sourceId !== "shared"
       ? {
         ...common,
         kind: "git",
@@ -611,8 +680,23 @@ export async function createCollabApp({
       };
   }
 
+  async function canViewSource(userId: string, sourceId: string) {
+    if (security.isOwner(userId)) return true;
+    if (
+      await security.checkSpace(
+        userId,
+        "view",
+        `imported-${sourceId}`,
+      )
+    ) return true;
+    for (const item of importedConcepts(sourceId, ["current", "invalid"])) {
+      if (await security.check(userId, "view", item.id)) return true;
+    }
+    return false;
+  }
+
   async function importSnapshot(
-    sourceId: "repository" | "shared",
+    sourceId: string,
     snapshot: RepositorySnapshot,
     markCurrent: (revision: string, now: string) => void,
   ) {
@@ -621,7 +705,10 @@ export async function createCollabApp({
         importedObjectKey(sourceId, snapshot.revision, file.path),
         file.markdown,
       );
-      await security.ensureImportedConcept(importedId(sourceId, file.path));
+      await security.ensureImportedConcept(
+        sourceId,
+        importedId(sourceId, file.path),
+      );
     }
 
     const previous = importedConcepts(sourceId, ["current", "invalid"]);
@@ -693,12 +780,12 @@ export async function createCollabApp({
     }
   }
 
-  async function syncRepositorySource() {
-    const source = repositorySource();
+  async function syncRepositorySource(sourceId: string) {
+    const source = repositorySource(sourceId);
     if (!source) throw new Error("Connect a repository first");
     db.prepare(
-      "UPDATE okf_repository_source SET status = 'syncing', error = NULL WHERE id = 'repository'",
-    ).run();
+      "UPDATE okf_repository_source SET status = 'syncing', error = NULL WHERE id = ?",
+    ).run(sourceId);
     try {
       const credentials = source.credentialsCipher
         ? await credentialVault.decrypt<RepositoryCredentials>(
@@ -706,33 +793,34 @@ export async function createCollabApp({
         )
         : undefined;
       const snapshot = await repositorySync(
-        `${dataDir}/sources/repository`,
+        `${dataDir}/sources/${sourceId}`,
         source.repositoryUrl,
         source.folder,
         credentials,
       );
-      await importSnapshot("repository", snapshot, (revision, now) => {
+      await importSnapshot(sourceId, snapshot, (revision, now) => {
         db.prepare(
-          "UPDATE okf_repository_source SET status = 'current', revision = ?, lastSyncedAt = ?, error = NULL WHERE id = 'repository'",
-        ).run(revision, now);
+          "UPDATE okf_repository_source SET status = 'current', revision = ?, lastSyncedAt = ?, error = NULL WHERE id = ?",
+        ).run(revision, now, sourceId);
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sync failed";
       db.prepare(
-        "UPDATE okf_repository_source SET status = 'sync_failed', error = ? WHERE id = 'repository'",
-      ).run(message.slice(0, 500));
+        "UPDATE okf_repository_source SET status = 'sync_failed', error = ? WHERE id = ?",
+      ).run(message.slice(0, 500), sourceId);
       throw error;
     }
   }
 
-  let repositoryRefresh: Promise<void> | undefined;
-  function refreshRepository() {
-    if (repositoryRefresh) return repositoryRefresh;
-    // ponytail: one source uses one process lock; use per-source jobs when multiple sources arrive.
-    repositoryRefresh = syncRepositorySource().finally(() => {
-      repositoryRefresh = undefined;
+  const repositoryRefreshes = new Map<string, Promise<void>>();
+  function refreshRepository(sourceId: string) {
+    const active = repositoryRefreshes.get(sourceId);
+    if (active) return active;
+    const refresh = syncRepositorySource(sourceId).finally(() => {
+      repositoryRefreshes.delete(sourceId);
     });
-    return repositoryRefresh;
+    repositoryRefreshes.set(sourceId, refresh);
+    return refresh;
   }
 
   async function syncSharedStoreSource() {
@@ -828,7 +916,7 @@ export async function createCollabApp({
 
   async function checkSource(
     runId: number,
-    sourceId: "repository" | "shared",
+    sourceId: string,
   ) {
     for (let attempt = 1; attempt <= MAX_SOURCE_ATTEMPTS; attempt++) {
       const startedAt = new Date().toISOString();
@@ -838,8 +926,8 @@ export async function createCollabApp({
         ).run(runId, sourceId, attempt, startedAt).lastInsertRowid,
       );
       try {
-        await (sourceId === "repository"
-          ? refreshRepository()
+        await (sourceId !== "shared"
+          ? refreshRepository(sourceId)
           : refreshSharedStore());
         const source = sourcePayload(sourceId)!;
         db.prepare(
@@ -939,7 +1027,9 @@ export async function createCollabApp({
       );
       try {
         const jobs: Promise<boolean>[] = [];
-        if (repositorySource()) jobs.push(checkSource(runId, "repository"));
+        for (const source of repositorySources()) {
+          jobs.push(checkSource(runId, source.id));
+        }
         if (sharedSource()) jobs.push(checkSource(runId, "shared"));
         jobs.push(checkBrokenLinks(runId, actorUserId));
         const results = await Promise.all(jobs);
@@ -1146,17 +1236,19 @@ export async function createCollabApp({
       }
     }
 
-    const repository = repositorySource();
     const shared = sharedSource();
     for (const item of importedConcepts()) {
       if (!await security.check(userId, "view", item.id)) continue;
-      const source = item.sourceId === "repository" ? repository : shared;
+      const repository = item.sourceId === "shared"
+        ? undefined
+        : repositorySource(item.sourceId);
+      const source = repository ?? shared;
       const failed = source?.status === "sync_failed";
       documents.push({
         id: item.id,
         kind: "imported",
         sourceId: item.sourceId,
-        sourceLabel: item.sourceId === "repository"
+        sourceLabel: item.sourceId !== "shared"
           ? repository?.repositoryUrl ?? "Git repository"
           : shared
           ? `s3://${shared.bucket}/${shared.path}`.replace(/\/$/, "")
@@ -1166,7 +1258,7 @@ export async function createCollabApp({
         type: item.type,
         tags: JSON.parse(item.tags) as string[],
         owner: item.owner ||
-          (item.sourceId === "repository"
+          (item.sourceId !== "shared"
             ? "Repository owner"
             : "Shared-store owner"),
         status: "current",
@@ -1216,14 +1308,24 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+      const repositories = [];
+      for (const source of repositorySources()) {
+        if (await canViewSource(current.user.id, source.id)) {
+          repositories.push(sourcePayload(source.id));
+        }
+      }
       return Response.json({
-        repository: sourcePayload("repository"),
-        shared: sourcePayload("shared"),
+        repositories,
+        shared: sharedSource() &&
+            await canViewSource(current.user.id, "shared")
+          ? sourcePayload("shared")
+          : null,
       }, { headers: cors(request) });
     }
-    if (
-      url.pathname === "/api/sources/repository" && request.method === "POST"
-    ) {
+    const repositoryPath = url.pathname.match(
+      /^\/api\/sources\/repositories(?:\/([a-z0-9-]+))?$/,
+    );
+    if (repositoryPath && request.method === "POST") {
       const current = await security.session(request);
       if (!current) {
         return Response.json({ error: "Sign in required" }, {
@@ -1237,7 +1339,15 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const existing = repositorySource();
+      const existing = repositoryPath[1]
+        ? repositorySource(repositoryPath[1])
+        : undefined;
+      if (repositoryPath[1] && !existing) {
+        return Response.json({ error: "Repository not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
       const body = await request.json().catch(() => ({})) as {
         repositoryUrl?: unknown;
         folder?: unknown;
@@ -1301,36 +1411,46 @@ export async function createCollabApp({
       const credentialsCipher = username
         ? await credentialVault.encrypt({ username, token })
         : existing?.credentialsCipher ?? null;
+      const sourceId = existing?.id ??
+        (repositorySources().length
+          ? `repository-${crypto.randomUUID()}`
+          : "repository");
       if (existing) {
-        await Deno.remove(`${dataDir}/sources/repository`, { recursive: true })
-          .catch((error) => {
+        if (
+          existing.repositoryUrl !== parsed.toString() ||
+          existing.folder !== folder
+        ) {
+          await Deno.remove(`${dataDir}/sources/${sourceId}`, {
+            recursive: true,
+          }).catch((error) => {
             if (!(error instanceof Deno.errors.NotFound)) throw error;
           });
+        }
         db.prepare(
-          "UPDATE okf_repository_source SET repositoryUrl = ?, folder = ?, credentialsCipher = ?, status = 'syncing', error = NULL WHERE id = 'repository'",
-        ).run(parsed.toString(), folder, credentialsCipher);
+          "UPDATE okf_repository_source SET repositoryUrl = ?, folder = ?, credentialsCipher = ?, status = 'syncing', error = NULL WHERE id = ?",
+        ).run(parsed.toString(), folder, credentialsCipher, sourceId);
       } else {
         db.prepare(
-          "INSERT INTO okf_repository_source (id, repositoryUrl, folder, credentialsCipher, status) VALUES ('repository', ?, ?, ?, 'syncing')",
-        ).run(parsed.toString(), folder, credentialsCipher);
+          "INSERT INTO okf_repository_source (id, repositoryUrl, folder, credentialsCipher, status) VALUES (?, ?, ?, ?, 'syncing')",
+        ).run(sourceId, parsed.toString(), folder, credentialsCipher);
       }
       try {
-        await refreshRepository();
-        return Response.json(sourcePayload("repository"), {
-          status: 201,
+        await refreshRepository(sourceId);
+        return Response.json(sourcePayload(sourceId), {
+          status: existing ? 200 : 201,
           headers: cors(request),
         });
       } catch {
-        return Response.json(sourcePayload("repository"), {
+        return Response.json(sourcePayload(sourceId), {
           status: 502,
           headers: cors(request),
         });
       }
     }
-    if (
-      url.pathname === "/api/sources/repository/refresh" &&
-      request.method === "POST"
-    ) {
+    const repositoryRefreshPath = url.pathname.match(
+      /^\/api\/sources\/repositories\/([a-z0-9-]+)\/refresh$/,
+    );
+    if (repositoryRefreshPath && request.method === "POST") {
       const current = await security.session(request);
       if (!current) {
         return Response.json({ error: "Sign in required" }, {
@@ -1344,13 +1464,20 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+      const sourceId = repositoryRefreshPath[1];
+      if (!repositorySource(sourceId)) {
+        return Response.json({ error: "Repository not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
       try {
-        await refreshRepository();
-        return Response.json(sourcePayload("repository"), {
+        await refreshRepository(sourceId);
+        return Response.json(sourcePayload(sourceId), {
           headers: cors(request),
         });
       } catch {
-        return Response.json(sourcePayload("repository"), {
+        return Response.json(sourcePayload(sourceId), {
           status: 502,
           headers: cors(request),
         });
@@ -1796,9 +1923,13 @@ export async function createCollabApp({
         });
       }
       const path = url.searchParams.get("path") ?? "";
-      const sourceId = url.searchParams.get("source") === "shared"
-        ? "shared"
-        : "repository";
+      const sourceId = (url.searchParams.get("source") ?? "repository").trim();
+      if (!/^[a-z0-9-]+$/.test(sourceId)) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
       const item = db.prepare(
         "SELECT * FROM okf_imported_concept WHERE sourceId = ? AND path = ? AND status IN ('current', 'invalid')",
       ).get(sourceId, path) as ImportedConceptRow | undefined;

@@ -324,6 +324,19 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] Git authentication is scoped to the repository host and does not place secrets in command arguments or the stored remote URL.
   - [x] Owners can replace expired credentials without replacing imported knowledge.
 
+#### KH-18 — Support multiple repository sources
+
+- **Type:** AFK
+- **Blocked by:** KH-09, KH-16, KH-17
+- **Status:** Multiple Git repositories now keep independent IDs, credentials, checkouts, imports, permission spaces, sync state, automation, and URLs.
+- **What to build:** Replace the singleton Git source with a list of independently managed repository sources while keeping the shared store singular.
+- **Acceptance criteria:**
+  - [x] Owners can connect and refresh more than one public or private repository.
+  - [x] Identical paths in different repositories remain isolated in storage, search, relationships, and direct URLs.
+  - [x] Each repository has an independent OpenFGA space, credentials, checkout, status, retries, and automation history.
+  - [x] Existing `repository` imports and their stable URLs migrate without being reset or moved.
+  - [x] The Home and Sources views count and display every accessible repository without adding a generic connector framework.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-17 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-18 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

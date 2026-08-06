@@ -32,7 +32,7 @@ Authors work in a private, autosaved visual draft. **Publish** writes a versione
 
 ## KH-07 repository source
 
-The organisation owner can connect one HTTPS Git repository and repository-relative OKF folder under **Repository**. Public repositories need no credentials; private repositories accept a Git username and HTTPS access token. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
+The organisation owner can connect HTTPS Git repositories and repository-relative OKF folders under **Sources**. Public repositories need no credentials; private repositories accept a Git username and HTTPS access token. The hub validates YAML frontmatter and the required `type`, stores each healthy source revision in RustFS, and renders imported concepts as visibly read-only with their path and commit provenance. Invalid files are isolated as actionable source issues; exact renames, deletions, and source failures are reported without deleting the last healthy imports. **Refresh repository** is the retry/update path.
 
 Private-repository credentials are write-only in the browser API and AES-GCM encrypted with the same local `source-credentials.key` used by shared-store credentials. Git receives a host-scoped authorization header through its child-process environment, so tokens are not stored in the remote URL or command arguments. The Docker image includes Git; install it separately when running `deno task start` outside Docker. Provider webhooks remain deferred until manual refresh is insufficient.
 
@@ -83,3 +83,9 @@ Recent items open their existing document views. **Search knowledge**, **Create 
 The app uses the browser History API for stable routes without a routing dependency: `/` for Home, `/search`, `/sources`, `/manage`, `/knowledge/<concept-id>`, and `/imports/<source>/<path>`. Nested imported paths are encoded segment by segment so links remain readable and reversible.
 
 Direct URLs wait for authentication and the initial permission-filtered lists, then call the same concept or import API used by in-app navigation. Browser back and forward replay those loaders. Inaccessible, malformed, and unknown paths all render the same generic unavailable page.
+
+## KH-18 multiple repositories
+
+Owners can connect multiple Git repositories under **Sources**. Each repository receives a stable source ID and isolated encrypted credentials, checkout, imported paths, OpenFGA space, sync status, retry lock, automation attempts, and `/imports/<source-id>/<path>` URLs. Repositories may contain the same relative OKF paths without colliding.
+
+Existing installations retain the original `repository` source ID and URLs during the automatic SQLite migration. The shared controlled store remains a single source; a generic connector framework is intentionally not introduced.

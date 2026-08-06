@@ -145,6 +145,74 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
   }
 });
 
+Deno.test("migrates fixed source constraints for multiple repositories", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const legacy = new DatabaseSync(`${dataDir}/hub.db`);
+  legacy.exec(`
+    CREATE TABLE okf_repository_source (
+      id TEXT PRIMARY KEY CHECK (id = 'repository'),
+      repositoryUrl TEXT NOT NULL,
+      folder TEXT NOT NULL,
+      credentialsCipher TEXT,
+      status TEXT NOT NULL,
+      revision TEXT,
+      lastSyncedAt TEXT,
+      error TEXT
+    );
+    INSERT INTO okf_repository_source VALUES
+      ('repository', 'https://example.com/legacy.git', 'okf', NULL, 'current', 'commit', '2026-01-01', NULL);
+    CREATE TABLE okf_imported_concept (
+      id TEXT PRIMARY KEY,
+      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      path TEXT NOT NULL,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      objectKey TEXT NOT NULL,
+      sourceRevision TEXT NOT NULL,
+      contentHash TEXT NOT NULL,
+      importedAt TEXT NOT NULL,
+      nextPath TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
+      owner TEXT NOT NULL DEFAULT '',
+      links TEXT NOT NULL DEFAULT '[]',
+      searchText TEXT NOT NULL DEFAULT '',
+      UNIQUE (sourceId, path)
+    );
+    CREATE TABLE okf_import_issue (
+      sourceId TEXT NOT NULL CHECK (sourceId IN ('repository', 'shared')),
+      path TEXT NOT NULL,
+      error TEXT NOT NULL,
+      PRIMARY KEY (sourceId, path)
+    );
+  `);
+  legacy.close();
+  const app = await createCollabApp({ dataDir });
+  try {
+    const migrated = new DatabaseSync(`${dataDir}/hub.db`);
+    const schemas = migrated.prepare(
+      "SELECT sql FROM sqlite_master WHERE name IN ('okf_repository_source', 'okf_imported_concept', 'okf_import_issue')",
+    ).all().map((row) => String((row as { sql: string }).sql)).join("\n");
+    assert.equal(schemas.includes("id = 'repository'"), false);
+    assert.equal(schemas.includes("sourceId IN"), false);
+    migrated.prepare(
+      "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status) VALUES ('repository-second', 'https://example.com/second.git', 'okf', 'syncing')",
+    ).run();
+    migrated.prepare(
+      "INSERT INTO okf_import_issue VALUES ('repository-second', 'bad.md', 'Invalid')",
+    ).run();
+    assert.equal(
+      (migrated.prepare("SELECT COUNT(*) AS count FROM okf_repository_source")
+        .get() as { count: number }).count,
+      2,
+    );
+    migrated.close();
+  } finally {
+    await app.close();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("keeps the legacy hub document in the Policies space", async () => {
   const dataDir = await Deno.makeTempDir();
   const path = `${dataDir}/incident-communication.md`;
@@ -258,7 +326,21 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     },
     automationIntervalMs: 0,
     allowedArtifactHosts: ["apps.example.com"],
-    repositorySync(_checkout, _repositoryUrl, _folder, credentials) {
+    repositorySync(_checkout, repositoryUrl, _folder, credentials) {
+      if (repositoryUrl.includes("engineering")) {
+        return Promise.resolve({
+          revision: "engineering-one",
+          files: [
+            imported(
+              "operations.md",
+              "Engineering operations",
+              "# Engineering operations\n",
+              "engineering-ops",
+            ),
+          ],
+          issues: [],
+        });
+      }
       repositorySyncs++;
       repositoryCredentials = credentials;
       if (repositorySyncs >= 3 && credentials?.token !== "replacement-token") {
@@ -621,7 +703,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
 
     assert.equal(
-      (await owner.request("/api/sources/repository", {
+      (await owner.request("/api/sources/repositories", {
         method: "POST",
         body: JSON.stringify({
           repositoryUrl: "https://example.com/company/knowledge.git",
@@ -631,7 +713,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       400,
     );
-    const connected = await owner.request("/api/sources/repository", {
+    const connected = await owner.request("/api/sources/repositories", {
       method: "POST",
       body: JSON.stringify({
         repositoryUrl: "https://example.com/company/knowledge.git",
@@ -672,7 +754,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       nextPath: null,
     }]);
     assert.equal(
-      (await editor.request("/api/sources/repository/refresh", {
+      (await editor.request("/api/sources/repositories/repository/refresh", {
         method: "POST",
       })).status,
       403,
@@ -714,7 +796,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
 
     const refreshed = await owner.request(
-      "/api/sources/repository/refresh",
+      "/api/sources/repositories/repository/refresh",
       { method: "POST" },
     );
     if (!refreshed.ok) assert.fail(await refreshed.text());
@@ -738,7 +820,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(updatedImported.revisionCount, 2);
 
     const unavailable = await owner.request(
-      "/api/sources/repository/refresh",
+      "/api/sources/repositories/repository/refresh",
       { method: "POST" },
     );
     assert.equal(unavailable.status, 502);
@@ -939,7 +1021,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     }]);
     const sourcesAfterAutomation = await (await owner.request("/api/sources"))
       .json();
-    assert.equal(sourcesAfterAutomation.repository.status, "sync_failed");
+    assert.equal(sourcesAfterAutomation.repositories[0].status, "sync_failed");
     assert.equal(sourcesAfterAutomation.shared.status, "current");
     assert.equal(
       (await (await viewer.request(
@@ -1194,7 +1276,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
 
     const replacedRepositoryCredentials = await owner.request(
-      "/api/sources/repository",
+      "/api/sources/repositories/repository",
       {
         method: "POST",
         body: JSON.stringify({
@@ -1207,11 +1289,11 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
     assert.equal(
       replacedRepositoryCredentials.status,
-      201,
+      200,
       await replacedRepositoryCredentials.text(),
     );
     assert.equal(
-      (await (await owner.request("/api/sources")).json()).repository
+      (await (await owner.request("/api/sources")).json()).repositories[0]
         .conceptCount,
       2,
     );
@@ -1219,6 +1301,60 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       username: "replacement-user",
       token: "replacement-token",
     });
+
+    const secondRepository = await owner.request(
+      "/api/sources/repositories",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          repositoryUrl: "https://example.com/company/engineering.git",
+          folder: "okf",
+        }),
+      },
+    );
+    const secondRepositoryText = await secondRepository.text();
+    assert.equal(secondRepository.status, 201, secondRepositoryText);
+    const secondRepositoryBody = JSON.parse(secondRepositoryText);
+    assert.match(secondRepositoryBody.id, /^repository-[a-f0-9-]+$/);
+    assert.equal(secondRepositoryBody.conceptCount, 1);
+    const allRepositories = (await (await owner.request("/api/sources")).json())
+      .repositories;
+    assert.equal(allRepositories.length, 2);
+    const engineeringImport = await viewer.request(
+      `/api/imported?source=${secondRepositoryBody.id}&path=operations.md`,
+    );
+    assert.equal(engineeringImport.status, 200);
+    assert.equal(
+      (await engineeringImport.json()).markdown,
+      "# Engineering operations\n",
+    );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/imported?source=repository&path=operations.md",
+      )).json()).markdown,
+      "# Operations v2\n",
+    );
+    assert.equal(
+      fga.tuples.some((tuple) =>
+        tuple.user === `space:imported-${secondRepositoryBody.id}` &&
+        tuple.relation === "parent" &&
+        tuple.object === `concept:${secondRepositoryBody.id}/operations`
+      ),
+      true,
+    );
+    const multipleSourceRun = await owner.request("/api/automation/run", {
+      method: "POST",
+    });
+    assert.equal(multipleSourceRun.status, 200, await multipleSourceRun.text());
+    const multipleSourceHistory = await (await owner.request("/api/automation"))
+      .json();
+    assert.deepEqual(
+      multipleSourceHistory.runs[0].attempts.filter(
+        (attempt: { job: string; status: string }) =>
+          attempt.job === "source_check" && attempt.status === "succeeded",
+      ).map((attempt: { sourceId: string }) => attempt.sourceId).sort(),
+      ["repository", secondRepositoryBody.id, "shared"].sort(),
+    );
 
     const audit = await (await owner.request("/api/audit")).json();
     assert.deepEqual(
