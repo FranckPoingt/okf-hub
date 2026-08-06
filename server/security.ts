@@ -212,6 +212,10 @@ export async function createSecurity({
     db.prepare(
       "INSERT INTO okf_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(key, value);
+  if (get("organization_id")) {
+    set(`openfga_hub_space:${SPACE}`, "1");
+    set(`openfga_hub_concept:${CONCEPT}`, "1");
+  }
   const audit = (actorUserId: string, action: string, target: string) =>
     db.prepare(
       "INSERT INTO okf_audit (occurredAt, actorUserId, action, target) VALUES (?, ?, ?, ?)",
@@ -265,10 +269,10 @@ export async function createSecurity({
     });
   }
 
-  async function check(
+  async function checkObject(
     userId: string,
     relation: "view" | "edit",
-    conceptId = CONCEPT,
+    object: string,
   ) {
     const { storeId, modelId } = await authorization();
     const result = await fga(`/stores/${storeId}/check`, {
@@ -277,12 +281,28 @@ export async function createSecurity({
         tuple_key: {
           user: `user:${userId}`,
           relation,
-          object: `concept:${conceptId}`,
+          object,
         },
         authorization_model_id: modelId,
       }),
     }) as Row;
     return result.allowed === true;
+  }
+
+  function check(
+    userId: string,
+    relation: "view" | "edit",
+    conceptId = CONCEPT,
+  ) {
+    return checkObject(userId, relation, `concept:${conceptId}`);
+  }
+
+  function checkSpace(
+    userId: string,
+    relation: "view" | "edit",
+    spaceId: string,
+  ) {
+    return checkObject(userId, relation, `space:${spaceId}`);
   }
 
   function member(userId: string) {
@@ -364,6 +384,8 @@ export async function createSecurity({
         object: `space:${IMPORTED_SPACE}`,
       },
     ]);
+    set(`openfga_hub_space:${SPACE}`, "1");
+    set(`openfga_hub_concept:${CONCEPT}`, "1");
     set("openfga_imported_space", "1");
     if (firstSetup) {
       audit(
@@ -372,6 +394,35 @@ export async function createSecurity({
         `organization:${organizationId}`,
       );
     }
+  }
+
+  async function ensureHubSpace(spaceId: string) {
+    const key = `openfga_hub_space:${spaceId}`;
+    if (get(key)) return;
+    const viewerTeamId = get("viewer_team_id");
+    if (!viewerTeamId) throw new Error("Finish organization setup first");
+    await writeTuples([{
+      user: `source:${SOURCE}`,
+      relation: "parent",
+      object: `space:${spaceId}`,
+    }, {
+      user: `group:${viewerTeamId}#member`,
+      relation: "viewer",
+      object: `space:${spaceId}`,
+    }]);
+    set(key, "1");
+  }
+
+  async function ensureHubConcept(conceptId: string, spaceId: string) {
+    const key = `openfga_hub_concept:${conceptId}`;
+    if (get(key)) return;
+    await ensureHubSpace(spaceId);
+    await writeTuples([{
+      user: `space:${spaceId}`,
+      relation: "parent",
+      object: `concept:${conceptId}`,
+    }]);
+    set(key, "1");
   }
 
   async function ensureImportedConcept(conceptId: string) {
@@ -556,9 +607,12 @@ export async function createSecurity({
     auth,
     session,
     check,
+    checkSpace,
     handle,
     isOwner,
     audit,
+    ensureHubSpace,
+    ensureHubConcept,
     ensureImportedConcept,
     close: () => db.close(),
   };

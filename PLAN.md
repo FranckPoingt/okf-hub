@@ -257,6 +257,21 @@ Each item is a thin vertical slice with UI, service behavior, persistence, and v
   - [x] The renderer blocks unsafe script/network capabilities by default.
   - [x] Artifact access, previews, and audit events follow OpenFGA decisions.
 
+### Epic 5 — General product model
+
+#### KH-13 — Support multiple hub-native spaces and concepts
+
+- **Type:** AFK
+- **Blocked by:** KH-05, KH-09, KH-12
+- **Status:** Multiple spaces and hub-native concepts delivered with isolated drafts, collaboration, lifecycle, artifacts, search, and inherited OpenFGA access.
+- **What to build:** Replace the single hardcoded policy proof with navigable spaces and independently managed hub-native concepts.
+- **Acceptance criteria:**
+  - [x] Editors can create spaces and concepts with explicit titles and types.
+  - [x] Each concept has isolated Markdown, Yjs state, revisions, lifecycle, and artifacts.
+  - [x] Navigation and search open the selected hub-native concept.
+  - [x] Every space and concept read or mutation follows its OpenFGA relationship.
+  - [x] Existing Incident communication data migrates without moving or resetting it.
+
 ## Development order
 
-KH-02 through KH-10 and KH-12 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.
+KH-02 through KH-10 and KH-12 through KH-13 are delivered. Enterprise identity (KH-11) remains deferred until a deployment needs SSO or directory sync.

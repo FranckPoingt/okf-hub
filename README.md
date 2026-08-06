@@ -22,9 +22,9 @@ This first installation uses single-node RustFS, which has no storage redundancy
 
 ## KH-04 organisation access
 
-Open `http://127.0.0.1:8788` and create the first account; it becomes the organisation owner. The owner can create local invitation links for Policy editors and Policy viewers under **Manage access**. Invitees use the invited email address, open the link, and accept membership in the corresponding Better Auth team.
+Open `http://127.0.0.1:8788` and create the first account; it becomes the organisation owner. The owner can create local invitation links for knowledge editors and viewers under **Manage access**. Invitees use the invited email address, open the link, and accept membership in the corresponding Better Auth team.
 
-OpenFGA grants editor access through the source-level editor group and viewer access through the Policies space viewer group. Direct concept reads, writes, listings, and collaboration sockets all enforce the same decision. The owner can inspect permission changes in the access panel audit trail.
+OpenFGA grants editor access through the source-level editor group and viewer access through space-level viewer relationships. Direct concept reads, writes, listings, and collaboration sockets all enforce the same decision. The owner can inspect permission changes in the access panel audit trail.
 
 ## KH-05 hub-native lifecycle
 
@@ -59,3 +59,9 @@ Each run also scans authorised imported concepts for broken internal Markdown li
 Editors can attach versioned inline HTML or HTTPS applications to a hub-native concept. Owners explicitly make a draft version live; viewers only receive live artifacts, and every artifact request inherits the concept's OpenFGA access decision. Artifacts remain separate from portable Markdown.
 
 Inline HTML runs in an `allow-scripts` iframe with network, nested frames, objects, forms, and top-level navigation blocked. HTTPS applications must use an exact hostname listed in the comma-separated `OKF_ARTIFACT_ALLOWED_HOSTS` setting; leaving it empty disables URL artifacts.
+
+## KH-13 spaces and documents
+
+Editors can create knowledge spaces and hub-native documents from **Spaces → New**. Each document has its own Markdown draft, Yjs collaboration state, publication history, lifecycle, and interactive artifacts. Search results and sidebar navigation open the selected document.
+
+OpenFGA links each concept to its space and each space to the hub source. Editors inherit edit access from the source; viewers inherit view access from each space and only see published, active concepts. Existing Incident communication files remain at their original paths during migration.

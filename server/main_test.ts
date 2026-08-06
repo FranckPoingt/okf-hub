@@ -22,7 +22,7 @@ function fakeOpenFga() {
       return new Response(null, { status: 204 });
     }
     if (url.pathname.endsWith("/check")) {
-      const { user, relation } = body.tuple_key;
+      const { user, relation, object } = body.tuple_key;
       const has = (candidate: Partial<Tuple>) =>
         tuples.some((tuple) =>
           Object.entries(candidate).every(([key, value]) =>
@@ -40,10 +40,17 @@ function fakeOpenFga() {
         tuple.relation === "editor" && tuple.object === "source:company" &&
         memberOf(tuple.user)
       );
-      const viewer = tuples.some((tuple) =>
-        tuple.relation === "viewer" && tuple.object === "space:policies" &&
-        memberOf(tuple.user)
-      );
+      const viewedSpace = object.startsWith("space:")
+        ? object
+        : tuples.find((tuple) =>
+          tuple.relation === "parent" && tuple.object === object &&
+          tuple.user.startsWith("space:")
+        )?.user;
+      const viewer = Boolean(viewedSpace) &&
+        tuples.some((tuple) =>
+          tuple.relation === "viewer" && tuple.object === viewedSpace &&
+          memberOf(tuple.user)
+        );
       return Response.json({
         allowed: owner || editor || (relation === "view" && viewer),
       });
@@ -124,6 +131,26 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
       [{ sourceId: "repository", path: "bad.md" }],
     );
     migrated.close();
+  } finally {
+    await app.close();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
+Deno.test("keeps the legacy hub document in the Policies space", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const path = `${dataDir}/incident-communication.md`;
+  await Deno.writeTextFile(path, "# Existing policy\n");
+  const app = await createCollabApp({ dataDir });
+  try {
+    const db = new DatabaseSync(`${dataDir}/hub.db`);
+    assert.deepEqual({
+      ...db.prepare(
+        "SELECT id, spaceId FROM okf_concept WHERE id = 'incident-communication'",
+      ).get(),
+    }, { id: "incident-communication", spaceId: "policies" });
+    db.close();
+    assert.equal(await Deno.readTextFile(path), "# Existing policy\n");
   } finally {
     await app.close();
     await Deno.remove(dataDir, { recursive: true });
@@ -915,6 +942,98 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       fga.tuples.filter((tuple) => tuple.relation === "member").length,
       2,
     );
+    assert.equal(
+      (await viewer.request("/api/spaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Onboarding" }),
+      })).status,
+      403,
+    );
+    const onboarding = await editor.request("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "Onboarding" }),
+    });
+    assert.equal(onboarding.status, 201, await onboarding.text());
+    const onboardingSpace = await (await editor.request("/api/spaces")).json();
+    assert.equal(
+      onboardingSpace.find((item: { id: string }) => item.id === "onboarding")
+        .count,
+      0,
+    );
+    const starter = await editor.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        spaceId: "onboarding",
+        title: "New starter guide",
+        type: "Guide",
+      }),
+    });
+    assert.equal(starter.status, 201, await starter.text());
+    const starterBody = await (await editor.request(
+      "/api/concepts/new-starter-guide",
+    )).json();
+    assert.equal(starterBody.space, "Onboarding");
+    assert.equal(starterBody.draft, "# New starter guide\n");
+    assert.equal(
+      (await viewer.request("/api/concepts/new-starter-guide")).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/new-starter-guide", {
+        method: "PUT",
+        body: "# Welcome aboard\n",
+      })).status,
+      204,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/new-starter-guide/publish", {
+        method: "POST",
+        body: JSON.stringify({ markdown: "# Welcome aboard\n" }),
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await (await viewer.request("/api/concepts/new-starter-guide")).json())
+        .published,
+      "# Welcome aboard\n",
+    );
+    const starterArtifact = await editor.request("/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "new-starter-guide",
+        title: "First-week checklist",
+        type: "inline_html",
+        content: "<button>Done</button>",
+      }),
+    });
+    assert.equal(starterArtifact.status, 201, await starterArtifact.text());
+    const starterArtifactId = (await (await editor.request(
+      "/api/artifacts?conceptId=new-starter-guide",
+    )).json()).artifacts[0].id;
+    assert.equal(
+      (await owner.request(`/api/artifacts/${starterArtifactId}/publish`, {
+        method: "POST",
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/artifacts?conceptId=new-starter-guide",
+      )).json()).artifacts[0].title,
+      "First-week checklist",
+    );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/concepts/incident-communication",
+      )).json()).published,
+      "# Second published revision\n",
+    );
+    assert.equal(
+      (await (await viewer.request("/api/spaces")).json()).find(
+        (item: { id: string }) => item.id === "onboarding",
+      ).count,
+      1,
+    );
 
     const audit = await (await owner.request("/api/audit")).json();
     assert.deepEqual(
@@ -922,15 +1041,20 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       [
         "artifact.created",
         "artifact.created",
+        "artifact.created",
+        "artifact.published",
         "artifact.published",
         "artifact.published",
         "artifact.published",
         "artifact.revised",
+        "concept.created",
+        "concept.created",
         "invitation.accepted",
         "invitation.accepted",
         "invitation.created",
         "invitation.created",
         "organization.created",
+        "space.created",
       ],
     );
   } finally {

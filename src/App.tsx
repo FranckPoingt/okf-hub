@@ -19,7 +19,7 @@ import {
 const SERVICE = globalThis.location.port === "8788"
   ? globalThis.location.origin
   : "http://127.0.0.1:8788";
-const CONCEPT_PATH = "/api/concepts/incident-communication";
+const conceptPath = (id: string) => `/api/concepts/${encodeURIComponent(id)}`;
 const PROFILE_MARKERS = [
   "- [x]",
   "| Severity",
@@ -53,6 +53,8 @@ type Revision = {
 };
 type Concept = {
   id: string;
+  spaceId: string;
+  space: string;
   title: string;
   type: string;
   status: "active" | "archived";
@@ -62,6 +64,7 @@ type Concept = {
   published: string | null;
   revisions: Revision[];
 };
+type Space = { id: string; name: string; count: number };
 type SourceIssue = {
   path: string;
   status: "invalid" | "deleted" | "renamed";
@@ -342,7 +345,7 @@ function AccessGate(
         <h1>{invited ? "Accept your invitation" : "Access not granted"}</h1>
         <p>
           {invited
-            ? "This invitation adds you to the group that controls the Policies space."
+            ? "This invitation adds you to the group that can view or edit hub knowledge spaces."
             : "Ask the organisation owner for an editor or viewer invitation."}
         </p>
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -417,8 +420,8 @@ function AccessPanel({ invitations }: { invitations: Invitation[] }) {
             onChange={(event) =>
               setAccess(event.target.value as "editor" | "viewer")}
           >
-            <option value="editor">Policy editor</option>
-            <option value="viewer">Policy viewer</option>
+            <option value="editor">Knowledge editor</option>
+            <option value="viewer">Knowledge viewer</option>
           </select>
         </label>
         <button className="primary" type="submit">Create invite link</button>
@@ -475,7 +478,16 @@ function DocumentPreview({ markdown }: { markdown: string }) {
 }
 
 function EditorSurface(
-  { initialMarkdown, user, canEdit, onMarkdown, onStatus, onCollaborators }: {
+  {
+    conceptId,
+    initialMarkdown,
+    user,
+    canEdit,
+    onMarkdown,
+    onStatus,
+    onCollaborators,
+  }: {
+    conceptId: string;
     initialMarkdown: string;
     user: Collaborator;
     canEdit: boolean;
@@ -487,7 +499,9 @@ function EditorSurface(
   useEditor((root) => {
     const doc = new Y.Doc();
     const provider = new DenoCollabProvider(
-      `${SERVICE.replace("http", "ws")}/collab`,
+      `${SERVICE.replace("http", "ws")}/collab?conceptId=${
+        encodeURIComponent(conceptId)
+      }`,
       doc,
       user,
       onStatus,
@@ -534,7 +548,7 @@ function EditorSurface(
       }
     };
     return crepe;
-  }, [initialMarkdown, user.name, canEdit]);
+  }, [conceptId, initialMarkdown, user.name, canEdit]);
   return <Milkdown />;
 }
 
@@ -1202,7 +1216,7 @@ function ArtifactPanel(
 
 function SearchPanel(
   { onOpenHub, onOpenImported }: {
-    onOpenHub: () => void;
+    onOpenHub: (id: string) => void;
     onOpenImported: (
       sourceId: "repository" | "shared",
       path: string,
@@ -1243,7 +1257,7 @@ function SearchPanel(
     void load(params);
   };
   const open = (item: SearchRelationship) => {
-    if (item.kind === "hub-native") return onOpenHub();
+    if (item.kind === "hub-native") return onOpenHub(item.id);
     if (item.sourceId !== "hub" && item.path) {
       void onOpenImported(item.sourceId, item.path);
     }
@@ -1383,11 +1397,69 @@ function SearchPanel(
   );
 }
 
+function HubCreatePanel(
+  { spaces, busy, error, onCreateSpace, onCreateConcept, onCancel }: {
+    spaces: Space[];
+    busy: boolean;
+    error: string;
+    onCreateSpace: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+    onCreateConcept: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+    onCancel: () => void;
+  },
+) {
+  return (
+    <section className="hub-create-panel">
+      <div className="source-page-heading">
+        <p className="eyebrow">Hub-native knowledge</p>
+        <h1>Create knowledge</h1>
+        <p>Documents inherit access from their space.</p>
+      </div>
+      <form onSubmit={(event) => void onCreateConcept(event)}>
+        <h2>New document</h2>
+        <label>
+          Title
+          <input name="title" maxLength={100} required autoFocus />
+        </label>
+        <label>
+          Type
+          <input name="type" maxLength={50} defaultValue="Policy" required />
+        </label>
+        <label>
+          Space
+          <select name="spaceId" required>
+            {spaces.map((space) => (
+              <option key={space.id} value={space.id}>{space.name}</option>
+            ))}
+          </select>
+        </label>
+        <button className="primary" type="submit" disabled={busy}>
+          Create document
+        </button>
+      </form>
+      <form onSubmit={(event) => void onCreateSpace(event)}>
+        <h2>New space</h2>
+        <label>
+          Name
+          <input name="name" maxLength={60} required />
+        </label>
+        <button type="submit" disabled={busy}>Create space</button>
+      </form>
+      {error && <p className="source-error" role="alert">{error}</p>}
+      <button className="text-button" type="button" onClick={onCancel}>
+        Cancel
+      </button>
+    </section>
+  );
+}
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [fatal, setFatal] = useState("");
   const [concept, setConcept] = useState<Concept | null>(null);
+  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [conceptLoaded, setConceptLoaded] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -1438,6 +1510,38 @@ export default function App() {
     setSharedSource(sources.shared);
     setImports(await importsResponse.json());
   }, []);
+  const openHubConcept = useCallback(async (id: string) => {
+    setConceptLoaded(false);
+    const response = await api(conceptPath(id));
+    const result = await response.json() as Concept & { error?: string };
+    if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
+    setConcept(result);
+    const content = bootstrap?.canEdit ? result.draft : result.published;
+    setInitialMarkdown(content ?? null);
+    setMarkdown(content ?? "");
+    setView(bootstrap?.canEdit ? "draft" : "published");
+    setEditorVersion((current) => current + 1);
+    setConceptLoaded(true);
+    setCreateOpen(false);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setAccessOpen(false);
+  }, [bootstrap?.canEdit]);
+  const refreshHubLists = useCallback(async () => {
+    const [spacesResponse, conceptsResponse] = await Promise.all([
+      api("/api/spaces"),
+      api(`/api/concepts${bootstrap?.canEdit ? "?include=archived" : ""}`),
+    ]);
+    if (!spacesResponse.ok || !conceptsResponse.ok) {
+      throw new Error("Hub-native knowledge unavailable");
+    }
+    const nextSpaces = await spacesResponse.json() as Space[];
+    const nextConcepts = await conceptsResponse.json() as Concept[];
+    setSpaces(nextSpaces);
+    setConcepts(nextConcepts);
+    return nextConcepts;
+  }, [bootstrap?.canEdit]);
 
   useEffect(() => {
     refresh().catch((error) => setFatal(error.message));
@@ -1446,30 +1550,17 @@ export default function App() {
     if (!bootstrap?.canView) return;
     const load = async () => {
       setConceptLoaded(false);
-      let response = await api("/api/concepts");
-      let concepts = await response.json() as Concept[];
-      if (!concepts.length && bootstrap.canEdit) {
-        response = await api("/api/concepts?include=archived");
-        concepts = await response.json();
-      }
-      if (!concepts.length) {
+      const nextConcepts = await refreshHubLists();
+      if (!nextConcepts.length) {
         setConcept(null);
         setInitialMarkdown(null);
         setConceptLoaded(true);
         return;
       }
-      response = await api(CONCEPT_PATH);
-      const result = await response.json() as Concept & { error?: string };
-      if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
-      setConcept(result);
-      const content = bootstrap.canEdit ? result.draft : result.published;
-      setInitialMarkdown(content ?? null);
-      setMarkdown(content ?? "");
-      setView(bootstrap.canEdit ? "draft" : "published");
-      setConceptLoaded(true);
+      await openHubConcept(nextConcepts[0].id);
     };
     load().catch((error) => setFatal(error.message));
-  }, [bootstrap?.canView, bootstrap?.canEdit]);
+  }, [bootstrap?.canView, openHubConcept, refreshHubLists]);
   useEffect(() => {
     if (!bootstrap?.canView) return;
     loadSources().catch((error) => setSourceError(error.message));
@@ -1479,6 +1570,8 @@ export default function App() {
     void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
       setBootstrap({ user: null });
       setConcept(null);
+      setConcepts([]);
+      setSpaces([]);
       setConceptLoaded(false);
       setInitialMarkdown(null);
       setSource(null);
@@ -1489,12 +1582,12 @@ export default function App() {
     });
   };
   const saveMarkdown = useCallback((content: string) => {
-    if (!bootstrap?.canEdit) return;
+    if (!bootstrap?.canEdit || !concept) return;
     setMarkdown(content);
     setSaveState("saving");
     if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
     saveTimer.current = globalThis.setTimeout(() => {
-      api(CONCEPT_PATH, {
+      api(conceptPath(concept.id), {
         method: "PUT",
         body: content,
         headers: { "content-type": "text/markdown; charset=utf-8" },
@@ -1503,13 +1596,14 @@ export default function App() {
         setSaveState("saved");
       }).catch(() => setSaveState("failed"));
     }, 300);
-  }, [bootstrap?.canEdit]);
+  }, [bootstrap?.canEdit, concept]);
 
   const lifecycle = async (path: string, body?: unknown) => {
+    if (!concept) return null;
     setActionBusy(true);
     setActionError("");
     if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
-    const response = await api(`${CONCEPT_PATH}/${path}`, {
+    const response = await api(`${conceptPath(concept.id)}/${path}`, {
       method: "POST",
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -1520,20 +1614,45 @@ export default function App() {
       return null;
     }
     setConcept(result);
+    await refreshHubLists().catch(() => {});
     return result;
   };
 
-  const createConcept = async () => {
+  const createSpace = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const name = String(new FormData(form).get("name") ?? "");
     setActionBusy(true);
     setActionError("");
-    const response = await api("/api/concepts", { method: "POST" });
+    const response = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    const result = await response.json() as Space & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) return setActionError(result.error ?? "Creation failed");
+    form.reset();
+    await refreshHubLists();
+  };
+
+  const createConcept = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    setActionBusy(true);
+    setActionError("");
+    const response = await api("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        title: fields.get("title"),
+        type: fields.get("type"),
+        spaceId: fields.get("spaceId"),
+      }),
+    });
     const result = await response.json() as Concept & { error?: string };
     setActionBusy(false);
     if (!response.ok) return setActionError(result.error ?? "Creation failed");
-    setConcept(result);
-    setInitialMarkdown(result.draft);
-    setMarkdown(result.draft ?? "");
-    setConceptLoaded(true);
+    await refreshHubLists();
+    await openHubConcept(result.id);
   };
 
   const publish = async () => {
@@ -1645,10 +1764,14 @@ export default function App() {
     setAccessOpen(false);
   };
 
-  const showHubConcept = () => {
+  const showHubConcept = (id?: string) => {
     setImported(null);
     setSourceOpen(false);
     setSearchOpen(false);
+    setCreateOpen(false);
+    if (id && id !== concept?.id) {
+      void openHubConcept(id).catch((error) => setActionError(error.message));
+    }
   };
 
   if (fatal) {
@@ -1724,7 +1847,7 @@ export default function App() {
           }}
         >
           {imported || sourceOpen || searchOpen
-            ? "Policies"
+            ? concept?.space ?? "Knowledge"
             : `Sources (${imports.length})`}
         </button>
         <div className="document-title">
@@ -1733,7 +1856,7 @@ export default function App() {
               ? "Company knowledge /"
               : imported
               ? `${importedSourceLabel} /`
-              : "Policies /"}
+              : `${concept?.space ?? "Hub-native knowledge"} /`}
           </small>
           <strong>
             {searchOpen
@@ -1798,16 +1921,52 @@ export default function App() {
             ⌂ <span>Home</span>
           </button>
         </nav>
-        <p className="section-label spaces-label">Spaces</p>
-        <nav className="space-nav">
-          <button
-            type="button"
-            className={!imported && !sourceOpen && !searchOpen ? "active" : ""}
-            onClick={showHubConcept}
-          >
-            <i className="space-dot coral" /> <span>Policies</span>
-            <b>{concept?.status === "active" ? 1 : 0}</b>
-          </button>
+        <div className="spaces-heading">
+          <p className="section-label spaces-label">Spaces</p>
+          {bootstrap.canEdit && (
+            <button
+              type="button"
+              onClick={() => {
+                setCreateOpen(true);
+                setImported(null);
+                setSourceOpen(false);
+                setSearchOpen(false);
+                setAccessOpen(false);
+              }}
+            >
+              New
+            </button>
+          )}
+        </div>
+        <div className="space-list">
+          {spaces.map((item, index) => (
+            <section key={item.id}>
+              <p>
+                <i className={`space-dot ${index % 2 ? "gold" : "coral"}`} />
+                <span>{item.name}</span>
+                <b>{item.count}</b>
+              </p>
+              <nav className="concept-nav">
+                {concepts.filter((candidate) => candidate.spaceId === item.id)
+                  .map((candidate) => (
+                    <button
+                      type="button"
+                      className={!imported && !sourceOpen && !searchOpen &&
+                          !createOpen && concept?.id === candidate.id
+                        ? "active"
+                        : ""}
+                      key={candidate.id}
+                      onClick={() => showHubConcept(candidate.id)}
+                    >
+                      <span>{candidate.title}</span>
+                      {candidate.status === "archived" && <b>Archived</b>}
+                    </button>
+                  ))}
+              </nav>
+            </section>
+          ))}
+        </div>
+        <nav className="space-nav sources-nav">
           <button
             type="button"
             className={!searchOpen && (imported || sourceOpen) ? "active" : ""}
@@ -1871,7 +2030,18 @@ export default function App() {
         {accessOpen && bootstrap.access === "owner" && (
           <AccessPanel invitations={bootstrap.invitations ?? []} />
         )}
-        {searchOpen
+        {createOpen && bootstrap.canEdit
+          ? (
+            <HubCreatePanel
+              spaces={spaces}
+              busy={actionBusy}
+              error={actionError}
+              onCreateSpace={createSpace}
+              onCreateConcept={createConcept}
+              onCancel={() => setCreateOpen(false)}
+            />
+          )
+          : searchOpen
           ? (
             <SearchPanel
               onOpenHub={showHubConcept}
@@ -1960,21 +2130,21 @@ export default function App() {
           : !concept
           ? (
             <section className="empty-state">
-              <p className="eyebrow">Policies</p>
+              <p className="eyebrow">Hub-native knowledge</p>
               <h1>No published knowledge yet</h1>
               <p>
                 {bootstrap.canEdit
-                  ? "Create the first hub-native concept and start writing visually."
-                  : "An editor has not published a policy yet."}
+                  ? "Create the first document and start writing visually."
+                  : "An editor has not published a document yet."}
               </p>
               {bootstrap.canEdit && (
                 <button
                   className="primary"
                   type="button"
                   disabled={actionBusy}
-                  onClick={() => void createConcept()}
+                  onClick={() => setCreateOpen(true)}
                 >
-                  Create incident communication
+                  Create document
                 </button>
               )}
               {actionError && <p className="form-error">{actionError}</p>}
@@ -1982,7 +2152,7 @@ export default function App() {
           )
           : (
             <MilkdownProvider
-              key={`${concept.status}-${view}-${editorVersion}`}
+              key={`${concept.id}-${concept.status}-${view}-${editorVersion}`}
             >
               <div className="workspace-bar">
                 <div
@@ -2124,6 +2294,7 @@ export default function App() {
                       </div>
                       <EditorSurface
                         key={editorVersion}
+                        conceptId={concept.id}
                         initialMarkdown={initialMarkdown}
                         user={user}
                         canEdit
