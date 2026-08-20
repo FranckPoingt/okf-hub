@@ -21,6 +21,25 @@ Deno.test("versions reviewed artifacts and enforces the rendering contract", () 
     assert.match(created.document ?? "", /connect-src 'none'/);
     assert.match(created.document ?? "", /frame-src 'none'/);
     assert.match(created.document ?? "", /form-action 'none'/);
+    assert.match(created.document ?? "", /window\.okf=/);
+    assert.deepEqual(created.grants, ["app.data.*"]);
+
+    const saved = store.data.set(
+      created.id,
+      "editor",
+      "notes",
+      "first",
+      { text: "Hi" },
+    );
+    assert.deepEqual(saved.value, { text: "Hi" });
+    assert.match(saved.updatedAt, /^\d{4}-/);
+    assert.deepEqual(
+      store.data.get(created.id, "editor", "notes", "first")?.value,
+      {
+        text: "Hi",
+      },
+    );
+    assert.deepEqual(store.data.list(created.id, "viewer", "notes"), []);
 
     const live = store.publish(created.id, "owner")!;
     assert.equal(live.status, "live");
@@ -61,6 +80,52 @@ Deno.test("versions reviewed artifacts and enforces the rendering contract", () 
       actorUserId: "editor",
     })!;
     assert.equal(url.url, "https://apps.example.com/status");
+
+    const bundleContent = `okf-bundle-v1:${
+      JSON.stringify({
+        entry: "index.html",
+        files: [
+          {
+            path: "index.html",
+            type: "text/html",
+            data: `data:text/html;base64,${
+              btoa('<h1>Bundle app</h1><script src="app.js"></script>')
+            }`,
+          },
+          {
+            path: "app.js",
+            type: "text/javascript",
+            data: `data:text/javascript;base64,${
+              btoa("document.body.dataset.ready='yes'")
+            }`,
+          },
+        ],
+      })
+    }`;
+    const bundle = store.create({
+      conceptId: "policy",
+      title: "Bundle app",
+      type: "inline_html",
+      content: bundleContent,
+      actorUserId: "editor",
+    })!;
+    assert.deepEqual(bundle.bundle, {
+      entry: "index.html",
+      files: ["index.html", "app.js"],
+    });
+    assert.equal(bundle.document, undefined);
+    assert.equal(store.file(bundle.id, "", false), null);
+    store.publish(bundle.id, "owner");
+    const entry = store.file(bundle.id, "", false)!;
+    assert.equal(entry.type, "text/html; charset=utf-8");
+    const entryText = new TextDecoder().decode(entry.body);
+    assert.match(entryText, /Bundle app/);
+    assert.match(entryText, /connect-src 'none'/);
+    assert.match(entryText, /window\.okf=/);
+    assert.equal(
+      new TextDecoder().decode(store.file(bundle.id, "app.js", false)!.body),
+      "document.body.dataset.ready='yes'",
+    );
   } finally {
     db.close();
   }

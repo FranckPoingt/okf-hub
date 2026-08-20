@@ -73,13 +73,17 @@ services:
       BETTER_AUTH_TELEMETRY: "0"
       BETTER_AUTH_TELEMETRY_DEBUG: "0"
       BETTER_AUTH_TELEMETRY_ENDPOINT: ""
-      BETTER_AUTH_TRUSTED_ORIGINS: ""
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       OKF_AUTH_SECRET: ${OKF_AUTH_SECRET:?missing OKF_AUTH_SECRET}
-      OKF_AUTOMATION_INTERVAL_MS: "900000"
+      OKF_AUTOMATION_INTERVAL_MS: "21600000"
       OKF_ARTIFACT_ALLOWED_HOSTS: ${OKF_ARTIFACT_ALLOWED_HOSTS:-}
-      OKF_BASE_URL: http://127.0.0.1:8788
+      OKF_BASE_URL: ${OKF_BASE_URL:-http://localhost:8788}
       OKF_DATA_DIR: /data
       OKF_HOST: 0.0.0.0
+      OKF_GITHUB_APP_ID: ${OKF_GITHUB_APP_ID:-}
+      OKF_GITHUB_APP_SLUG: ${OKF_GITHUB_APP_SLUG:-}
+      OKF_GITHUB_PRIVATE_KEY: ${OKF_GITHUB_PRIVATE_KEY:-}
+      OKF_GITHUB_WEBHOOK_SECRET: ${OKF_GITHUB_WEBHOOK_SECRET:-}
       OKF_OPENFGA_KEY: ${OKF_OPENFGA_KEY:?missing OKF_OPENFGA_KEY}
       OKF_OPENFGA_URL: http://openfga:8080
       OKF_PORT: "8788"
@@ -87,6 +91,7 @@ services:
       OKF_S3_BUCKET: okf-hub
       OKF_S3_ENDPOINT: http://rustfs:9000
       OKF_S3_SECRET_KEY: ${OKF_S3_SECRET_KEY:?missing OKF_S3_SECRET_KEY}
+      OKF_SSO_CONFIG_FILE: ${OKF_SSO_CONFIG_FILE:-}
       OKF_STATIC_DIR: /app/dist
       NODE_ENV: production
       NODE_DISABLE_COLORS: "1"
@@ -103,10 +108,11 @@ services:
       timeout: 3s
       retries: 12
     ports:
-      - "127.0.0.1:8788:8788"
+      - "${OKF_APP_BIND:-127.0.0.1:8788:8788}"
     restart: unless-stopped
     volumes:
       - app_data:/data
+      - ./config:/config:ro
 
   backup:
     image: alpine:3.23.3

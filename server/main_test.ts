@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
-import type { RepositoryCredentials } from "./repository-source.ts";
+import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
+import { parseSSOConfig } from "./sso-config.ts";
 
 type Tuple = { user: string; relation: string; object: string };
 
@@ -54,9 +55,16 @@ function fakeOpenFga() {
           tuple.relation === "parent" && tuple.object === object &&
           tuple.user.startsWith("space:")
         )?.user;
+      const parentSource = viewedSpace
+        ? tuples.find((tuple) =>
+          tuple.relation === "parent" && tuple.object === viewedSpace &&
+          tuple.user.startsWith("source:")
+        )?.user
+        : undefined;
       const viewer = Boolean(viewedSpace) &&
         tuples.some((tuple) =>
-          tuple.relation === "viewer" && tuple.object === viewedSpace &&
+          tuple.relation === "viewer" &&
+          (tuple.object === viewedSpace || tuple.object === parentSource) &&
           memberOf(tuple.user)
         );
       return Response.json({
@@ -88,13 +96,45 @@ class Client {
     return response;
   }
 
-  async signUp(name: string, email: string) {
+  async signUp(name: string, email: string, invitationId?: string) {
     const response = await this.request("/api/auth/sign-up/email", {
       method: "POST",
-      body: JSON.stringify({ name, email, password: "password123" }),
+      body: JSON.stringify({
+        name,
+        email,
+        password: "password123",
+        invitationId,
+      }),
     });
     assert.equal(response.status, 200, await response.text());
   }
+}
+
+async function archiveEntries(response: Response) {
+  const raw = new Uint8Array(await response.arrayBuffer());
+  const view = new DataView(raw.buffer);
+  const decoder = new TextDecoder();
+  const entries = new Map<string, Uint8Array>();
+  for (let offset = 0; view.getUint32(offset, true) === 0x04034b50;) {
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const name = decoder.decode(
+      raw.subarray(offset + 30, offset + 30 + nameLength),
+    );
+    const bodyOffset = offset + 30 + nameLength + extraLength;
+    const compressed = raw.slice(bodyOffset, bodyOffset + compressedSize);
+    const body = new Uint8Array(
+      await new Response(
+        new Blob([compressed]).stream().pipeThrough(
+          new DecompressionStream("deflate-raw"),
+        ),
+      ).arrayBuffer(),
+    );
+    entries.set(name, body);
+    offset = bodyOffset + compressedSize;
+  }
+  return entries;
 }
 
 Deno.test("migrates repository imports to source-scoped paths", async () => {
@@ -114,8 +154,17 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
       nextPath TEXT
     );
     CREATE TABLE okf_import_issue (path TEXT PRIMARY KEY, error TEXT NOT NULL);
+    CREATE TABLE okf_imported_revision (
+      conceptId TEXT NOT NULL,
+      sourceRevision TEXT NOT NULL,
+      objectKey TEXT NOT NULL,
+      importedAt TEXT NOT NULL,
+      PRIMARY KEY (conceptId, sourceRevision)
+    );
     INSERT INTO okf_imported_concept VALUES
-      ('repository/guide', 'guide.md', 'Guide', 'Guide', 'current', 'old.md', 'commit', 'hash', '2026-01-01', NULL);
+      ('repository/guide', 'guide.md', 'Guide', 'Guide', 'current', 'old.md', 'commit', 'hash', '2026-01-02', NULL);
+    INSERT INTO okf_imported_revision VALUES
+      ('repository/guide', 'commit', 'old.md', '2026-01-01');
     INSERT INTO okf_import_issue VALUES ('bad.md', 'Invalid');
   `);
   legacy.close();
@@ -129,9 +178,15 @@ Deno.test("migrates repository imports to source-scoped paths", async () => {
     );
     assert.equal(
       (migrated.prepare(
-        "SELECT searchText FROM okf_imported_concept",
-      ).get() as { searchText: string }).searchText,
+        "SELECT searchText, importedAt FROM okf_imported_concept",
+      ).get() as { searchText: string; importedAt: string }).searchText,
       "guide guide",
+    );
+    assert.equal(
+      (migrated.prepare(
+        "SELECT importedAt FROM okf_imported_concept",
+      ).get() as { importedAt: string }).importedAt,
+      "2026-01-01",
     );
     assert.deepEqual(
       migrated.prepare("SELECT sourceId, path FROM okf_import_issue").all()
@@ -219,6 +274,13 @@ Deno.test("migrates fixed source constraints for multiple repositories", async (
       ).get() as { intent: string }).intent,
       "canonical",
     );
+    assert.equal(
+      (migrated.prepare(
+        "SELECT automationIntervalMinutes FROM okf_repository_source WHERE id = 'repository'",
+      ).get() as { automationIntervalMinutes: number })
+        .automationIntervalMinutes,
+      360,
+    );
     migrated.prepare(
       "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status) VALUES ('repository-second', 'https://example.com/second.git', 'okf', 'syncing')",
     ).run();
@@ -257,15 +319,65 @@ Deno.test("keeps the legacy hub document in the Policies space", async () => {
   }
 });
 
+Deno.test("shares local sessions with the HMR subdomain", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const app = await createCollabApp({
+    dataDir,
+    baseURL: "http://okf-hub.localhost",
+    trustedOrigins: ["http://dev.okf-hub.localhost"],
+    authSecret: "a-secure-test-secret-with-at-least-32-characters",
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${
+        (server.addr as Deno.NetAddr).port
+      }/api/auth/sign-up/email`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://dev.okf-hub.localhost",
+        },
+        body: JSON.stringify({
+          name: "Dev owner",
+          email: "dev-owner@example.com",
+          password: "password123",
+        }),
+      },
+    );
+    assert.equal(response.status, 200, await response.text());
+    assert.match(
+      response.headers.get("set-cookie") ?? "",
+      /Domain=okf-hub\.localhost/i,
+    );
+  } finally {
+    await server.shutdown();
+    await app.close();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("runs scheduled checks and records their history", async () => {
   const dataDir = await Deno.makeTempDir();
-  const app = await createCollabApp({ dataDir, automationIntervalMs: 10 });
+  const app = await createCollabApp({
+    dataDir,
+    automationIntervalMs: 10,
+    repositorySync: () =>
+      Promise.resolve({ revision: "scheduled", files: [], issues: [] }),
+  });
   try {
     const db = new DatabaseSync(`${dataDir}/hub.db`);
     db.exec("PRAGMA foreign_keys=OFF");
     db.prepare(
       "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', ?)",
     ).run("member", "organization", "owner", new Date().toISOString());
+    db.prepare(
+      "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status, automationIntervalMinutes) VALUES ('repository', 'https://example.com/knowledge.git', 'okf', 'current', 1)",
+    ).run();
     db.close();
     await new Promise((resolve) => setTimeout(resolve, 35));
     await app.close();
@@ -277,11 +389,11 @@ Deno.test("runs scheduled checks and records their history", async () => {
       trigger: "scheduled",
       status: "succeeded",
     });
-    assert.equal(
-      (history.prepare(
-        "SELECT job FROM okf_automation_attempt WHERE runId = 1",
-      ).get() as { job: string }).job,
-      "broken_links",
+    assert.deepEqual(
+      history.prepare(
+        "SELECT job FROM okf_automation_attempt WHERE runId = 1 ORDER BY id",
+      ).all().map((row) => (row as { job: string }).job),
+      ["source_check", "broken_links"],
     );
     history.close();
   } finally {
@@ -305,6 +417,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   let repositoryCredentials: RepositoryCredentials | undefined;
   let sharedSyncs = 0;
   let sharedConfig: Record<string, string> | undefined;
+  let notionConfig: Record<string, string> | undefined;
   const imported = (
     path: string,
     title: string,
@@ -354,7 +467,54 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     },
     automationIntervalMs: 0,
     allowedArtifactHosts: ["apps.example.com"],
+    ssoProviders: await parseSSOConfig(
+      JSON.stringify({
+        providers: [{
+          name: "Company SSO",
+          providerId: "company-oidc",
+          domain: "example.com",
+          oidcConfig: {
+            issuer: "https://login.example.com",
+            clientId: "client-id",
+            clientSecret: "client-secret",
+          },
+        }],
+      }),
+      "http://127.0.0.1:8788",
+    ),
+    githubApp: {
+      slug: "okf-hub",
+      installUrl: "https://github.com/apps/okf-hub/installations/new",
+      repositories: () =>
+        Promise.resolve([{
+          id: 77,
+          fullName: "acme/knowledge",
+          cloneUrl: "https://github.com/acme/knowledge.git",
+          defaultBranch: "main",
+          private: true,
+        }]),
+      folders: () => Promise.resolve([".", "okf"]),
+      credentials: () =>
+        Promise.resolve({
+          username: "x-access-token",
+          token: "installation-token",
+        }),
+      verify: (_body, signature) => signature === "valid-signature",
+    },
     repositorySync(_checkout, repositoryUrl, _folder, credentials) {
+      if (repositoryUrl.includes("github.com/acme")) {
+        repositoryCredentials = credentials;
+        return Promise.resolve({
+          revision: "github-one",
+          files: [imported(
+            "github.md",
+            "GitHub knowledge",
+            "# GitHub knowledge\n",
+            "github-one",
+          )],
+          issues: [],
+        });
+      }
       if (repositoryUrl.includes("engineering")) {
         return Promise.resolve({
           revision: "engineering-one",
@@ -439,6 +599,20 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         issues: [{ path: "bad.md", error: "Missing YAML frontmatter" }],
       });
     },
+    notionSourceSync(config) {
+      notionConfig = config;
+      return Promise.resolve({
+        revision: "notion-one",
+        files: [imported(
+          "notion-page.md",
+          "Notion handbook",
+          "# Notion handbook\n",
+          "notion-page",
+          { owner: "Notion workspace" },
+        )],
+        issues: [],
+      });
+    },
   });
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0, onListen() {} },
@@ -449,21 +623,110 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   const editor = new Client(base);
   const viewer = new Client(base);
   const outsider = new Client(base);
+  const blocked = new Client(base);
 
   try {
+    const patchPreflight = await fetch(
+      `${base}/api/comment-threads/example`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://127.0.0.1:3000",
+          "access-control-request-method": "PATCH",
+        },
+      },
+    );
+    assert.equal(patchPreflight.status, 204);
+    assert.match(
+      patchPreflight.headers.get("access-control-allow-methods") ?? "",
+      /PATCH/,
+    );
+    const portlessPreflight = await fetch(
+      `${base}/api/comment-threads/example`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://feature.dev.okf-hub.localhost",
+          "access-control-request-method": "PATCH",
+        },
+      },
+    );
+    assert.equal(portlessPreflight.status, 204);
+    assert.equal(
+      (await fetch(`${base}/api/comment-threads/example`, {
+        method: "OPTIONS",
+        headers: { origin: "not a url" },
+      })).status,
+      403,
+    );
     assert.equal(
       (await fetch(`${base}/api/concepts/incident-communication`)).status,
       401,
     );
     assert.equal((await fetch(`${base}/api/search`)).status, 401);
+    assert.equal(
+      (await (await fetch(`${base}/api/bootstrap`)).json()).signupAllowed,
+      true,
+    );
+    assert.deepEqual(
+      (await (await fetch(`${base}/api/bootstrap`)).json()).ssoProviders,
+      [{
+        providerId: "company-oidc",
+        name: "Company SSO",
+        type: "oidc",
+      }],
+    );
     await owner.signUp("Owner", "owner@example.com");
+    await outsider.signUp("Outsider", "outsider@example.com");
     assert.equal(
       (await (await owner.request("/api/bootstrap")).json()).setupRequired,
       true,
     );
+    const beforeSetup = new DatabaseSync(`${dataDir}/hub.db`);
     assert.equal(
-      (await owner.request("/api/setup", { method: "POST" })).status,
-      200,
+      Number(
+        (beforeSetup.prepare(
+          'SELECT COUNT(*) AS count FROM "organization"',
+        ).get() as { count: number }).count,
+      ),
+      0,
+    );
+    beforeSetup.close();
+    assert.equal(
+      (await owner.request("/api/setup", {
+        method: "POST",
+        body: JSON.stringify({ name: "", tagline: "" }),
+      })).status,
+      400,
+    );
+    const setup = await owner.request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Acme knowledge",
+        tagline: "The answers our team can trust",
+      }),
+    });
+    assert.equal(setup.status, 200, await setup.clone().text());
+    const setupBody = await setup.json();
+    assert.equal(setupBody.workspace.name, "Acme knowledge");
+    assert.equal(
+      setupBody.workspace.tagline,
+      "The answers our team can trust",
+    );
+    assert.equal(
+      (await (await blocked.request("/api/bootstrap")).json()).signupAllowed,
+      false,
+    );
+    assert.equal(
+      (await blocked.request("/api/auth/sign-up/email", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Blocked",
+          email: "blocked@example.com",
+          password: "password123",
+        }),
+      })).status,
+      403,
     );
     assert.equal(
       (await owner.request("/api/concepts/incident-communication")).status,
@@ -475,20 +738,68 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await created.json()).draft,
       DEFAULT_MARKDOWN,
     );
+    const workspaceUpdated = await owner.request("/api/workspace", {
+      method: "PUT",
+      body: JSON.stringify({
+        name: "Operations knowledge",
+        tagline: "Trusted company guidance",
+        logo: "",
+      }),
+    });
+    assert.equal(workspaceUpdated.status, 200, await workspaceUpdated.text());
+    assert.equal(
+      (await (await owner.request("/api/bootstrap")).json()).workspace.name,
+      "Operations knowledge",
+    );
+    assert.deepEqual(
+      (await (await owner.request("/api/bootstrap")).json()).groups,
+      [],
+    );
+    const groupCreated = await owner.request("/api/groups", {
+      method: "POST",
+      body: JSON.stringify({ name: "Support", access: "viewer" }),
+    });
+    const group = await groupCreated.json();
+    assert.equal(groupCreated.status, 201, JSON.stringify(group));
+    assert.equal(group.access, "viewer");
+    assert.ok(
+      (await (await owner.request("/api/bootstrap")).json()).groups.some(
+        (item: { id: string }) => item.id === group.id,
+      ),
+    );
 
-    const invite = async (email: string, access: "editor" | "viewer") => {
+    const invite = async (
+      email: string,
+      access: "editor" | "viewer",
+      teamId?: string,
+    ) => {
       const response = await owner.request("/api/invitations", {
         method: "POST",
-        body: JSON.stringify({ email, access }),
+        body: JSON.stringify({ email, access, teamId }),
       });
       if (!response.ok) assert.fail(await response.text());
       return (await response.json()).id as string;
     };
     const editorInvitation = await invite("editor@example.com", "editor");
-    const viewerInvitation = await invite("viewer@example.com", "viewer");
-    await editor.signUp("Editor", "editor@example.com");
-    await viewer.signUp("Viewer", "viewer@example.com");
-    await outsider.signUp("Outsider", "outsider@example.com");
+    const viewerInvitation = await invite(
+      "viewer@example.com",
+      "viewer",
+      group.id,
+    );
+    assert.equal(
+      (await blocked.request("/api/auth/sign-up/email", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Wrong recipient",
+          email: "wrong@example.com",
+          password: "password123",
+          invitationId: editorInvitation,
+        }),
+      })).status,
+      403,
+    );
+    await editor.signUp("Editor", "editor@example.com", editorInvitation);
+    await viewer.signUp("Viewer", "viewer@example.com", viewerInvitation);
     assert.equal(
       (await editor.request("/api/invitations/accept", {
         method: "POST",
@@ -503,10 +814,38 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       200,
     );
+    assert.equal(
+      (await (await viewer.request("/api/bootstrap")).json()).access,
+      "viewer",
+    );
 
     assert.equal(
       (await editor.request("/api/concepts/incident-communication")).status,
       200,
+    );
+    const titleOnlyFrontmatter = await editor.request(
+      "/api/concepts/incident-communication",
+      {
+        method: "PUT",
+        body: '---\ntitle: "Borrow"\n---\n\n# Clean body\n',
+      },
+    );
+    assert.equal(titleOnlyFrontmatter.status, 204);
+    assert.equal(
+      (await (await editor.request(
+        "/api/concepts/incident-communication",
+      )).json()).draft,
+      "# Clean body\n",
+    );
+    await editor.request("/api/concepts/incident-communication", {
+      method: "PUT",
+      body: '***\n\n## title: "Borrow"\n\n# Still clean\n',
+    });
+    assert.equal(
+      (await (await editor.request(
+        "/api/concepts/incident-communication",
+      )).json()).draft,
+      "# Still clean\n",
     );
     assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
     assert.equal(
@@ -541,6 +880,142 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         .json()).published,
       "# First published draft\n",
     );
+    const commentResponse = await viewer.request(
+      "/api/concepts/incident-communication/comments",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          body: "Can we make this step clearer?",
+          anchorText: "First published draft",
+          anchorStart: 2,
+          anchorEnd: 23,
+          revisionNumber: 1,
+        }),
+      },
+    );
+    const commentThread = await commentResponse.json();
+    assert.equal(commentResponse.status, 201, JSON.stringify(commentThread));
+    assert.equal(commentThread.comments[0].authorName, "Viewer");
+    assert.equal(
+      (await outsider.request(
+        "/api/concepts/incident-communication/comments",
+      )).status,
+      404,
+    );
+    assert.equal(
+      (await editor.request(
+        `/api/comment-threads/${commentThread.id}/replies`,
+        {
+          method: "POST",
+          body: JSON.stringify({ body: "Yes, I will update it." }),
+        },
+      )).status,
+      200,
+    );
+    const openComments = await (await viewer.request(
+      "/api/concepts/incident-communication/comments?status=open",
+    )).json();
+    assert.equal(openComments[0].comments.length, 2);
+    assert.equal(
+      (await viewer.request(`/api/comment-threads/${commentThread.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolved: true }),
+      })).status,
+      200,
+    );
+    assert.deepEqual(
+      await (await viewer.request(
+        "/api/concepts/incident-communication/comments?status=open",
+      )).json(),
+      [],
+    );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/concepts/incident-communication/comments?status=resolved",
+      )).json()).length,
+      1,
+    );
+    assert.equal(
+      (await viewer.request(`/api/comment-threads/${commentThread.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolved: false }),
+      })).status,
+      200,
+    );
+    const openApi = await fetch(`${base}/api/openapi.json`);
+    assert.equal(openApi.status, 200);
+    assert.ok(
+      Object.hasOwn(
+        (await openApi.json()).paths,
+        "/api/v1/actions/knowledge.search",
+      ),
+    );
+    assert.equal((await fetch(`${base}/api/v1/actions`)).status, 401);
+    const actionList = await (await owner.request("/api/v1/actions")).json();
+    assert.deepEqual(
+      [
+        "documents.create",
+        "documents.get",
+        "templates.list",
+        "documents.trace.create",
+      ]
+        .filter((name) =>
+          !actionList.actions.some((action: { name: string }) =>
+            action.name === name
+          )
+        ),
+      [],
+    );
+    const listedTemplates = await owner.request(
+      "/api/v1/actions/templates.list",
+      { method: "POST", body: "{}" },
+    );
+    const listedTemplatesText = await listedTemplates.text();
+    assert.equal(listedTemplates.status, 200, listedTemplatesText);
+    const listedTemplateBody = JSON.parse(listedTemplatesText);
+    assert.equal(listedTemplateBody.result[0].id, "understanding-brief");
+    assert.equal(listedTemplateBody.result[0].builtIn, true);
+    const keyResponse = await owner.request("/api/developer/keys", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Search integration",
+        scopes: ["knowledge.search"],
+      }),
+    });
+    const apiKey = await keyResponse.json();
+    assert.equal(keyResponse.status, 201, JSON.stringify(apiKey));
+    assert.match(apiKey.token, /^okf_[a-f0-9]{64}$/);
+    const apiSearch = await fetch(
+      `${base}/api/v1/actions/knowledge.search`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "published" }),
+      },
+    );
+    const apiSearchBody = await apiSearch.json();
+    assert.equal(apiSearch.status, 200, JSON.stringify(apiSearchBody));
+    assert.equal(
+      apiSearchBody.result.results[0].id,
+      "incident-communication",
+    );
+    assert.equal(
+      (await fetch(`${base}/api/v1/actions/documents.get`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ id: "incident-communication" }),
+      })).status,
+      404,
+    );
+    const listedKeys = await (await owner.request("/api/developer/keys"))
+      .json();
+    assert.equal(listedKeys.keys[0].token, undefined);
     assert.equal(
       (await editor.request("/api/concepts/incident-communication", {
         method: "PUT",
@@ -563,6 +1038,28 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     const second = await secondPublish.json();
     assert.equal(second.revisions.length, 2);
     assert.equal(second.publishedRevision, 2);
+    const duplicatePublish = await editor.request(
+      "/api/concepts/incident-communication/publish",
+      {
+        method: "POST",
+        body: JSON.stringify({ markdown: "# Second published revision\n" }),
+      },
+    );
+    const duplicate = await duplicatePublish.json();
+    assert.equal(duplicatePublish.status, 200);
+    assert.equal(duplicate.revisions.length, 2);
+    assert.equal(duplicate.publishedRevision, 2);
+    const firstRevision = await editor.request(
+      "/api/concepts/incident-communication/revisions/1",
+    );
+    assert.equal(firstRevision.status, 200);
+    assert.equal(await firstRevision.text(), "# First published draft\n");
+    assert.equal(
+      (await viewer.request(
+        "/api/concepts/incident-communication/revisions/1",
+      )).status,
+      404,
+    );
     const restoredDraft = await editor.request(
       "/api/concepts/incident-communication/revisions/1/restore",
       { method: "POST" },
@@ -623,6 +1120,25 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     )).json();
     assert.equal(artifact.artifacts[0].status, "draft");
     assert.match(artifact.artifacts[0].document, /connect-src 'none'/);
+    assert.match(artifact.artifacts[0].document, /window\.okf=/);
+    assert.deepEqual(artifact.artifacts[0].grants, ["app.data.*"]);
+    const savedAppData = await editor.request(
+      "/api/v1/actions/app.data.set",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          appId: artifact.artifacts[0].id,
+          collection: "notes",
+          key: "incident",
+          value: { status: "ready" },
+        }),
+      },
+    );
+    const savedAppDataBody = await savedAppData.json();
+    assert.equal(savedAppData.status, 200, JSON.stringify(savedAppDataBody));
+    assert.deepEqual(savedAppDataBody.result.value, {
+      status: "ready",
+    });
     assert.deepEqual(
       (await (await viewer.request(
         "/api/artifacts?conceptId=incident-communication",
@@ -648,6 +1164,46 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(viewerArtifactV1.version, 1);
     assert.equal(viewerArtifactV1.content, undefined);
     assert.match(viewerArtifactV1.document, /Calculate/);
+    assert.equal(
+      (await (await viewer.request("/api/v1/actions/app.data.get", {
+        method: "POST",
+        body: JSON.stringify({
+          appId: artifactId,
+          collection: "notes",
+          key: "incident",
+        }),
+      })).json()).result,
+      null,
+    );
+    const apps = await (await editor.request(
+      "/api/apps?conceptId=incident-communication",
+    )).json();
+    assert.equal(apps.apps[0].title, "Incident calculator");
+    assert.ok(
+      apps.availableActions.some((action: { name: string }) =>
+        action.name === "knowledge.search"
+      ),
+    );
+    const createdAppResponse = await editor.request("/api/apps", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "incident-communication",
+        title: "Knowledge finder",
+        description: "Searches visible OKF knowledge",
+        type: "inline_html",
+        content: "<button>Search</button>",
+        grants: ["knowledge.search"],
+      }),
+    });
+    const createdApp = await createdAppResponse.json();
+    assert.equal(createdAppResponse.status, 201, JSON.stringify(createdApp));
+    assert.deepEqual(createdApp.grants, ["knowledge.search"]);
+    assert.equal(
+      (await owner.request(`/api/apps/${createdApp.id}/activate`, {
+        method: "POST",
+      })).status,
+      200,
+    );
     const revisedArtifact = await editor.request(
       `/api/artifacts/${artifactId}`,
       {
@@ -699,6 +1255,23 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       200,
     );
     assert.equal(
+      (await owner.request(`/api/developer/keys/${apiKey.id}`, {
+        method: "DELETE",
+      })).status,
+      204,
+    );
+    assert.equal(
+      (await fetch(`${base}/api/v1/actions/knowledge.search`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey.token}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      })).status,
+      401,
+    );
+    assert.equal(
       (await outsider.request("/api/concepts/incident-communication")).status,
       404,
     );
@@ -730,6 +1303,60 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       "# Second published revision\n",
     );
 
+    const connectorState = await (await owner.request("/api/sources")).json();
+    assert.deepEqual(
+      connectorState.connectors.map((connector: {
+        id: string;
+        capabilities: string[];
+        enabled: boolean;
+      }) => [connector.id, connector.capabilities, connector.enabled]),
+      [
+        ["git", ["import"], true],
+        ["s3", ["import"], true],
+        ["notion", ["import"], true],
+        ["miro", ["embed"], true],
+        ["google-sheets", ["embed"], true],
+      ],
+    );
+    assert.equal(
+      connectorState.connectors.find((connector: { id: string }) =>
+        connector.id === "notion"
+      ).fields[0].secret,
+      true,
+    );
+    assert.equal(
+      (await editor.request("/api/connectors/notion/enabled", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await owner.request("/api/connectors/notion/enabled", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await owner.request("/api/connectors/notion/connect", {
+        method: "POST",
+        body: JSON.stringify({ token: "ntn_disabled_connector_token" }),
+      })).status,
+      409,
+    );
+    assert.equal(
+      (await owner.request("/api/sources/notion", {
+        method: "POST",
+        body: JSON.stringify({ token: "ntn_disabled_connector_token" }),
+      })).status,
+      409,
+    );
+    await owner.request("/api/connectors/notion/enabled", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+
     assert.equal(
       (await owner.request("/api/sources/repositories", {
         method: "POST",
@@ -756,6 +1383,33 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(firstSource.revision, "commit-one");
     assert.equal(firstSource.conceptCount, 3);
     assert.equal(firstSource.credentialsConfigured, true);
+    assert.equal(firstSource.automationIntervalMinutes, 0);
+    assert.equal(
+      (await viewer.request("/api/sources/repository/schedule", {
+        method: "PUT",
+        body: JSON.stringify({ intervalMinutes: 60 }),
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await owner.request("/api/sources/repository/schedule", {
+        method: "PUT",
+        body: JSON.stringify({ intervalMinutes: 30 }),
+      })).status,
+      400,
+    );
+    const repositorySchedule = await owner.request(
+      "/api/sources/repository/schedule",
+      {
+        method: "PUT",
+        body: JSON.stringify({ intervalMinutes: 60 }),
+      },
+    );
+    assert.equal(repositorySchedule.status, 200);
+    assert.equal(
+      (await repositorySchedule.json()).automationIntervalMinutes,
+      60,
+    );
     assert.equal(
       JSON.stringify(firstSource).includes("private-git-token"),
       false,
@@ -877,6 +1531,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(sharedBody.status, "current");
     assert.equal(sharedBody.revision, "objects-one");
     assert.equal(sharedBody.conceptCount, 2);
+    assert.equal(sharedBody.automationIntervalMinutes, 0);
     assert.ok(sharedBody.lastSyncedAt);
     assert.equal(sharedBody.credentialsConfigured, true);
     assert.equal(
@@ -887,6 +1542,18 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       JSON.stringify(sharedBody).includes("browser-access-key"),
       false,
     );
+    const sharedSchedule = await owner.request("/api/sources/shared/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ intervalMinutes: 1440 }),
+    });
+    assert.equal(sharedSchedule.status, 200);
+    assert.equal((await sharedSchedule.json()).automationIntervalMinutes, 1440);
+    const scheduledSources = await (await owner.request("/api/sources")).json();
+    assert.equal(
+      scheduledSources.repositories[0].automationIntervalMinutes,
+      60,
+    );
+    assert.equal(scheduledSources.shared.automationIntervalMinutes, 1440);
     assert.deepEqual(sharedConfig, {
       endpoint: "https://objects.example.com/",
       bucket: "shared-okf",
@@ -938,6 +1605,45 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await (await viewer.request("/api/imports")).json()).length,
       4,
     );
+    assert.equal(
+      (await editor.request("/api/sources/notion", {
+        method: "POST",
+        body: JSON.stringify({ token: "ntn_editor_should_not_connect" }),
+      })).status,
+      403,
+    );
+    const notionConnected = await owner.request(
+      "/api/connectors/notion/connect",
+      {
+        method: "POST",
+        body: JSON.stringify({ token: "ntn_secret_integration_token" }),
+      },
+    );
+    const notionText = await notionConnected.text();
+    assert.equal(notionConnected.status, 201, notionText);
+    const notionBody = JSON.parse(notionText);
+    assert.equal(notionBody.status, "current");
+    assert.equal(notionBody.revision, "notion-one");
+    assert.equal(notionBody.conceptCount, 1);
+    assert.equal(notionBody.credentialsConfigured, true);
+    assert.equal(notionText.includes("ntn_secret_integration_token"), false);
+    assert.deepEqual(notionConfig, { token: "ntn_secret_integration_token" });
+    const notionSchedule = await owner.request("/api/sources/notion/schedule", {
+      method: "PUT",
+      body: JSON.stringify({ intervalMinutes: 720 }),
+    });
+    assert.equal(notionSchedule.status, 200);
+    assert.equal((await notionSchedule.json()).automationIntervalMinutes, 720);
+    const notionImported = await viewer.request(
+      "/api/imported?source=notion&path=notion-page.md",
+    );
+    assert.equal(notionImported.status, 200);
+    assert.equal((await notionImported.json()).markdown, "# Notion handbook\n");
+    const notionStored = new DatabaseSync(`${dataDir}/hub.db`).prepare(
+      "SELECT credentialsCipher FROM okf_notion_source WHERE id = 'notion'",
+    ).get() as { credentialsCipher: string };
+    assert.match(notionStored.credentialsCipher, /^v1:/);
+    assert.equal(notionStored.credentialsCipher.includes("ntn_secret"), false);
     const search = async (client: Client, query = "") => {
       const response = await client.request(`/api/search?${query}`);
       const text = await response.text();
@@ -951,6 +1657,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(sharedSearch.results[0].sourceId, "shared");
     assert.equal(sharedSearch.results[0].owner, "Operations");
     assert.equal(sharedSearch.results[0].trust, "current");
+    assert.equal(sharedSearch.results[0].snippet, "");
     assert.deepEqual(
       sharedSearch.results[0].backlinks.map((item: { id: string }) => item.id),
       ["shared/handbook"],
@@ -996,7 +1703,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
     assert.equal(
       (await (await viewer.request("/api/imports")).json()).length,
-      4,
+      5,
     );
     assert.equal(
       (await search(viewer, "q=shared%20operations")).results[0].trust,
@@ -1104,9 +1811,16 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       403,
     );
+    assert.equal(
+      (await editor.request("/api/spaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Onboarding", icon: "x".repeat(17) }),
+      })).status,
+      400,
+    );
     const onboarding = await editor.request("/api/spaces", {
       method: "POST",
-      body: JSON.stringify({ name: "Onboarding" }),
+      body: JSON.stringify({ name: "Onboarding", icon: "🚀" }),
     });
     assert.equal(onboarding.status, 201, await onboarding.text());
     const onboardingSpace = await (await editor.request("/api/spaces")).json();
@@ -1114,6 +1828,152 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       onboardingSpace.find((item: { id: string }) => item.id === "onboarding")
         .count,
       0,
+    );
+    assert.equal(
+      onboardingSpace.find((item: { id: string }) => item.id === "onboarding")
+        .icon,
+      "🚀",
+    );
+    const builtInTemplates = await (await editor.request("/api/templates"))
+      .json();
+    assert.equal(builtInTemplates.length, 1);
+    assert.equal(builtInTemplates[0].id, "understanding-brief");
+    assert.equal(builtInTemplates[0].builtIn, true);
+    assert.equal((await viewer.request("/api/templates")).status, 403);
+    assert.equal(
+      (await editor.request("/api/templates/understanding-brief", {
+        method: "DELETE",
+      })).status,
+      400,
+    );
+    const templateResponse = await editor.request("/api/templates", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Team welcome",
+        description: "A user-authored onboarding outline",
+        body:
+          "## Welcome {{team}}\n\nOwned by {{owner}}. See [incident guidance](/knowledge/incident-communication).\n",
+      }),
+    });
+    const templateText = await templateResponse.text();
+    assert.equal(templateResponse.status, 201, templateText);
+    const template = JSON.parse(templateText);
+    assert.deepEqual(template.variables, ["team", "owner"]);
+    const missingVariable = await editor.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        spaceId: "policies",
+        title: "Incomplete welcome",
+        type: "Guide",
+        templateId: template.id,
+        variables: { team: "Support" },
+      }),
+    });
+    assert.equal(missingVariable.status, 400);
+    const templated = await editor.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        spaceId: "policies",
+        parentId: "incident-communication",
+        title: "Support welcome",
+        type: "Guide",
+        templateId: template.id,
+        variables: { team: "Support", owner: "People Ops" },
+      }),
+    });
+    const templatedText = await templated.text();
+    assert.equal(templated.status, 201, templatedText);
+    const templatedBody = JSON.parse(templatedText);
+    assert.match(templatedBody.draft, /Welcome Support/);
+    assert.match(templatedBody.draft, /Owned by People Ops/);
+    assert.equal(templatedBody.parentId, "incident-communication");
+    const locked = await editor.request(
+      "/api/concepts/support-welcome/lock",
+      { method: "POST" },
+    );
+    const lockedText = await locked.text();
+    assert.equal(locked.status, 200, lockedText);
+    assert.ok(JSON.parse(lockedText).lockedAt);
+    assert.equal(
+      (await editor.request("/api/concepts/support-welcome/move", {
+        method: "POST",
+        body: JSON.stringify({ spaceId: "policies", parentId: null, index: 0 }),
+      })).status,
+      423,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/support-welcome", {
+        method: "PUT",
+        body: "# Blocked while locked\n",
+      })).status,
+      423,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/support-welcome/unlock", {
+        method: "POST",
+      })).status,
+      200,
+    );
+    const movedToRoot = await editor.request(
+      "/api/concepts/support-welcome/move",
+      {
+        method: "POST",
+        body: JSON.stringify({ spaceId: "policies", parentId: null, index: 0 }),
+      },
+    );
+    assert.equal(movedToRoot.status, 200, await movedToRoot.text());
+    assert.equal(
+      (await (await editor.request("/api/concepts")).json())[0].id,
+      "support-welcome",
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/support-welcome/move", {
+        method: "POST",
+        body: JSON.stringify({
+          spaceId: "policies",
+          parentId: "incident-communication",
+          index: 0,
+        }),
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/incident-communication/metadata", {
+        method: "PUT",
+        body: JSON.stringify({
+          title: "Incident communication",
+          type: "Policy",
+          spaceId: "policies",
+          parentId: "support-welcome",
+        }),
+      })).status,
+      400,
+    );
+    assert.equal(
+      (await editor.request("/api/concepts/support-welcome/publish", {
+        method: "POST",
+        body: JSON.stringify({ markdown: templatedBody.draft }),
+      })).status,
+      200,
+    );
+    const incidentRelationships = await search(viewer, "q=second%20published");
+    assert.deepEqual(
+      incidentRelationships.results[0].backlinks.map((item: { id: string }) =>
+        item.id
+      ),
+      ["support-welcome"],
+    );
+    assert.equal(
+      (await editor.request(`/api/templates/${template.id}`, {
+        method: "DELETE",
+      })).status,
+      204,
+    );
+    assert.deepEqual(
+      (await (await editor.request("/api/templates")).json()).map(
+        (item: { id: string }) => item.id,
+      ),
+      ["understanding-brief"],
     );
     const starter = await editor.request("/api/concepts", {
       method: "POST",
@@ -1130,7 +1990,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     )).json();
     assert.equal(starterBody.space, "Onboarding");
     assert.equal(starterBody.intent, "working");
-    assert.equal(starterBody.draft, "# New starter guide\n");
+    assert.equal(starterBody.draft, "\n");
     assert.equal(
       (await viewer.request("/api/concepts/new-starter-guide")).status,
       404,
@@ -1192,6 +2052,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     const tracedConcept = await (await editor.request(
       "/api/concepts/new-starter-guide",
     )).json();
+    assert.equal(
+      tracedConcept.activity.some(
+        (event: { action: string }) => event.action === "concept.published",
+      ),
+      true,
+    );
     const traceId = tracedConcept.workTraces[0].id;
     assert.equal(tracedConcept.workTraces[0].kind, "decision");
     assert.equal(
@@ -1286,13 +2152,72 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       )).status,
       409,
     );
+    const briefResponse = await editor.request(
+      "/api/v1/actions/documents.create",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: "Payment retry explainer",
+          type: "Explanation",
+          intent: "working",
+          spaceId: "policies",
+          templateId: "understanding-brief",
+        }),
+      },
+    );
+    const briefText = await briefResponse.text();
+    assert.equal(briefResponse.status, 200, briefText);
+    const brief = JSON.parse(briefText).result;
+    assert.equal(brief.intent, "working");
+    assert.match(brief.draft, /## Mental model/);
+    assert.match(brief.draft, /## Check your understanding/);
+    const traceResponse = await editor.request(
+      "/api/v1/actions/documents.trace.create",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          documentId: brief.id,
+          kind: "change",
+          title: "Explain payment retry change",
+          summary: "Captured the background, invariants, and evidence.",
+          occurredAt: "2026-08-15",
+          sourceUrl: "https://github.com/acme/payments/pull/42",
+        }),
+      },
+    );
+    const traceText = await traceResponse.text();
+    assert.equal(traceResponse.status, 200, traceText);
+    assert.equal(JSON.parse(traceText).result.workTraces.length, 1);
+    const starterBundle = `okf-bundle-v1:${
+      JSON.stringify({
+        entry: "index.html",
+        files: [
+          {
+            path: "index.html",
+            type: "text/html",
+            data: `data:text/html;base64,${
+              btoa(
+                '<h1>First-week checklist</h1><script src="app.js"></script>',
+              )
+            }`,
+          },
+          {
+            path: "app.js",
+            type: "text/javascript",
+            data: `data:text/javascript;base64,${
+              btoa("document.body.dataset.ready='yes'")
+            }`,
+          },
+        ],
+      })
+    }`;
     const starterArtifact = await editor.request("/api/artifacts", {
       method: "POST",
       body: JSON.stringify({
         conceptId: "new-starter-guide",
         title: "First-week checklist",
         type: "inline_html",
-        content: "<button>Done</button>",
+        content: starterBundle,
       }),
     });
     assert.equal(starterArtifact.status, 201, await starterArtifact.text());
@@ -1310,6 +2235,17 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "/api/artifacts?conceptId=new-starter-guide",
       )).json()).artifacts[0].title,
       "First-week checklist",
+    );
+    const bundledIndex = await viewer.request(
+      `/api/apps/${starterArtifactId}/files/`,
+    );
+    assert.equal(bundledIndex.status, 200);
+    assert.match(await bundledIndex.text(), /connect-src 'none'/);
+    assert.equal(
+      await (await viewer.request(
+        `/api/apps/${starterArtifactId}/files/app.js`,
+      )).text(),
+      "document.body.dataset.ready='yes'",
     );
     assert.equal(
       (await (await viewer.request(
@@ -1330,13 +2266,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       404,
     );
-    assert.equal(
-      (await editor.request("/api/spaces/onboarding", {
-        method: "PUT",
-        body: JSON.stringify({ name: "People onboarding" }),
-      })).status,
-      200,
-    );
+    const renamedSpace = await editor.request("/api/spaces/onboarding", {
+      method: "PUT",
+      body: JSON.stringify({ name: "People onboarding", icon: "📘" }),
+    });
+    assert.equal(renamedSpace.status, 200);
+    assert.equal((await renamedSpace.json()).icon, "📘");
     assert.equal(
       (await editor.request("/api/spaces/onboarding", {
         method: "DELETE",
@@ -1452,6 +2387,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         .conceptCount,
       2,
     );
+    assert.equal(
+      (await (await viewer.request(
+        "/api/imported?path=operations.md",
+      )).json()).importedAt,
+      updatedImported.importedAt,
+    );
     assert.deepEqual(repositoryCredentials, {
       username: "replacement-user",
       token: "replacement-token",
@@ -1510,7 +2451,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         (attempt: { job: string; status: string }) =>
           attempt.job === "source_check" && attempt.status === "succeeded",
       ).map((attempt: { sourceId: string }) => attempt.sourceId).sort(),
-      ["repository", secondRepositoryBody.id, "shared"].sort(),
+      ["notion", "repository", secondRepositoryBody.id, "shared"].sort(),
     );
     assert.equal(
       (await owner.request(
@@ -1593,10 +2534,96 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       true,
     );
 
+    const githubConfig = await (await owner.request("/api/sources/github"))
+      .json();
+    assert.equal(githubConfig.configured, true);
+    assert.equal(
+      githubConfig.installUrl,
+      "https://github.com/apps/okf-hub/installations/new",
+    );
+    assert.equal(
+      (await editor.request(
+        "/api/sources/github/repositories?installationId=9",
+      )).status,
+      403,
+    );
+    assert.deepEqual(
+      (await (await owner.request(
+        "/api/sources/github/folders?installationId=9&repositoryId=77",
+      )).json()).folders,
+      [".", "okf"],
+    );
+    const githubConnected = await owner.request("/api/sources/github", {
+      method: "POST",
+      body: JSON.stringify({
+        installationId: 9,
+        repositoryId: 77,
+        folder: "okf",
+      }),
+    });
+    const githubConnectedText = await githubConnected.text();
+    assert.equal(githubConnected.status, 201, githubConnectedText);
+    const githubSource = JSON.parse(githubConnectedText);
+    assert.equal(githubSource.kind, "github");
+    assert.equal(githubSource.githubFullName, "acme/knowledge");
+    assert.equal(githubSource.syncs[0].trigger, "connect");
+    assert.deepEqual(repositoryCredentials, {
+      username: "x-access-token",
+      token: "installation-token",
+    });
+    const webhookPayload = JSON.stringify({
+      installation: { id: 9 },
+      repository: { id: 77 },
+    });
+    const webhook = await fetch(`${base}/api/webhooks/github`, {
+      method: "POST",
+      headers: {
+        "x-github-delivery": "delivery-1",
+        "x-github-event": "push",
+        "x-hub-signature-256": "valid-signature",
+      },
+      body: webhookPayload,
+    });
+    assert.equal(webhook.status, 202, await webhook.text());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const githubRefreshed = (await (await owner.request("/api/sources")).json())
+      .repositories.find((source: { id: string }) =>
+        source.id === githubSource.id
+      );
+    assert.equal(githubRefreshed.syncs[0].trigger, "webhook");
+    assert.equal(
+      (await fetch(`${base}/api/webhooks/github`, {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "delivery-1",
+          "x-github-event": "push",
+          "x-hub-signature-256": "valid-signature",
+        },
+        body: webhookPayload,
+      })).status,
+      202,
+    );
+    assert.equal(
+      (await fetch(`${base}/api/webhooks/github`, {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "delivery-2",
+          "x-github-event": "push",
+          "x-hub-signature-256": "wrong",
+        },
+        body: webhookPayload,
+      })).status,
+      401,
+    );
+
     const audit = await (await owner.request("/api/audit")).json();
     assert.deepEqual(
       audit.map((event: { action: string }) => event.action).sort(),
       [
+        "api_key.created",
+        "api_key.revoked",
+        "app.activated",
+        "app.created",
         "artifact.created",
         "artifact.created",
         "artifact.created",
@@ -1605,10 +2632,30 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "artifact.published",
         "artifact.published",
         "artifact.revised",
+        "comment.created",
+        "comment.reopened",
+        "comment.replied",
+        "comment.resolved",
+        "concept.archived",
+        "concept.archived",
+        "concept.created",
+        "concept.created",
         "concept.created",
         "concept.created",
         "concept.exported",
+        "concept.locked",
+        "concept.moved",
+        "concept.moved",
+        "concept.published",
+        "concept.published",
+        "concept.published",
+        "concept.published",
+        "concept.published",
+        "concept.restored",
+        "concept.restored",
+        "concept.unlocked",
         "concept.updated",
+        "group.created",
         "invitation.accepted",
         "invitation.accepted",
         "invitation.created",
@@ -1617,9 +2664,79 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "space.created",
         "space.deleted",
         "space.renamed",
+        "template.created",
+        "template.deleted",
+        "trace.created",
         "trace.created",
         "trace.folded",
+        "workspace.updated",
       ],
+    );
+    const renamedNested = await editor.request(
+      "/api/concepts/support-welcome/metadata",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          title: "Renamed support welcome",
+          type: "Guide",
+          spaceId: "policies",
+        }),
+      },
+    );
+    const renamedNestedBody = await renamedNested.json();
+    assert.equal(renamedNested.status, 200);
+    assert.equal(renamedNestedBody.parentId, "incident-communication");
+    assert.equal(
+      (await editor.request("/api/exports/workspace")).status,
+      404,
+    );
+    assert.equal(
+      (await viewer.request("/api/exports/spaces/policies")).status,
+      404,
+    );
+    const spaceExport = await editor.request(
+      "/api/exports/spaces/policies",
+    );
+    assert.equal(spaceExport.status, 200, await spaceExport.clone().text());
+    assert.match(
+      spaceExport.headers.get("content-disposition") ?? "",
+      /^attachment; filename="okf-policies-\d{4}-\d{2}-\d{2}\.zip"$/,
+    );
+    const exportedFiles = await archiveEntries(spaceExport);
+    assert.ok(
+      exportedFiles.has(
+        "okf/Policies/Incident communication/Renamed support welcome.md",
+      ),
+    );
+    assert.match(
+      new TextDecoder().decode(exportedFiles.get("okf/index.md")),
+      /^---\nokf_version: "0\.2"\n---\n\n# Spaces\n/,
+    );
+    for (const [path, content] of exportedFiles) {
+      if (
+        path.startsWith("okf/") && path.endsWith(".md") &&
+        !path.endsWith("/index.md") && !path.endsWith("/log.md")
+      ) {
+        await inspectOkf(path, new TextDecoder().decode(content));
+      }
+    }
+    assert.equal(
+      new TextDecoder().decode(
+        exportedFiles.get(
+          "apps/Policies/Employee onboarding/First-week checklist/app.js",
+        ),
+      ),
+      "document.body.dataset.ready='yes'",
+    );
+    const workspaceExport = await owner.request("/api/exports/workspace");
+    assert.equal(
+      workspaceExport.status,
+      200,
+      await workspaceExport.clone().text(),
+    );
+    assert.match(
+      workspaceExport.headers.get("content-disposition") ?? "",
+      /^attachment; filename="okf-workspace-\d{4}-\d{2}-\d{2}\.zip"$/,
     );
   } finally {
     await server.shutdown();

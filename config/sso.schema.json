@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OKF Hub SSO configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["providers"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/provider" }
+    }
+  },
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "providerId", "domain"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "providerId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "domain": { "type": "string", "minLength": 1 },
+        "oidcConfig": { "$ref": "#/$defs/oidc" },
+        "samlConfig": { "$ref": "#/$defs/saml" }
+      },
+      "oneOf": [
+        { "required": ["oidcConfig"], "not": { "required": ["samlConfig"] } },
+        { "required": ["samlConfig"], "not": { "required": ["oidcConfig"] } }
+      ]
+    },
+    "oidc": {
+      "type": "object",
+      "required": ["issuer", "clientId"],
+      "properties": {
+        "issuer": { "type": "string", "format": "uri" },
+        "clientId": { "type": "string", "minLength": 1 },
+        "clientSecret": { "type": "string", "minLength": 1 },
+        "clientSecretFile": { "type": "string", "minLength": 1 },
+        "discoveryEndpoint": { "type": "string", "format": "uri" },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "pkce": { "type": "boolean" },
+        "mapping": { "type": "object" }
+      },
+      "oneOf": [
+        {
+          "required": ["clientSecret"],
+          "not": { "required": ["clientSecretFile"] }
+        },
+        {
+          "required": ["clientSecretFile"],
+          "not": { "required": ["clientSecret"] }
+        }
+      ]
+    },
+    "secretMetadata": {
+      "type": "object",
+      "properties": {
+        "privateKey": { "type": "string", "minLength": 1 },
+        "privateKeyFile": { "type": "string", "minLength": 1 },
+        "privateKeyPass": { "type": "string", "minLength": 1 },
+        "privateKeyPassFile": { "type": "string", "minLength": 1 },
+        "encPrivateKey": { "type": "string", "minLength": 1 },
+        "encPrivateKeyFile": { "type": "string", "minLength": 1 },
+        "encPrivateKeyPass": { "type": "string", "minLength": 1 },
+        "encPrivateKeyPassFile": { "type": "string", "minLength": 1 }
+      }
+    },
+    "saml": {
+      "type": "object",
+      "required": ["entryPoint"],
+      "properties": {
+        "issuer": { "type": "string", "format": "uri" },
+        "entryPoint": { "type": "string", "format": "uri" },
+        "cert": { "type": "string", "minLength": 1 },
+        "certFile": { "type": "string", "minLength": 1 },
+        "callbackUrl": { "type": "string", "format": "uri" },
+        "audience": { "type": "string" },
+        "wantAssertionsSigned": { "type": "boolean" },
+        "authnRequestsSigned": { "type": "boolean" },
+        "mapping": { "type": "object" },
+        "privateKey": { "type": "string", "minLength": 1 },
+        "privateKeyFile": { "type": "string", "minLength": 1 },
+        "decryptionPvk": { "type": "string", "minLength": 1 },
+        "decryptionPvkFile": { "type": "string", "minLength": 1 },
+        "spMetadata": { "$ref": "#/$defs/secretMetadata" },
+        "idpMetadata": { "$ref": "#/$defs/secretMetadata" }
+      },
+      "oneOf": [
+        { "required": ["cert"], "not": { "required": ["certFile"] } },
+        { "required": ["certFile"], "not": { "required": ["cert"] } }
+      ]
+    }
+  }
+}

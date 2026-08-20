@@ -1,7 +1,13 @@
 .git
 .deno-cache
+.env*
 .okf-data
 .okf-stack.env
+*.pem
 backups
+config/private
+config/sso.json
+coverage
 dist
 node_modules
+*.tsbuildinfo

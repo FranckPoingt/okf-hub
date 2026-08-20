@@ -110,9 +110,13 @@ export class DenoCollabProvider {
       }
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (this.socket === socket) this.socket = undefined;
       if (!this.active) return;
+      if (event.code === 4009) {
+        globalThis.location.reload();
+        return;
+      }
       this.onStatus("offline");
       this.reconnectTimer = globalThis.setTimeout(
         () => this.open(),

@@ -1,7 +1,11 @@
-import { Crepe } from "@milkdown/crepe";
-import { editorViewOptionsCtx } from "@milkdown/kit/core";
-import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
-import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
+import { MilkdownProvider } from "@milkdown/react";
+import {
+  FolderOpen,
+  GitBranch,
+  Lock,
+  MessageSquare,
+  Presentation,
+} from "lucide-react";
 import {
   type FormEvent,
   useCallback,
@@ -9,18 +13,81 @@ import {
   useRef,
   useState,
 } from "react";
-import * as Y from "yjs";
+import { AppSidebar } from "./components/app-sidebar.tsx";
+import { CommandPalette } from "./components/command-palette.tsx";
+import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
 import {
-  type Collaborator,
-  type ConnectionStatus,
-  DenoCollabProvider,
-} from "./collab-provider.ts";
-import { type AppRoute, parseAppRoute, routePath } from "./routes.ts";
+  AccessGate,
+  AuthScreen,
+  WorkspaceOnboarding,
+} from "./components/auth-panels.tsx";
+import {
+  DocumentEditor,
+  DocumentPreview,
+} from "./components/editor/document-editor.tsx";
+import {
+  type CommentAnchor,
+  type CommentSelection,
+  DocumentComments,
+} from "./components/editor/document-comments.tsx";
+import { DocumentProperties } from "./components/editor/document-properties.tsx";
+import { DocumentReferences } from "./components/editor/document-references.tsx";
+import { PresentationMode } from "./components/editor/presentation-mode.tsx";
+import { RevisionHistory } from "./components/editor/revision-history.tsx";
+import {
+  type DocumentMode,
+  type DocumentSurface,
+  DocumentToolbar,
+  type DocumentWidth,
+} from "./components/editor/document-toolbar.tsx";
+import { HomePanel } from "./components/home-panel.tsx";
+import { SpacePanel } from "./components/space-panel.tsx";
+import { SpaceIconPicker } from "./components/space-icon-picker.tsx";
+import { AppPanel, SourceWorkspace } from "./components/source-panels.tsx";
+import { WorkspaceHeader } from "./components/workspace-header.tsx";
+import { SearchPanel, WorkTracePanel } from "./components/workspace-panels.tsx";
+import {
+  NewDocumentDialog,
+  WorkspaceSettings,
+} from "./components/workspace-settings.tsx";
+import { Badge } from "./components/ui/badge.tsx";
+import { Button } from "./components/ui/button.tsx";
+import { Input } from "./components/ui/input.tsx";
+import { Label } from "./components/ui/label.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog.tsx";
+import { SidebarInset, SidebarProvider } from "./components/ui/sidebar.tsx";
+import { type Collaborator, type ConnectionStatus } from "./collab-provider.ts";
+import { api, conceptPath, SERVICE } from "./lib/api.ts";
+import { enableEmbedConnectors } from "./lib/embeds.ts";
+import type { ConnectorDefinition } from "./lib/connectors.ts";
+import type {
+  Artifact,
+  Bootstrap,
+  Concept,
+  DocumentTemplate,
+  ImportedConcept,
+  NotionSource,
+  RepositorySource,
+  SharedSource,
+  Sources,
+  Space,
+  WorkTrace,
+} from "./lib/models.ts";
+import {
+  type AppRoute,
+  parseAppRoute,
+  resolveImportedLink,
+  routePath,
+  type SettingsSection,
+} from "./routes.ts";
 
-const SERVICE = globalThis.location.port === "8788"
-  ? globalThis.location.origin
-  : "http://127.0.0.1:8788";
-const conceptPath = (id: string) => `/api/concepts/${encodeURIComponent(id)}`;
 const setBrowserRoute = (
   route: Exclude<AppRoute, { kind: "not_found" }>,
   replace = false,
@@ -31,1930 +98,99 @@ const setBrowserRoute = (
   }
   globalThis.history[replace ? "replaceState" : "pushState"]({}, "", path);
 };
-const PROFILE_MARKERS = [
-  "- [x]",
-  "| Severity",
-  "~~",
-  "[^owner]",
-  "```mermaid",
-  "$$",
-];
-
-type Invitation = {
-  invitationId: string;
-  email: string;
-  access: string;
-  url: string;
-  status: string;
-};
-type Bootstrap = {
-  user: { id: string; name: string; email: string } | null;
-  access?: "owner" | "editor" | "viewer" | "none";
-  canView?: boolean;
-  canEdit?: boolean;
-  setupRequired?: boolean;
-  invitationRequired?: boolean;
-  invitations?: Invitation[];
-};
-type AuditEvent = { occurredAt: string; action: string; target: string };
-type Revision = {
-  number: number;
-  publishedAt: string;
-  actorUserId: string;
-};
-type DocumentIntent = "canonical" | "working" | "evidence" | "ephemeral";
-type WorkTrace = {
-  id: string;
-  conceptId: string;
-  conceptTitle: string;
-  kind: "change" | "decision" | "incident" | "outcome";
-  title: string;
-  summary: string;
-  occurredAt: string;
-  sourceUrl: string;
-  actorUserId: string;
-  createdAt: string;
-  foldedIntoConceptId: string | null;
-  foldedIntoTitle: string | null;
-  foldedAt: string | null;
-  foldedKnowledge: string | null;
-};
-type Concept = {
-  id: string;
-  spaceId: string;
-  space: string;
-  title: string;
-  type: string;
-  intent: DocumentIntent;
-  status: "active" | "archived";
-  publishedRevision: number | null;
-  updatedAt: string;
-  draft: string | null;
-  published: string | null;
-  revisions: Revision[];
-  workTraces: WorkTrace[];
-};
-type Space = { id: string; name: string; count: number };
-type SourceIssue = {
-  path: string;
-  status: "invalid" | "deleted" | "renamed";
-  error: string | null;
-  nextPath: string | null;
-};
-type RepositorySource = {
-  id: string;
-  repositoryUrl: string;
-  folder: string;
-  credentialsConfigured: boolean;
-  status: "syncing" | "current" | "sync_failed";
-  revision: string | null;
-  lastSyncedAt: string | null;
-  error: string | null;
-  conceptCount: number;
-  issues: SourceIssue[];
-};
-type SharedSource = {
-  id: "shared";
-  kind: "s3";
-  endpoint: string;
-  bucket: string;
-  path: string;
-  region: string;
-  credentialsConfigured: true;
-  status: "syncing" | "current" | "sync_failed";
-  revision: string | null;
-  lastSyncedAt: string | null;
-  error: string | null;
-  conceptCount: number;
-  issues: SourceIssue[];
-};
-type Sources = {
-  repositories: RepositorySource[];
-  shared: SharedSource | null;
-};
-type ImportedConcept = {
-  id: string;
-  sourceId: string;
-  path: string;
-  title: string;
-  type: string;
-  status: "current" | "invalid";
-  sourceRevision: string;
-  importedAt: string;
-  tags: string[];
-  owner: string;
-  markdown?: string;
-  revisionCount?: number;
-  source?: RepositorySource | SharedSource;
-};
-type SearchRelationship = {
-  id: string;
-  kind: "hub-native" | "imported";
-  sourceId: string;
-  title: string;
-  path?: string;
-  trust: "current" | "sync_failed";
-  sourceLabel: string;
-};
-type SearchResult = SearchRelationship & {
-  type: string;
-  tags: string[];
-  owner: string;
-  status: "active" | "archived" | "current";
-  sourceStatus: "current" | "sync_failed";
-  sourceRevision?: string;
-  importedAt?: string;
-  snippet: string;
-  links: SearchRelationship[];
-  backlinks: SearchRelationship[];
-};
-type SearchResponse = {
-  query: string;
-  results: SearchResult[];
-  facets: { types: string[]; tags: string[] };
-  canIncludeArchived: boolean;
-};
-type AutomationProposal = {
-  sourceId: string;
-  path: string;
-  href: string;
-  target: string;
-  action: "fix_broken_link";
-};
-type AutomationAttempt = {
-  id: number;
-  job: "source_check" | "broken_links";
-  sourceId: string | null;
-  attempt: number;
-  status: "running" | "succeeded" | "failed";
-  error: string | null;
-  result: {
-    revision?: string;
-    conceptCount?: number;
-    checkedConcepts?: number;
-    proposals?: AutomationProposal[];
-  } | null;
-};
-type AutomationRun = {
-  id: number;
-  trigger: "manual" | "scheduled";
-  status: "running" | "succeeded" | "partial";
-  startedAt: string;
-  finishedAt: string | null;
-  attempts: AutomationAttempt[];
-};
-type AutomationState = {
-  intervalMs: number;
-  running: boolean;
-  runs: AutomationRun[];
-};
-type ArtifactVersion = {
-  number: number;
-  createdBy: string;
-  createdAt: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-};
-type Artifact = {
-  id: string;
-  conceptId: string;
-  title: string;
-  type: "inline_html" | "https_url";
-  status: "draft" | "live" | "changes_pending";
-  draftVersion?: number;
-  liveVersion: number | null;
-  version: number;
-  content?: string;
-  document?: string;
-  url?: string;
-  versions: ArtifactVersion[];
-  updatedAt: string;
-};
-type ArtifactState = {
-  artifacts: Artifact[];
-  allowedHosts: string[];
-  canEdit: boolean;
-  canPublish: boolean;
-};
-
-function api(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  return fetch(`${SERVICE}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
-}
-
-function AuthScreen(
-  { onAuthenticated }: { onAuthenticated: () => Promise<void> },
-) {
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-up");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const invited = new URLSearchParams(globalThis.location.search).has(
-    "invitation",
-  );
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    const form = new FormData(event.currentTarget);
-    const body = Object.fromEntries(form);
-    if (mode === "sign-in") delete body.name;
-    const response = await api(`/api/auth/${mode}/email`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      setError(result.message ?? result.error ?? "Authentication failed");
-      setBusy(false);
-      return;
-    }
-    await onAuthenticated();
-  };
-
-  return (
-    <main className="auth-shell">
-      <section className="auth-card">
-        <a className="brand" href="/" aria-label="OKF Hub home">
-          <span>O</span> OKF Hub
-        </a>
-        <p className="eyebrow">
-          {invited ? "You have been invited" : "Customer-controlled knowledge"}
-        </p>
-        <h1>{mode === "sign-up" ? "Create your account" : "Welcome back"}</h1>
-        <p>
-          {invited
-            ? "Use the invited email address, then accept your access."
-            : "Sign in to your organisation’s private knowledge hub."}
-        </p>
-        <form onSubmit={(event) => void submit(event)}>
-          {mode === "sign-up" && (
-            <label>
-              Name<input name="name" autoComplete="name" required />
-            </label>
-          )}
-          <label>
-            Email<input
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
-          </label>
-          <label>
-            Password<input
-              name="password"
-              type="password"
-              minLength={8}
-              autoComplete={mode === "sign-up"
-                ? "new-password"
-                : "current-password"}
-              required
-            />
-          </label>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="primary" type="submit" disabled={busy}>
-            {busy
-              ? "Working…"
-              : mode === "sign-up"
-              ? "Create account"
-              : "Sign in"}
-          </button>
-        </form>
-        <button
-          className="text-button"
-          type="button"
-          onClick={() => setMode(mode === "sign-up" ? "sign-in" : "sign-up")}
-        >
-          {mode === "sign-up"
-            ? "Already have an account? Sign in"
-            : "Need an account? Sign up"}
-        </button>
-      </section>
-    </main>
-  );
-}
-
-function AccessGate(
-  { invited, onAccepted, onSignOut }: {
-    invited: boolean;
-    onAccepted: () => Promise<void>;
-    onSignOut: () => void;
-  },
-) {
-  const [error, setError] = useState("");
-  const accept = async () => {
-    const invitationId = new URLSearchParams(globalThis.location.search).get(
-      "invitation",
-    );
-    const response = await api("/api/invitations/accept", {
-      method: "POST",
-      body: JSON.stringify({ invitationId }),
-    });
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      setError(result.error ?? "Could not accept invitation");
-      return;
-    }
-    globalThis.history.replaceState({}, "", globalThis.location.pathname);
-    await onAccepted();
-  };
-  return (
-    <main className="auth-shell">
-      <section className="auth-card">
-        <a className="brand" href="/" aria-label="OKF Hub home">
-          <span>O</span> OKF Hub
-        </a>
-        <p className="eyebrow">Organisation access</p>
-        <h1>{invited ? "Accept your invitation" : "Access not granted"}</h1>
-        <p>
-          {invited
-            ? "This invitation adds you to the group that can view or edit hub knowledge spaces."
-            : "Ask the organisation owner for an editor or viewer invitation."}
-        </p>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {invited && (
-          <button
-            className="primary"
-            type="button"
-            onClick={() => void accept()}
-          >
-            Accept invitation
-          </button>
-        )}
-        <button className="text-button" type="button" onClick={onSignOut}>
-          Sign out
-        </button>
-      </section>
-    </main>
-  );
-}
-
-function AccessPanel({ invitations }: { invitations: Invitation[] }) {
-  const [email, setEmail] = useState("");
-  const [access, setAccess] = useState<"editor" | "viewer">("editor");
-  const [items, setItems] = useState(invitations);
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [error, setError] = useState("");
-
-  const loadAudit = () =>
-    api("/api/audit").then((response) => response.json()).then(setAudit);
-  useEffect(() => {
-    void loadAudit();
-  }, []);
-
-  const invite = async (event: FormEvent) => {
-    event.preventDefault();
-    setError("");
-    const response = await api("/api/invitations", {
-      method: "POST",
-      body: JSON.stringify({ email, access }),
-    });
-    const result = await response.json();
-    if (!response.ok) return setError(result.error ?? "Invitation failed");
-    setItems([{
-      invitationId: result.id,
-      email,
-      access,
-      url: result.url,
-      status: "pending",
-    }, ...items]);
-    setEmail("");
-    void loadAudit();
-  };
-
-  return (
-    <section className="access-panel" aria-labelledby="access-heading">
-      <div>
-        <p className="eyebrow">Permissions</p>
-        <h2 id="access-heading">Invite through a group</h2>
-      </div>
-      <form onSubmit={(event) => void invite(event)}>
-        <label>
-          Email<input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Access<select
-            value={access}
-            onChange={(event) =>
-              setAccess(event.target.value as "editor" | "viewer")}
-          >
-            <option value="editor">Knowledge editor</option>
-            <option value="viewer">Knowledge viewer</option>
-          </select>
-        </label>
-        <button className="primary" type="submit">Create invite link</button>
-      </form>
-      {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="invite-list">
-        {items.map((item) => (
-          <div key={item.invitationId}>
-            <strong>{item.email}</strong>
-            <span>{item.access} · {item.status}</span>
-            <input
-              aria-label={`Invitation link for ${item.email}`}
-              readOnly
-              value={item.url}
-              onFocus={(event) => event.currentTarget.select()}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="audit-list">
-        <h3>Permission audit</h3>
-        {audit.map((event) => (
-          <p key={`${event.occurredAt}-${event.target}`}>
-            <time>{new Date(event.occurredAt).toLocaleString()}</time>
-            <strong>{event.action}</strong>
-            <span>{event.target}</span>
-          </p>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function DocumentPreview({ markdown }: { markdown: string }) {
-  useEditor((root) => {
-    const crepe = new Crepe({
-      root,
-      defaultValue: markdown,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-    });
-    crepe.editor.config((ctx) =>
-      ctx.update(
-        editorViewOptionsCtx,
-        (options) => ({ ...options, editable: () => false }),
-      )
-    );
-    return crepe;
-  }, [markdown]);
-  return <Milkdown />;
-}
-
-function EditorSurface(
-  {
-    conceptId,
-    initialMarkdown,
-    user,
-    canEdit,
-    onMarkdown,
-    onStatus,
-    onCollaborators,
-  }: {
-    conceptId: string;
-    initialMarkdown: string;
-    user: Collaborator;
-    canEdit: boolean;
-    onMarkdown: (markdown: string) => void;
-    onStatus: (status: ConnectionStatus) => void;
-    onCollaborators: (users: Collaborator[]) => void;
-  },
-) {
-  useEditor((root) => {
-    const doc = new Y.Doc();
-    const provider = new DenoCollabProvider(
-      `${SERVICE.replace("http", "ws")}/collab?conceptId=${
-        encodeURIComponent(conceptId)
-      }`,
-      doc,
-      user,
-      onStatus,
-      onCollaborators,
-    );
-    let editorConnected = false;
-    const crepe = new Crepe({
-      root,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-    });
-    crepe.editor.use(collab).config((ctx) =>
-      ctx.update(
-        editorViewOptionsCtx,
-        (options) => ({ ...options, editable: () => canEdit }),
-      )
-    );
-    crepe.on((listener) => {
-      listener.mounted((ctx) => {
-        const service = ctx.get(collabServiceCtx).bindDoc(doc).setAwareness(
-          provider.awareness,
-        );
-        provider.onSynced(() => {
-          if (editorConnected) return;
-          service.applyTemplate(initialMarkdown).connect();
-          editorConnected = true;
-        });
-        provider.connect();
-      });
-      listener.markdownUpdated((_ctx, markdown, previous) => {
-        if (canEdit && markdown !== previous) onMarkdown(markdown);
-      });
-    });
-    const destroy = crepe.destroy;
-    crepe.destroy = async () => {
-      provider.stop();
-      try {
-        return await destroy();
-      } finally {
-        provider.destroy();
-      }
-    };
-    return crepe;
-  }, [conceptId, initialMarkdown, user.name, canEdit]);
-  return <Milkdown />;
-}
-
-function SourceIssues({ issues }: { issues: SourceIssue[] }) {
-  if (!issues.length) return null;
-  return (
-    <section className="source-issues" aria-label="Source issues">
-      <h3>Source issues</h3>
-      {issues.map((issue) => (
-        <p key={`${issue.status}-${issue.path}`}>
-          <strong>{issue.status}</strong>
-          <code>{issue.path}</code>
-          <span>
-            {issue.error ?? (issue.nextPath
-              ? `Moved to ${issue.nextPath}`
-              : "No longer present at the source revision")}
-          </span>
-        </p>
-      ))}
-    </section>
-  );
-}
-
-function ImportGrid(
-  { sourceId, imports, onOpen }: {
-    sourceId: string;
-    imports: ImportedConcept[];
-    onOpen: (
-      sourceId: string,
-      path: string,
-    ) => Promise<unknown>;
-  },
-) {
-  return (
-    <section className="import-grid" aria-label="Imported concepts">
-      {imports.filter((item) => item.sourceId === sourceId).map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={() => void onOpen(sourceId, item.path)}
-        >
-          <span>{item.type}</span>
-          <strong>{item.title}</strong>
-          <small>{item.path}</small>
-        </button>
-      ))}
-    </section>
-  );
-}
-
-function RepositoryPanel(
-  {
-    source,
-    imports,
-    canManage,
-    busy,
-    error,
-    onConnect,
-    onRefresh,
-    onDisconnect,
-    onOpen,
-  }: {
-    source: RepositorySource | null;
-    imports: ImportedConcept[];
-    canManage: boolean;
-    busy: boolean;
-    error: string;
-    onConnect: (
-      source: RepositorySource | null,
-      repositoryUrl: string,
-      folder: string,
-      username: string,
-      token: string,
-    ) => Promise<void>;
-    onRefresh: (sourceId: string) => Promise<void>;
-    onDisconnect: (source: RepositorySource) => Promise<void>;
-    onOpen: (
-      sourceId: string,
-      path: string,
-    ) => Promise<unknown>;
-  },
-) {
-  const headingId = source
-    ? `repository-heading-${source.id}`
-    : "repository-heading-new";
-  const connect = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    void onConnect(
-      source,
-      String(fields.get("repositoryUrl") ?? ""),
-      String(fields.get("folder") ?? "okf"),
-      String(fields.get("username") ?? ""),
-      String(fields.get("token") ?? ""),
-    );
-  };
-  const connectionForm = (
-    <form className="source-form" onSubmit={connect}>
-      <label>
-        HTTPS Git URL
-        <input
-          name="repositoryUrl"
-          type="url"
-          placeholder="https://example.com/company/knowledge.git"
-          defaultValue={source?.repositoryUrl}
-          required
-        />
-      </label>
-      <label>
-        OKF folder
-        <input name="folder" defaultValue={source?.folder ?? "okf"} required />
-      </label>
-      <label>
-        Git username <span>(private repositories only)</span>
-        <input name="username" autoComplete="username" />
-      </label>
-      <label>
-        Access token <span>(private repositories only)</span>
-        <input name="token" type="password" autoComplete="new-password" />
-      </label>
-      <button className="primary" type="submit" disabled={busy}>
-        {busy
-          ? "Connecting…"
-          : source
-          ? "Try different settings"
-          : "Connect and import"}
-      </button>
-    </form>
-  );
-  return (
-    <section className="source-card" aria-labelledby={headingId}>
-      <div className="source-heading">
-        <div>
-          <p className="eyebrow">Git source</p>
-          <h2 id={headingId}>Repository-owned OKF</h2>
-          <p>
-            Imported concepts stay read-only here. The Git repository remains
-            authoritative.
-          </p>
-        </div>
-        {source && canManage && (
-          <button
-            className="primary"
-            type="button"
-            disabled={busy}
-            onClick={() => void onRefresh(source.id)}
-          >
-            {busy ? "Refreshing…" : "Refresh repository"}
-          </button>
-        )}
-      </div>
-      {!source
-        ? canManage
-          ? connectionForm
-          : <p className="source-empty">No repository has been connected.</p>
-        : (
-          <>
-            <dl className="source-provenance">
-              <div>
-                <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
-                </dd>
-              </div>
-              <div>
-                <dt>Repository</dt>
-                <dd>{source.repositoryUrl}</dd>
-              </div>
-              <div>
-                <dt>Folder</dt>
-                <dd>{source.folder}</dd>
-              </div>
-              <div>
-                <dt>Access</dt>
-                <dd>
-                  {source.credentialsConfigured
-                    ? "Private credentials stored"
-                    : "Public HTTPS"}
-                </dd>
-              </div>
-              <div>
-                <dt>Source revision</dt>
-                <dd>
-                  <code>{source.revision?.slice(0, 12) ?? "None"}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>Last successful sync</dt>
-                <dd>
-                  {source.lastSyncedAt
-                    ? new Date(source.lastSyncedAt).toLocaleString()
-                    : "Not yet"}
-                </dd>
-              </div>
-            </dl>
-            {source.error && (
-              <p className="source-error" role="alert">{source.error}</p>
-            )}
-            <SourceIssues issues={source.issues} />
-            {canManage && (
-              <details>
-                <summary>Update repository access</summary>
-                {connectionForm}
-                <button
-                  className="disconnect-source"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    if (
-                      globalThis.confirm(
-                        `Disconnect ${source.repositoryUrl}? This removes ${source.conceptCount} imported documents from OKF Hub.`,
-                      )
-                    ) void onDisconnect(source);
-                  }}
-                >
-                  Disconnect repository
-                </button>
-              </details>
-            )}
-          </>
-        )}
-      {error && <p className="source-error" role="alert">{error}</p>}
-      {source && (
-        <ImportGrid sourceId={source.id} imports={imports} onOpen={onOpen} />
-      )}
-    </section>
-  );
-}
-
-function SharedStorePanel(
-  { source, imports, canManage, busy, error, onConnect, onRefresh, onOpen }: {
-    source: SharedSource | null;
-    imports: ImportedConcept[];
-    canManage: boolean;
-    busy: boolean;
-    error: string;
-    onConnect: (values: Record<string, string>) => Promise<void>;
-    onRefresh: () => Promise<void>;
-    onOpen: (
-      sourceId: string,
-      path: string,
-    ) => Promise<unknown>;
-  },
-) {
-  const connect = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    void onConnect({
-      endpoint: String(fields.get("endpoint") ?? ""),
-      bucket: String(fields.get("bucket") ?? ""),
-      path: String(fields.get("path") ?? "okf"),
-      region: String(fields.get("region") ?? "us-east-1"),
-      accessKey: String(fields.get("accessKey") ?? ""),
-      secretKey: String(fields.get("secretKey") ?? ""),
-    });
-  };
-  const connectionForm = (
-    <form className="source-form shared-source-form" onSubmit={connect}>
-      <label>
-        S3 endpoint
-        <input
-          name="endpoint"
-          type="url"
-          placeholder="https://s3.example.com"
-          defaultValue={source?.endpoint}
-          required
-        />
-      </label>
-      <label>
-        Bucket
-        <input name="bucket" defaultValue={source?.bucket} required />
-      </label>
-      <label>
-        OKF path
-        <input name="path" defaultValue={source?.path ?? "okf"} required />
-      </label>
-      <label>
-        Region
-        <input
-          name="region"
-          defaultValue={source?.region ?? "us-east-1"}
-          required
-        />
-      </label>
-      <label>
-        Access key
-        <input
-          name="accessKey"
-          autoComplete="off"
-          required={!source?.credentialsConfigured}
-        />
-      </label>
-      <label>
-        Secret key
-        <input
-          name="secretKey"
-          type="password"
-          autoComplete="new-password"
-          required={!source?.credentialsConfigured}
-        />
-      </label>
-      <button className="primary" type="submit" disabled={busy}>
-        {busy
-          ? "Connecting…"
-          : source
-          ? "Retry with these settings"
-          : "Connect and import"}
-      </button>
-    </form>
-  );
-  return (
-    <section className="source-card" aria-labelledby="shared-heading">
-      <div className="source-heading">
-        <div>
-          <p className="eyebrow">Shared store source</p>
-          <h2 id="shared-heading">Shared controlled OKF</h2>
-          <p>
-            Import a portable OKF bundle directly from customer-controlled
-            object storage, without GitHub.
-          </p>
-        </div>
-        {source && canManage && (
-          <button
-            className="primary"
-            type="button"
-            disabled={busy}
-            onClick={() => void onRefresh()}
-          >
-            {busy ? "Refreshing…" : "Refresh shared store"}
-          </button>
-        )}
-      </div>
-      {!source
-        ? canManage
-          ? connectionForm
-          : <p className="source-empty">No shared store has been connected.</p>
-        : (
-          <>
-            <dl className="source-provenance">
-              <div>
-                <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
-                </dd>
-              </div>
-              <div>
-                <dt>Endpoint</dt>
-                <dd>{source.endpoint}</dd>
-              </div>
-              <div>
-                <dt>Bucket and path</dt>
-                <dd>{source.bucket}/{source.path}</dd>
-              </div>
-              <div>
-                <dt>Source revision</dt>
-                <dd>
-                  <code>{source.revision?.slice(0, 12) ?? "None"}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>Last successful sync</dt>
-                <dd>
-                  {source.lastSyncedAt
-                    ? new Date(source.lastSyncedAt).toLocaleString()
-                    : "Not yet"}
-                </dd>
-              </div>
-              <div>
-                <dt>Credentials</dt>
-                <dd>Encrypted and stored server-side</dd>
-              </div>
-            </dl>
-            {source.error && (
-              <p className="source-error" role="alert">{source.error}</p>
-            )}
-            <SourceIssues issues={source.issues} />
-            {canManage && source.status === "sync_failed" &&
-              !source.revision && connectionForm}
-          </>
-        )}
-      {error && <p className="source-error" role="alert">{error}</p>}
-      <ImportGrid sourceId="shared" imports={imports} onOpen={onOpen} />
-    </section>
-  );
-}
-
-function AutomationPanel() {
-  const [state, setState] = useState<AutomationState | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const load = useCallback(async () => {
-    const response = await api("/api/automation");
-    const result = await response.json() as AutomationState & {
-      error?: string;
-    };
-    if (!response.ok) throw new Error(result.error ?? "Automation unavailable");
-    setState(result);
-  }, []);
-  useEffect(() => {
-    load().catch((cause) => setError(cause.message));
-  }, [load]);
-  const run = async () => {
-    setBusy(true);
-    setError("");
-    const response = await api("/api/automation/run", { method: "POST" });
-    const result = await response.json() as AutomationState & {
-      error?: string;
-    };
-    setBusy(false);
-    if (!response.ok) {
-      setError(result.error ?? "Source checks failed");
-      return;
-    }
-    setState(result);
-  };
-  const schedule = !state?.intervalMs
-    ? "Scheduled checks disabled"
-    : `Scheduled every ${Math.round(state.intervalMs / 60_000)} minutes`;
-  return (
-    <section className="automation-panel" aria-labelledby="automation-heading">
-      <div className="source-heading">
-        <div>
-          <p className="eyebrow">Source operations</p>
-          <h2 id="automation-heading">Checks and proposals</h2>
-          <p>
-            {schedule}. Each source is isolated and receives at most one
-            automatic retry.
-          </p>
-        </div>
-        <button
-          className="primary"
-          type="button"
-          disabled={busy || state?.running}
-          onClick={() =>
-            void run()}
-        >
-          {busy || state?.running ? "Running checks…" : "Run checks now"}
-        </button>
-      </div>
-      {error && <p className="source-error" role="alert">{error}</p>}
-      <div className="automation-runs">
-        {state?.runs.map((run, index) => (
-          <details key={run.id} open={index === 0}>
-            <summary>
-              <strong className={`automation-status ${run.status}`}>
-                {run.status}
-              </strong>
-              <span>{run.trigger}</span>
-              <time>{new Date(run.startedAt).toLocaleString()}</time>
-            </summary>
-            <div className="automation-attempts">
-              {run.attempts.map((attempt) => (
-                <section key={attempt.id}>
-                  <div>
-                    <strong>
-                      {attempt.job === "source_check"
-                        ? `${attempt.sourceId} source`
-                        : "Broken links"}
-                    </strong>
-                    <span>
-                      Attempt {attempt.attempt} · {attempt.status}
-                    </span>
-                  </div>
-                  {attempt.error && <p>{attempt.error}</p>}
-                  {attempt.result?.conceptCount !== undefined && (
-                    <p>
-                      {attempt.result.conceptCount} healthy concepts indexed
-                    </p>
-                  )}
-                  {attempt.result?.checkedConcepts !== undefined && (
-                    <p>{attempt.result.checkedConcepts} concepts checked</p>
-                  )}
-                  {attempt.result?.proposals?.map((proposal) => (
-                    <div
-                      className="automation-proposal"
-                      key={`${proposal.sourceId}-${proposal.path}-${proposal.href}`}
-                    >
-                      <strong>Fix broken link</strong>
-                      <code>{proposal.path}</code>
-                      <span>{proposal.href} → {proposal.target}</span>
-                    </div>
-                  ))}
-                </section>
-              ))}
-            </div>
-          </details>
-        ))}
-        {state && state.runs.length === 0 && (
-          <p className="source-empty">No source checks have run yet.</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ArtifactFrame({ artifact }: { artifact: Artifact }) {
-  return (
-    <iframe
-      className="artifact-frame"
-      title={artifact.title}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      allow=""
-      loading="lazy"
-      src={artifact.type === "https_url" ? artifact.url : undefined}
-      srcDoc={artifact.type === "inline_html" ? artifact.document : undefined}
-    />
-  );
-}
-
-function ArtifactPanel(
-  { conceptId, conceptActive }: { conceptId: string; conceptActive: boolean },
-) {
-  const [state, setState] = useState<ArtifactState | null>(null);
-  const [type, setType] = useState<"inline_html" | "https_url">("inline_html");
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const load = useCallback(async () => {
-    const response = await api(
-      `/api/artifacts?conceptId=${encodeURIComponent(conceptId)}`,
-    );
-    const result = await response.json() as ArtifactState & { error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Artifacts unavailable");
-    setState(result);
-  }, [conceptId]);
-  useEffect(() => {
-    load().catch((cause) => setError(cause.message));
-  }, [load]);
-
-  const create = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const fields = new FormData(form);
-    setBusy("create");
-    setError("");
-    const response = await api("/api/artifacts", {
-      method: "POST",
-      body: JSON.stringify({
-        conceptId,
-        title: fields.get("title"),
-        type,
-        content: fields.get("content"),
-      }),
-    });
-    const result = await response.json().catch(() => ({})) as {
-      error?: string;
-    };
-    setBusy("");
-    if (!response.ok) {
-      setError(result.error ?? "Artifact creation failed");
-      return;
-    }
-    form.reset();
-    setType("inline_html");
-    await load();
-  };
-  const revise = async (
-    event: FormEvent<HTMLFormElement>,
-    artifact: Artifact,
-  ) => {
-    event.preventDefault();
-    const content = String(
-      new FormData(event.currentTarget).get("content") ?? "",
-    );
-    setBusy(artifact.id);
-    setError("");
-    const response = await api(`/api/artifacts/${artifact.id}`, {
-      method: "PUT",
-      body: JSON.stringify({ content }),
-    });
-    const result = await response.json().catch(() => ({})) as {
-      error?: string;
-    };
-    setBusy("");
-    if (!response.ok) {
-      setError(result.error ?? "Artifact update failed");
-      return;
-    }
-    await load();
-  };
-  const publish = async (artifact: Artifact) => {
-    setBusy(artifact.id);
-    setError("");
-    const response = await api(`/api/artifacts/${artifact.id}/publish`, {
-      method: "POST",
-    });
-    const result = await response.json().catch(() => ({})) as {
-      error?: string;
-    };
-    setBusy("");
-    if (!response.ok) {
-      setError(result.error ?? "Artifact activation failed");
-      return;
-    }
-    await load();
-  };
-
-  if (!state && !error) {
-    return <div className="artifact-loading">Loading artifacts…</div>;
-  }
-  if (state && !state.canEdit && state.artifacts.length === 0) return null;
-  return (
-    <section className="artifact-panel" aria-labelledby="artifact-heading">
-      <div className="artifact-heading">
-        <div>
-          <p className="eyebrow">Interactive artifacts</p>
-          <h2 id="artifact-heading">Reviewed tools and dashboards</h2>
-          <p>
-            Artifacts are separate from portable Markdown and run in a
-            restricted iframe.
-          </p>
-        </div>
-      </div>
-      {state?.canEdit && conceptActive && (
-        <form
-          className="artifact-form"
-          onSubmit={(event) => void create(event)}
-        >
-          <label>
-            Title
-            <input name="title" maxLength={100} required />
-          </label>
-          <label>
-            Type
-            <select
-              value={type}
-              onChange={(event) =>
-                setType(event.target.value as "inline_html" | "https_url")}
-            >
-              <option value="inline_html">Inline HTML</option>
-              <option value="https_url">HTTPS application</option>
-            </select>
-          </label>
-          <label className="artifact-content">
-            {type === "inline_html" ? "HTML" : "HTTPS URL"}
-            <textarea
-              name="content"
-              rows={type === "inline_html" ? 7 : 2}
-              placeholder={type === "inline_html"
-                ? "<h2>Calculator</h2><script>…</script>"
-                : "https://apps.example.com/dashboard"}
-              required
-            />
-          </label>
-          {type === "https_url" && (
-            <p className="artifact-hosts">
-              Allowed hosts:{" "}
-              {state.allowedHosts.join(", ") || "none configured"}
-            </p>
-          )}
-          <button
-            className="primary"
-            type="submit"
-            disabled={busy === "create"}
-          >
-            {busy === "create" ? "Creating…" : "Create draft artifact"}
-          </button>
-        </form>
-      )}
-      {error && <p className="source-error" role="alert">{error}</p>}
-      <div className="artifact-grid">
-        {state?.artifacts.map((artifact) => (
-          <article key={`${artifact.id}-${artifact.version}`}>
-            <header>
-              <div>
-                <span className={`artifact-status ${artifact.status}`}>
-                  {artifact.status.replace("_", " ")}
-                </span>
-                <span>
-                  {artifact.type === "inline_html" ? "HTML" : "HTTPS URL"}
-                </span>
-              </div>
-              <h3>{artifact.title}</h3>
-              <p>
-                Version {artifact.version}
-                {artifact.liveVersion
-                  ? ` · live ${artifact.liveVersion}`
-                  : " · not live"}
-              </p>
-            </header>
-            <ArtifactFrame artifact={artifact} />
-            {state.canEdit && conceptActive && artifact.content !== undefined &&
-              (
-                <form
-                  className="artifact-revision-form"
-                  onSubmit={(event) => void revise(event, artifact)}
-                >
-                  <label>
-                    Draft source
-                    <textarea
-                      key={artifact.version}
-                      name="content"
-                      rows={5}
-                      defaultValue={artifact.content}
-                      required
-                    />
-                  </label>
-                  <button type="submit" disabled={busy === artifact.id}>
-                    Save new version
-                  </button>
-                  {state.canPublish && artifact.status !== "live" && (
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={busy === artifact.id}
-                      onClick={() => void publish(artifact)}
-                    >
-                      Make version {artifact.version} live
-                    </button>
-                  )}
-                </form>
-              )}
-            {state.canEdit && artifact.versions.length > 0 && (
-              <details className="artifact-history">
-                <summary>{artifact.versions.length} versions</summary>
-                {artifact.versions.map((version) => (
-                  <p key={version.number}>
-                    Version {version.number} · {version.approvedAt
-                      ? `made live ${
-                        new Date(version.approvedAt).toLocaleString()
-                      }`
-                      : "draft"}
-                  </p>
-                ))}
-              </details>
-            )}
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SearchPanel(
-  { onOpenHub, onOpenImported }: {
-    onOpenHub: (id: string) => void;
-    onOpenImported: (
-      sourceId: string,
-      path: string,
-    ) => Promise<unknown>;
-  },
-) {
-  const [query, setQuery] = useState("");
-  const [type, setType] = useState("");
-  const [tag, setTag] = useState("");
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [result, setResult] = useState<SearchResponse | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async (params = new URLSearchParams()) => {
-    setBusy(true);
-    setError("");
-    const response = await api(`/api/search?${params}`);
-    const body = await response.json() as SearchResponse & { error?: string };
-    setBusy(false);
-    if (!response.ok) {
-      setError(body.error ?? "Search unavailable");
-      return;
-    }
-    setResult(body);
-  }, []);
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const params = new URLSearchParams();
-    if (query.trim()) params.set("q", query.trim());
-    if (type) params.set("type", type);
-    if (tag) params.set("tag", tag);
-    if (includeArchived) params.set("includeArchived", "true");
-    void load(params);
-  };
-  const open = (item: SearchRelationship) => {
-    if (item.kind === "hub-native") return onOpenHub(item.id);
-    if (item.sourceId !== "hub" && item.path) {
-      void onOpenImported(item.sourceId, item.path);
-    }
-  };
-  const relationships = (
-    label: string,
-    items: SearchRelationship[],
-  ) =>
-    items.length > 0 && (
-      <div className="search-relationships">
-        <strong>{label}</strong>
-        {items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => open(item)}
-          >
-            {item.title}
-            <small>{item.sourceId === "hub" ? "Hub" : item.sourceId}</small>
-          </button>
-        ))}
-      </div>
-    );
-
-  return (
-    <section className="search-panel" aria-labelledby="search-heading">
-      <div className="source-page-heading">
-        <p className="eyebrow">Permission-aware discovery</p>
-        <h1 id="search-heading">Search company knowledge</h1>
-        <p>Browse hub-native, Git, and shared-store knowledge in one view.</p>
-      </div>
-      <form className="search-form" role="search" onSubmit={submit}>
-        <label className="search-query">
-          Search
-          <input
-            type="search"
-            value={query}
-            maxLength={120}
-            placeholder="Incident response, onboarding, owner…"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <label>
-          Type
-          <select
-            value={type}
-            onChange={(event) => setType(event.target.value)}
-          >
-            <option value="">All types</option>
-            {result?.facets.types.map((item) => (
-              <option key={item} value={item}>{item}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Tag
-          <select value={tag} onChange={(event) => setTag(event.target.value)}>
-            <option value="">All tags</option>
-            {result?.facets.tags.map((item) => (
-              <option key={item} value={item}>{item}</option>
-            ))}
-          </select>
-        </label>
-        {result?.canIncludeArchived && (
-          <label className="archived-filter">
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={(event) => setIncludeArchived(event.target.checked)}
-            />
-            Include archived
-          </label>
-        )}
-        <button className="primary" type="submit" disabled={busy}>
-          {busy ? "Searching…" : "Search"}
-        </button>
-      </form>
-      {error && <p className="source-error" role="alert">{error}</p>}
-      <div className="search-summary" aria-live="polite">
-        {busy
-          ? "Checking access…"
-          : `${result?.results.length ?? 0} accessible concepts`}
-      </div>
-      <div className="search-results">
-        {result?.results.map((item) => (
-          <article key={item.id}>
-            <div className="search-result-heading">
-              <div>
-                <span className={`knowledge-kind ${item.kind}`}>
-                  {item.kind === "hub-native" ? "Hub-native" : "Imported"}
-                </span>
-                <span className={`trust-status ${item.trust}`}>
-                  {item.trust.replace("_", " ")}
-                </span>
-              </div>
-              <button type="button" onClick={() => open(item)}>
-                {item.title}
-              </button>
-              <p>{item.snippet}</p>
-            </div>
-            <dl className="search-metadata">
-              <div>
-                <dt>Type</dt>
-                <dd>{item.type}</dd>
-              </div>
-              <div>
-                <dt>Owner</dt>
-                <dd>{item.owner}</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>{item.sourceLabel}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{item.status}</dd>
-              </div>
-            </dl>
-            {item.tags.length > 0 && (
-              <div className="search-tags">
-                {item.tags.map((itemTag) => (
-                  <span key={itemTag}>{itemTag}</span>
-                ))}
-              </div>
-            )}
-            {relationships("Links to", item.links)}
-            {relationships("Linked from", item.backlinks)}
-          </article>
-        ))}
-        {!busy && result?.results.length === 0 && (
-          <p className="search-empty">
-            No accessible knowledge matches these filters.
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function HomePanel(
-  {
-    concepts,
-    spaces,
-    imports,
-    repositories,
-    shared,
-    canEdit,
-    onOpenConcept,
-    onOpenImported,
-    onCreate,
-    onSearch,
-    onSources,
-  }: {
-    concepts: Concept[];
-    spaces: Space[];
-    imports: ImportedConcept[];
-    repositories: RepositorySource[];
-    shared: SharedSource | null;
-    canEdit: boolean;
-    onOpenConcept: (id: string) => void;
-    onOpenImported: (
-      sourceId: string,
-      path: string,
-    ) => Promise<unknown>;
-    onCreate: () => void;
-    onSearch: () => void;
-    onSources: () => void;
-  },
-) {
-  const recentConcepts = [...concepts].sort((left, right) =>
-    right.updatedAt.localeCompare(left.updatedAt)
-  ).slice(0, 6);
-  const recentImports = [...imports].sort((left, right) =>
-    right.importedAt.localeCompare(left.importedAt)
-  ).slice(0, 4);
-  const unpublished =
-    concepts.filter((item) =>
-      item.status === "active" && !item.publishedRevision
-    ).length;
-  const archived = concepts.filter((item) => item.status === "archived")
-    .length;
-  const connected = [...repositories, shared].filter(Boolean);
-  const sourceAttention =
-    connected.filter((item) => item?.status !== "current").length;
-
-  return (
-    <section className="home-panel">
-      <header className="home-heading">
-        <div>
-          <p className="eyebrow">Company knowledge</p>
-          <h1>Your knowledge hub</h1>
-          <p>Everything here already follows your access permissions.</p>
-        </div>
-        <div className="home-actions">
-          <button type="button" onClick={onSearch}>Search knowledge</button>
-          {canEdit && (
-            <button className="primary" type="button" onClick={onCreate}>
-              Create document
-            </button>
-          )}
-        </div>
-      </header>
-      <div className="home-metrics">
-        <button type="button" onClick={onSearch}>
-          <strong>{concepts.length + imports.length}</strong>
-          <span>Accessible documents</span>
-        </button>
-        <div>
-          <strong>{spaces.length}</strong>
-          <span>Knowledge spaces</span>
-        </div>
-        {canEdit && (
-          <div>
-            <strong>{unpublished}</strong>
-            <span>Unpublished drafts</span>
-          </div>
-        )}
-        {canEdit && (
-          <div>
-            <strong>{archived}</strong>
-            <span>Archived documents</span>
-          </div>
-        )}
-      </div>
-      <div className="home-columns">
-        <section className="home-recent">
-          <div className="home-section-heading">
-            <h2>Recently updated</h2>
-            {canEdit && <button type="button" onClick={onCreate}>New</button>}
-          </div>
-          {recentConcepts.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              onClick={() => onOpenConcept(item.id)}
-            >
-              <span className="knowledge-kind">{item.type}</span>
-              <strong>{item.title}</strong>
-              <small>
-                {item.intent} · {item.space} · {item.status.replace("_", " ")}
-              </small>
-              <time>{new Date(item.updatedAt).toLocaleDateString()}</time>
-            </button>
-          ))}
-          {!recentConcepts.length && (
-            <p className="home-empty">
-              No hub-native documents are visible yet.
-            </p>
-          )}
-        </section>
-        <section className="home-overview">
-          <div className="home-section-heading">
-            <h2>Connected sources</h2>
-            <button type="button" onClick={onSources}>Open</button>
-          </div>
-          <button
-            className="source-health-card"
-            type="button"
-            onClick={onSources}
-          >
-            <strong>{connected.length} connected</strong>
-            <span>
-              {sourceAttention
-                ? `${sourceAttention} need attention`
-                : connected.length
-                ? "All connected sources are healthy"
-                : "Connect your first source"}
-            </span>
-            <small>{imports.length} imported documents</small>
-          </button>
-          {recentImports.length > 0 && (
-            <>
-              <h3>Recently imported</h3>
-              <div className="home-imports">
-                {recentImports.map((item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    onClick={() =>
-                      void onOpenImported(item.sourceId, item.path)}
-                  >
-                    <strong>{item.title}</strong>
-                    <small>
-                      {item.sourceId === "shared" ? "Shared store" : "Git"}
-                    </small>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-      </div>
-    </section>
-  );
-}
-
-function WorkTracePanel(
-  { concept, concepts, canEdit, busy, onCreate, onFold }: {
-    concept: Concept;
-    concepts: Concept[];
-    canEdit: boolean;
-    busy: boolean;
-    onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-    onFold: (
-      trace: WorkTrace,
-      event: FormEvent<HTMLFormElement>,
-    ) => Promise<void>;
-  },
-) {
-  const now = new Date();
-  const today = `${now.getFullYear()}-${
-    String(now.getMonth() + 1).padStart(
-      2,
-      "0",
-    )
-  }-${String(now.getDate()).padStart(2, "0")}`;
-  const canonicalTargets = concepts.filter((item) =>
-    item.intent === "canonical" && item.status === "active"
-  );
-  return (
-    <section className="work-trace-panel" aria-labelledby="work-trace-heading">
-      <header>
-        <p className="eyebrow">Historical truth</p>
-        <h2 id="work-trace-heading">Work trace</h2>
-        <p>
-          Keep dated reasons and outcomes without turning the current document
-          into a work log.
-        </p>
-      </header>
-      {canEdit && concept.status === "active" && (
-        <details className="trace-create">
-          <summary>Record work</summary>
-          <form
-            onSubmit={(event) =>
-              void onCreate(event)}
-          >
-            <label>
-              Kind
-              <select name="kind" defaultValue="change">
-                <option value="change">Change</option>
-                <option value="decision">Decision</option>
-                <option value="incident">Incident</option>
-                <option value="outcome">Outcome</option>
-              </select>
-            </label>
-            <label>
-              Date
-              <input
-                name="occurredAt"
-                type="date"
-                defaultValue={today}
-                required
-              />
-            </label>
-            <label className="trace-title">
-              Title
-              <input name="title" maxLength={100} required />
-            </label>
-            <label className="trace-summary">
-              What happened and why
-              <textarea name="summary" rows={4} maxLength={4000} required />
-            </label>
-            <label className="trace-source">
-              Ticket, PR, or source link <span>(optional)</span>
-              <input
-                name="sourceUrl"
-                type="url"
-                maxLength={500}
-                placeholder="https://github.com/company/project/issues/123"
-              />
-            </label>
-            <button className="primary" type="submit" disabled={busy}>
-              Record trace
-            </button>
-          </form>
-        </details>
-      )}
-      <div className="work-trace-list">
-        {concept.workTraces.map((trace) => (
-          <article key={trace.id}>
-            <div className="trace-heading">
-              <span>{trace.kind}</span>
-              <time dateTime={trace.occurredAt}>{trace.occurredAt}</time>
-            </div>
-            <h3>{trace.title}</h3>
-            {trace.conceptId !== concept.id && (
-              <p className="trace-origin">From {trace.conceptTitle}</p>
-            )}
-            <p>{trace.summary}</p>
-            {trace.sourceUrl && (
-              <a href={trace.sourceUrl} target="_blank" rel="noreferrer">
-                Open source work
-              </a>
-            )}
-            {trace.foldedIntoConceptId
-              ? (
-                <div className="trace-folded">
-                  Folded into <strong>{trace.foldedIntoTitle}</strong>
-                  {trace.foldedKnowledge && <p>{trace.foldedKnowledge}</p>}
-                </div>
-              )
-              : canEdit && trace.conceptId === concept.id &&
-                  canonicalTargets.length > 0
-              ? (
-                <details className="trace-fold">
-                  <summary>Fold lasting knowledge</summary>
-                  <form onSubmit={(event) => void onFold(trace, event)}>
-                    <label>
-                      Canonical destination
-                      <select name="targetConceptId" required>
-                        {canonicalTargets.map((target) => (
-                          <option key={target.id} value={target.id}>
-                            {target.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Lasting knowledge
-                      <textarea
-                        name="knowledge"
-                        rows={4}
-                        maxLength={10000}
-                        required
-                      />
-                    </label>
-                    <button type="submit" disabled={busy}>
-                      Fold into document
-                    </button>
-                  </form>
-                </details>
-              )
-              : null}
-          </article>
-        ))}
-        {!concept.workTraces.length && (
-          <p className="trace-empty">No work trace has been recorded.</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function HubCreatePanel(
-  {
-    spaces,
-    busy,
-    error,
-    onCreateSpace,
-    onCreateConcept,
-    onRenameSpace,
-    onDeleteSpace,
-    onCancel,
-  }: {
-    spaces: Space[];
-    busy: boolean;
-    error: string;
-    onCreateSpace: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-    onCreateConcept: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-    onRenameSpace: (
-      event: FormEvent<HTMLFormElement>,
-      space: Space,
-    ) => Promise<void>;
-    onDeleteSpace: (space: Space) => Promise<void>;
-    onCancel: () => void;
-  },
-) {
-  return (
-    <section className="hub-create-panel">
-      <div className="source-page-heading">
-        <p className="eyebrow">Hub-native knowledge</p>
-        <h1>Create and manage knowledge</h1>
-        <p>Documents inherit access from their space.</p>
-      </div>
-      <form onSubmit={(event) => void onCreateConcept(event)}>
-        <h2>New document</h2>
-        <label>
-          Title
-          <input name="title" maxLength={100} required autoFocus />
-        </label>
-        <label>
-          Type
-          <input name="type" maxLength={50} defaultValue="Policy" required />
-        </label>
-        <label>
-          Intent
-          <select name="intent" defaultValue="canonical" required>
-            <option value="canonical">Maintained knowledge</option>
-            <option value="working">Working document</option>
-            <option value="evidence">Evidence</option>
-            <option value="ephemeral">Ephemeral notes</option>
-          </select>
-        </label>
-        <label>
-          Space
-          <select name="spaceId" required>
-            {spaces.map((space) => (
-              <option key={space.id} value={space.id}>{space.name}</option>
-            ))}
-          </select>
-        </label>
-        <button className="primary" type="submit" disabled={busy}>
-          Create document
-        </button>
-      </form>
-      <form onSubmit={(event) => void onCreateSpace(event)}>
-        <h2>New space</h2>
-        <label>
-          Name
-          <input name="name" maxLength={60} required />
-        </label>
-        <button type="submit" disabled={busy}>Create space</button>
-      </form>
-      <section className="space-management">
-        <h2>Manage spaces</h2>
-        {spaces.map((space) => (
-          <form
-            key={space.id}
-            onSubmit={(event) => void onRenameSpace(event, space)}
-          >
-            <label>
-              Space name
-              <input
-                name="name"
-                maxLength={60}
-                defaultValue={space.name}
-                required
-              />
-            </label>
-            <span>{space.count} documents</span>
-            <button type="submit" disabled={busy}>Rename</button>
-            {space.id !== "policies" && (
-              <button
-                type="button"
-                disabled={busy || space.count > 0}
-                onClick={() => void onDeleteSpace(space)}
-              >
-                Delete empty space
-              </button>
-            )}
-          </form>
-        ))}
-      </section>
-      {error && <p className="source-error" role="alert">{error}</p>}
-      <button className="text-button" type="button" onClick={onCancel}>
-        Cancel
-      </button>
-    </section>
-  );
-}
-
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [fatal, setFatal] = useState("");
   const [concept, setConcept] = useState<Concept | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [conceptLoaded, setConceptLoaded] = useState(false);
   const [hubReady, setHubReady] = useState(false);
   const [sourcesReady, setSourcesReady] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [newDocumentOpen, setNewDocumentOpen] = useState(false);
+  const [newDocumentSpaceId, setNewDocumentSpaceId] = useState<string>();
+  const [newDocumentParentId, setNewDocumentParentId] = useState<string>();
+  const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
+  const [spaceDialogIcon, setSpaceDialogIcon] = useState("");
   const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
   const [initialMarkdown, setInitialMarkdown] = useState<string | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "failed">(
+  const [saveState, setSaveState] = useState<"saved" | "failed">(
     "saved",
   );
-  const [accessOpen, setAccessOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(
+    "general",
+  );
   const [view, setView] = useState<"draft" | "published">("draft");
+  const [surface, setSurface] = useState<DocumentSurface>("document");
+  const [documentMode, setDocumentMode] = useState<DocumentMode>("edit");
+  const [documentWidth, setDocumentWidth] = useState<DocumentWidth>("standard");
+  const [focusMode, setFocusMode] = useState(false);
+  const [referencesOpen, setReferencesOpen] = useState(false);
+  const [presenting, setPresenting] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentAnchor, setCommentAnchor] = useState<CommentAnchor>(null);
+  const [commentSelection, setCommentSelection] = useState<CommentSelection>(
+    null,
+  );
+  const [activeCommentThreadId, setActiveCommentThreadId] = useState<
+    string | null
+  >(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
   const [repositories, setRepositories] = useState<RepositorySource[]>([]);
   const [sharedSource, setSharedSource] = useState<SharedSource | null>(null);
+  const [notionSource, setNotionSource] = useState<NotionSource | null>(null);
+  const [connectors, setConnectors] = useState<ConnectorDefinition[]>([]);
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
   const [homeOpen, setHomeOpen] = useState(false);
+  const [spaceIdOpen, setSpaceIdOpen] = useState<string | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sharedBusy, setSharedBusy] = useState(false);
+  const [notionBusy, setNotionBusy] = useState(false);
+  const [sourceScheduleBusyId, setSourceScheduleBusyId] = useState<
+    string | null
+  >(null);
   const [sourceError, setSourceError] = useState("");
   const [sharedError, setSharedError] = useState("");
+  const [notionError, setNotionError] = useState("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  const referenceInserter = useRef<
+    ((title: string, href: string) => void) | null
+  >(null);
+  const pendingReference = useRef<{ title: string; href: string } | null>(null);
+  const commentReader = useRef<
+    (() => NonNullable<CommentAnchor> | null) | null
+  >(null);
+
+  useEffect(() => {
+    if (!commentSelection) return;
+    const clear = () => setCommentSelection(null);
+    globalThis.addEventListener("scroll", clear, true);
+    globalThis.addEventListener("resize", clear);
+    return () => {
+      globalThis.removeEventListener("scroll", clear, true);
+      globalThis.removeEventListener("resize", clear);
+    };
+  }, [commentSelection]);
 
   const refresh = useCallback(async () => {
-    let response = await api("/api/bootstrap");
-    let result = await response.json() as Bootstrap & { error?: string };
-    if (result.setupRequired) {
-      response = await api("/api/setup", { method: "POST" });
-      result = await response.json();
-    }
+    const response = await api("/api/bootstrap");
+    const result = await response.json() as Bootstrap & { error?: string };
     if (!response.ok) throw new Error(result.error ?? "Service unavailable");
     setBootstrap(result);
   }, []);
@@ -1969,7 +205,22 @@ export default function App() {
     const sources = await sourceResponse.json() as Sources;
     setRepositories(sources.repositories);
     setSharedSource(sources.shared);
+    setNotionSource(sources.notion);
+    setConnectors(sources.connectors);
+    enableEmbedConnectors(
+      sources.connectors.filter((connector) => connector.enabled).map((
+        connector,
+      ) => connector.id),
+    );
     setImports(await importsResponse.json());
+  }, []);
+  const loadTemplates = useCallback(async () => {
+    const response = await api("/api/templates");
+    const result = await response.json() as DocumentTemplate[] & {
+      error?: string;
+    };
+    if (!response.ok) throw new Error(result.error ?? "Templates unavailable");
+    setTemplates(result);
   }, []);
   const openHubConcept = useCallback(async (id: string, record = true) => {
     setConceptLoaded(false);
@@ -1986,11 +237,23 @@ export default function App() {
     setConceptLoaded(true);
     setCreateOpen(false);
     setDocumentSettingsOpen(false);
+    setCommentsOpen(false);
+    setCommentAnchor(null);
     setImported(null);
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
-    setAccessOpen(false);
+    setDeveloperOpen(false);
+    setPresenting(false);
+    const requestedSurface = !record
+      ? new URLSearchParams(globalThis.location.search).get("surface")
+      : null;
+    setSurface(
+      requestedSurface === "artifacts" || requestedSurface === "activity"
+        ? requestedSurface
+        : "document",
+    );
     if (record) setBrowserRoute({ kind: "concept", id });
   }, [bootstrap?.canEdit]);
   const refreshHubLists = useCallback(async () => {
@@ -2028,6 +291,10 @@ export default function App() {
       setSourcesReady(true)
     );
   }, [bootstrap?.canView, loadSources]);
+  useEffect(() => {
+    if (!bootstrap?.canEdit) return;
+    void loadTemplates().catch((error) => setActionError(error.message));
+  }, [bootstrap?.canEdit, loadTemplates]);
 
   const signOut = () => {
     void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
@@ -2042,16 +309,20 @@ export default function App() {
       setInitialMarkdown(null);
       setRepositories([]);
       setSharedSource(null);
+      setNotionSource(null);
+      setConnectors([]);
+      enableEmbedConnectors([]);
       setImports([]);
       setImported(null);
       setHomeOpen(false);
+      setSpaceIdOpen(null);
       setSearchOpen(false);
     });
   };
   const saveMarkdown = useCallback((content: string) => {
-    if (!bootstrap?.canEdit || !concept) return;
+    if (!bootstrap?.canEdit || !concept || concept.lockedAt) return;
     setMarkdown(content);
-    setSaveState("saving");
+    setSaveState("saved");
     if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
     saveTimer.current = globalThis.setTimeout(() => {
       api(conceptPath(concept.id), {
@@ -2084,22 +355,70 @@ export default function App() {
     await refreshHubLists().catch(() => {});
     return result;
   };
+  const documentLifecycle = async (id: string, action: string) => {
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(`${conceptPath(id)}/${action}`, {
+      method: "POST",
+    });
+    const result = await response.json().catch(() => ({})) as Concept & {
+      error?: string;
+    };
+    setActionBusy(false);
+    if (!response.ok) {
+      setActionError(result.error ?? "Document action failed");
+      return;
+    }
+    if (concept?.id === id) {
+      setConcept(result);
+      setInitialMarkdown(result.draft ?? null);
+      setMarkdown(result.draft ?? "");
+      setEditorVersion((current) => current + 1);
+    }
+    await refreshHubLists();
+  };
 
   const createSpace = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const name = String(new FormData(form).get("name") ?? "");
+    const fields = new FormData(form);
+    const name = String(fields.get("name") ?? "");
+    const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
     setActionError("");
     const response = await api("/api/spaces", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, icon }),
     });
     const result = await response.json() as Space & { error?: string };
     setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Creation failed");
+    if (!response.ok) {
+      setActionError(result.error ?? "Creation failed");
+      return false;
+    }
     form.reset();
     await refreshHubLists();
+    return true;
+  };
+  const updateWorkspace = async (value: {
+    name: string;
+    tagline: string;
+    logo: string;
+  }) => {
+    setActionBusy(true);
+    setActionError("");
+    const response = await api("/api/workspace", {
+      method: "PUT",
+      body: JSON.stringify(value),
+    });
+    const result = await response.json() as Bootstrap & { error?: string };
+    setActionBusy(false);
+    if (!response.ok) {
+      setActionError(result.error ?? "Workspace update failed");
+      return false;
+    }
+    setBootstrap(result);
+    return true;
   };
 
   const renameSpace = async (
@@ -2107,12 +426,14 @@ export default function App() {
     space: Space,
   ) => {
     event.preventDefault();
-    const name = String(new FormData(event.currentTarget).get("name") ?? "");
+    const fields = new FormData(event.currentTarget);
+    const name = String(fields.get("name") ?? "");
+    const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
     setActionError("");
     const response = await api(`/api/spaces/${space.id}`, {
       method: "PUT",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, icon }),
     });
     const result = await response.json() as Space & { error?: string };
     setActionBusy(false);
@@ -2139,11 +460,65 @@ export default function App() {
     await refreshHubLists();
   };
 
+  const createTemplate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setActionBusy(true);
+    setActionError("");
+    const response = await api("/api/templates", {
+      method: "POST",
+      body: JSON.stringify({
+        name: fields.get("name"),
+        description: fields.get("description"),
+        body: fields.get("body"),
+      }),
+    });
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
+    setActionBusy(false);
+    if (!response.ok) {
+      setActionError(result.error ?? "Template creation failed");
+      return false;
+    }
+    form.reset();
+    await loadTemplates();
+    return true;
+  };
+
+  const deleteTemplate = async (item: DocumentTemplate) => {
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(
+      `/api/templates/${encodeURIComponent(item.id)}`,
+      {
+        method: "DELETE",
+      },
+    );
+    setActionBusy(false);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as {
+        error?: string;
+      };
+      return setActionError(result.error ?? "Template deletion failed");
+    }
+    await loadTemplates();
+  };
+
   const createConcept = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     setActionBusy(true);
     setActionError("");
+    const templateId = String(fields.get("templateId") ?? "");
+    const variables = Object.fromEntries(
+      Array.from(fields.entries())
+        .filter(([name]) => name.startsWith("variable:"))
+        .map((
+          [name, value],
+        ) => [name.slice("variable:".length), String(value)]),
+    );
     const response = await api("/api/concepts", {
       method: "POST",
       body: JSON.stringify({
@@ -2151,13 +526,19 @@ export default function App() {
         type: fields.get("type"),
         intent: fields.get("intent"),
         spaceId: fields.get("spaceId"),
+        parentId: fields.get("parentId") || null,
+        ...(templateId ? { templateId, variables } : {}),
       }),
     });
     const result = await response.json() as Concept & { error?: string };
     setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Creation failed");
+    if (!response.ok) {
+      setActionError(result.error ?? "Creation failed");
+      return false;
+    }
     await refreshHubLists();
     await openHubConcept(result.id);
+    return true;
   };
 
   const updateConcept = async (event: FormEvent<HTMLFormElement>) => {
@@ -2186,7 +567,27 @@ export default function App() {
 
   const publish = async () => {
     const result = await lifecycle("publish", { markdown });
-    if (result) setSaveState("saved");
+    if (result) {
+      setSaveState("saved");
+      setView("published");
+    }
+  };
+
+  const moveDocument = async (
+    item: Concept,
+    destination: { spaceId: string; parentId: string | null; index: number },
+  ) => {
+    setActionError("");
+    const response = await api(`${conceptPath(item.id)}/move`, {
+      method: "POST",
+      body: JSON.stringify(destination),
+    });
+    const result = await response.json() as Concept & { error?: string };
+    if (!response.ok) {
+      return setActionError(result.error ?? "Move failed");
+    }
+    if (concept?.id === result.id) setConcept(result);
+    await refreshHubLists();
   };
 
   const restoreRevision = async (number: number) => {
@@ -2313,6 +714,29 @@ export default function App() {
     }
   };
 
+  const connectGitHubRepository = async (
+    installationId: number,
+    repositoryId: number,
+    folder: string,
+  ) => {
+    setSourceBusy(true);
+    setSourceError("");
+    const response = await api("/api/sources/github", {
+      method: "POST",
+      body: JSON.stringify({ installationId, repositoryId, folder }),
+    });
+    const result = await response.json() as RepositorySource & {
+      error?: string;
+    };
+    setSourceBusy(false);
+    if (!response.ok) {
+      setSourceError(result.error ?? "GitHub connection failed");
+      return;
+    }
+    globalThis.history.replaceState({}, "", "/sources");
+    await loadSources().catch(() => {});
+  };
+
   const disconnectRepository = async (source: RepositorySource) => {
     setSourceBusy(true);
     setSourceError("");
@@ -2361,6 +785,103 @@ export default function App() {
     await loadSources().catch(() => {});
   };
 
+  const connectNotionSource = async (token: string) => {
+    setNotionBusy(true);
+    setNotionError("");
+    const response = await api("/api/sources/notion", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    const result = await response.json() as NotionSource & { error?: string };
+    setNotionBusy(false);
+    if (result?.id === "notion") setNotionSource(result);
+    if (!response.ok) {
+      setNotionError(result.error ?? "Notion connection failed");
+    }
+    await loadSources().catch(() => {});
+  };
+
+  const connectConnector = async (
+    connector: ConnectorDefinition,
+    values: Record<string, string>,
+  ) => {
+    setSourceBusy(true);
+    setSourceError("");
+    const response = await api(`/api/connectors/${connector.id}/connect`, {
+      method: "POST",
+      body: JSON.stringify(values),
+    });
+    const result = await response.json() as { error?: string };
+    setSourceBusy(false);
+    if (!response.ok) setSourceError(result.error ?? "Connection failed");
+    await loadSources().catch(() => {});
+  };
+
+  const setConnectorEnabled = async (id: string, enabled: boolean) => {
+    const response = await api(`/api/connectors/${id}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+    const result = await response.json() as ConnectorDefinition & {
+      error?: string;
+    };
+    if (!response.ok) {
+      setSourceError(result.error ?? "Connector update failed");
+      return;
+    }
+    await loadSources();
+  };
+
+  const refreshNotionSource = async () => {
+    setNotionBusy(true);
+    setNotionError("");
+    const response = await api("/api/sources/notion/refresh", {
+      method: "POST",
+    });
+    const result = await response.json() as NotionSource & { error?: string };
+    setNotionBusy(false);
+    if (result?.id === "notion") setNotionSource(result);
+    if (!response.ok) setNotionError(result.error ?? "Notion refresh failed");
+    await loadSources().catch(() => {});
+  };
+
+  const updateSourceSchedule = async (
+    sourceId: string,
+    intervalMinutes: number,
+  ) => {
+    setSourceScheduleBusyId(sourceId);
+    setSourceError("");
+    const response = await api(`/api/sources/${sourceId}/schedule`, {
+      method: "PUT",
+      body: JSON.stringify({ intervalMinutes }),
+    });
+    const result = await response.json() as
+      | RepositorySource
+      | SharedSource
+      | NotionSource
+      | { error?: string };
+    setSourceScheduleBusyId(null);
+    if (!response.ok) {
+      setSourceError(
+        "error" in result && result.error
+          ? result.error
+          : "Schedule update failed",
+      );
+      return;
+    }
+    if (sourceId === "shared") {
+      setSharedSource(result as SharedSource);
+    } else if (sourceId === "notion") {
+      setNotionSource(result as NotionSource);
+    } else {
+      setRepositories((current) =>
+        current.map((source) =>
+          source.id === sourceId ? result as RepositorySource : source
+        )
+      );
+    }
+  };
+
   const openImported = async (
     sourceId: string,
     path: string,
@@ -2380,9 +901,11 @@ export default function App() {
     }
     setImported(result);
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
-    setAccessOpen(false);
+    setDeveloperOpen(false);
+    setPresenting(false);
     if (record) setBrowserRoute({ kind: "imported", sourceId, path });
     return true;
   };
@@ -2391,9 +914,11 @@ export default function App() {
     setRouteError("");
     setImported(null);
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
+    setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
     if (id && id !== concept?.id) {
       void openHubConcept(id, record).catch((error) =>
@@ -2409,49 +934,148 @@ export default function App() {
     }
   };
   const showHome = (record = true) => {
+    setPresenting(false);
     setRouteError("");
     setHomeOpen(true);
+    setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
+    setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    setAccessOpen(false);
     if (record) setBrowserRoute({ kind: "home" });
   };
+  const showSpace = (id: string, record = true) => {
+    setPresenting(false);
+    setRouteError("");
+    setSpaceIdOpen(id);
+    setHomeOpen(false);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(false);
+    setDocumentSettingsOpen(false);
+    if (record) setBrowserRoute({ kind: "space", id });
+  };
   const showSearch = (record = true) => {
+    setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setSearchOpen(true);
     setSourceOpen(false);
     setImported(null);
     setCreateOpen(false);
-    setAccessOpen(false);
+    setDeveloperOpen(false);
     if (record) setBrowserRoute({ kind: "search" });
   };
+  const openGlobalSearch = () => setSearchPaletteOpen(true);
   const showSources = (record = true) => {
+    setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(true);
     setSearchOpen(false);
     setCreateOpen(false);
-    setAccessOpen(false);
+    setDeveloperOpen(false);
     if (record) setBrowserRoute({ kind: "sources" });
   };
-  const showCreate = (record = true) => {
+  const showCreate = (
+    section: SettingsSection = "general",
+    record = true,
+  ) => {
+    setSettingsSection(section);
+    setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setSpaceIdOpen(null);
     setCreateOpen(true);
     setDocumentSettingsOpen(false);
     setImported(null);
     setSourceOpen(false);
     setSearchOpen(false);
-    setAccessOpen(false);
+    setDeveloperOpen(false);
     setActionError("");
-    if (record) setBrowserRoute({ kind: "manage" });
+    if (record) setBrowserRoute({ kind: "manage", section });
+  };
+  const showDeveloper = (record = true) => {
+    setPresenting(false);
+    setRouteError("");
+    setHomeOpen(false);
+    setSpaceIdOpen(null);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(true);
+    if (record) setBrowserRoute({ kind: "developer" });
+  };
+  const openNewDocument = (spaceId?: string, parentId?: string) => {
+    setNewDocumentSpaceId(spaceId);
+    setNewDocumentParentId(parentId);
+    setActionError("");
+    setNewDocumentOpen(true);
   };
 
+  const handleReferenceReady = useCallback(
+    (insert: ((title: string, href: string) => void) | null) => {
+      referenceInserter.current = insert;
+      if (insert && pendingReference.current) {
+        const pending = pendingReference.current;
+        pendingReference.current = null;
+        insert(pending.title, pending.href);
+      }
+    },
+    [],
+  );
+  const handleCommentReady = useCallback((
+    read: (() => NonNullable<CommentAnchor> | null) | null,
+  ) => {
+    commentReader.current = read;
+  }, []);
+  const openCommentThread = useCallback((threadId: string) => {
+    setCommentSelection(null);
+    setCommentAnchor(null);
+    setActiveCommentThreadId(threadId);
+    setCommentsOpen(true);
+  }, []);
+  const updateCommentCount = useCallback((count: number) => {
+    setConcept((current) =>
+      current ? { ...current, openCommentCount: count } : current
+    );
+    setConcepts((current) =>
+      current.map((item) =>
+        item.id === concept?.id ? { ...item, openCommentCount: count } : item
+      )
+    );
+  }, [concept?.id]);
+  const insertReference = useCallback((title: string, href: string) => {
+    if (
+      referenceInserter.current && surface === "document" &&
+      documentMode === "edit"
+    ) {
+      referenceInserter.current(title, href);
+      return;
+    }
+    pendingReference.current = { title, href };
+    setDocumentMode("edit");
+    setSurface("document");
+  }, [documentMode, surface]);
+  const insertArtifactReference = useCallback((artifact: Artifact) => {
+    if (!concept) return;
+    insertReference(
+      artifact.title,
+      `/knowledge/${
+        encodeURIComponent(concept.id)
+      }?surface=artifacts&artifact=${encodeURIComponent(artifact.id)}`,
+    );
+  }, [concept, insertReference]);
+
+  const spaceRouteVersion = spaces.map((item) => item.id).join("\0");
   useEffect(() => {
     if (!bootstrap?.canView || !hubReady || !sourcesReady) return;
     let active = true;
@@ -2459,9 +1083,11 @@ export default function App() {
       if (!active) return;
       setRouteError("This knowledge page is unavailable.");
       setHomeOpen(false);
+      setSpaceIdOpen(null);
       setSearchOpen(false);
       setSourceOpen(false);
       setCreateOpen(false);
+      setDeveloperOpen(false);
       setImported(null);
       setConceptLoaded(true);
     };
@@ -2471,9 +1097,26 @@ export default function App() {
         if (route.kind === "home") return showHome(false);
         if (route.kind === "search") return showSearch(false);
         if (route.kind === "sources") return showSources(false);
+        if (route.kind === "developer") {
+          if (!bootstrap.canEdit) return unavailable();
+          return showDeveloper(false);
+        }
+        if (route.kind === "space") {
+          if (!spaceRouteVersion.split("\0").includes(route.id)) {
+            return unavailable();
+          }
+          return showSpace(route.id, false);
+        }
         if (route.kind === "manage") {
           if (!bootstrap.canEdit) return unavailable();
-          return showCreate(false);
+          const section = route.section === "connectors" &&
+              bootstrap.access !== "owner"
+            ? "general"
+            : route.section;
+          if (section !== route.section) {
+            setBrowserRoute({ kind: "manage", section }, true);
+          }
+          return showCreate(section, false);
         }
         if (route.kind === "concept") {
           await openHubConcept(route.id, false);
@@ -2503,6 +1146,7 @@ export default function App() {
     hubReady,
     sourcesReady,
     openHubConcept,
+    spaceRouteVersion,
   ]);
 
   if (fatal) {
@@ -2512,13 +1156,13 @@ export default function App() {
           <p className="eyebrow">Service error</p>
           <h1>Could not open OKF Hub</h1>
           <p>{fatal}</p>
-          <button
+          <Button
             className="primary"
             type="button"
             onClick={() => globalThis.location.reload()}
           >
             Retry
-          </button>
+          </Button>
         </section>
       </main>
     );
@@ -2530,7 +1174,18 @@ export default function App() {
       </main>
     );
   }
-  if (!bootstrap.user) return <AuthScreen onAuthenticated={refresh} />;
+  if (!bootstrap.user) {
+    return (
+      <AuthScreen
+        signupAllowed={Boolean(bootstrap.signupAllowed)}
+        ssoProviders={bootstrap.ssoProviders ?? []}
+        onAuthenticated={refresh}
+      />
+    );
+  }
+  if (bootstrap.setupRequired) {
+    return <WorkspaceOnboarding onComplete={refresh} onSignOut={signOut} />;
+  }
   const invitationId = new URLSearchParams(globalThis.location.search).get(
     "invitation",
   );
@@ -2552,657 +1207,884 @@ export default function App() {
       ? "#52796f"
       : "#d5a64f",
   };
-  const profileCoverage =
-    PROFILE_MARKERS.filter((marker) => markdown.includes(marker)).length;
-  const connectedSourceCount = repositories.length +
-    Number(Boolean(sharedSource));
   const importedSourceLabel = imported?.sourceId === "shared"
     ? "Shared store"
+    : imported?.sourceId === "notion"
+    ? "Notion"
     : imported?.source && "repositoryUrl" in imported.source
     ? imported.source.repositoryUrl
     : "Git repository";
+  const importedFolder = imported?.path.split("/").slice(0, -1).join(" / ") ||
+    "Source root";
+  const importedSourceName = importedSourceLabel.replace(/\.git$/, "").split(
+    "/",
+  ).filter(Boolean).at(-1) ?? importedSourceLabel;
+  const activeSpace = spaceIdOpen
+    ? spaces.find((item) => item.id === spaceIdOpen) ?? null
+    : null;
+  const activeView = homeOpen
+    ? "home"
+    : activeSpace
+    ? "space"
+    : searchOpen
+    ? "search"
+    : sourceOpen
+    ? "sources"
+    : developerOpen
+    ? "developer"
+    : createOpen
+    ? "create"
+    : imported
+    ? "imported"
+    : "concept";
+  const pageSection = createOpen
+    ? "Settings"
+    : developerOpen
+    ? "Developer"
+    : activeSpace
+    ? "Spaces"
+    : homeOpen || searchOpen || sourceOpen
+    ? "Company knowledge"
+    : imported
+    ? importedSourceLabel
+    : concept?.space ?? "Hub-native knowledge";
+  const pageTitle = homeOpen
+    ? "Home"
+    : activeSpace
+    ? activeSpace.name
+    : searchOpen
+    ? "Search"
+    : sourceOpen
+    ? "Sources"
+    : createOpen
+    ? "Workspace"
+    : developerOpen
+    ? "API documentation"
+    : imported?.title ?? concept?.title ?? "Hub-native knowledge";
+  const statusTone =
+    homeOpen || activeSpace || searchOpen || sourceOpen || createOpen ||
+      developerOpen
+      ? "online"
+      : imported
+      ? imported.source?.status === "sync_failed" ? "offline" : "online"
+      : concept?.status === "archived"
+      ? "offline"
+      : concept?.lockedAt
+      ? "connecting"
+      : status === "syncing"
+      ? "connecting"
+      : status;
+  const statusLabel = searchOpen || homeOpen
+    ? "permission filtered"
+    : activeSpace
+    ? `${activeSpace.count} documents`
+    : sourceOpen
+    ? "connected sources"
+    : createOpen
+    ? "hub management"
+    : developerOpen
+    ? "developer API"
+    : imported
+    ? "read only"
+    : concept?.status === "archived"
+    ? "archived"
+    : concept?.lockedAt
+    ? "locked"
+    : bootstrap.canEdit && view === "draft"
+    ? status
+    : "published";
+  const statusDetail = homeOpen
+    ? "Knowledge overview"
+    : activeSpace
+    ? "Space overview"
+    : searchOpen
+    ? "Authorised results"
+    : sourceOpen
+    ? "Source overview"
+    : createOpen
+    ? "Workspace and developer settings"
+    : developerOpen
+    ? "Self-hosted API reference"
+    : imported
+    ? imported.sourceId === "shared"
+      ? "Shared-store owned"
+      : imported.sourceId === "notion"
+      ? "Notion owned"
+      : "Repository owned"
+    : concept?.lockedAt
+    ? "Read only until unlocked"
+    : bootstrap.canEdit && view === "published" && concept?.publishedRevision
+    ? `Revision ${concept.publishedRevision} published`
+    : bootstrap.canEdit
+    ? saveState === "failed" ? "Save failed" : ""
+    : "View only";
+  const presentation = imported?.markdown
+    ? {
+      key: `imported-${imported.id}`,
+      markdown: imported.markdown,
+      meta: `${imported.type} · ${importedSourceLabel}`,
+      title: imported.title,
+    }
+    : concept
+    ? {
+      key: `${concept.id}-${view}`,
+      markdown: view === "draft" ? markdown : concept.published ?? "",
+      meta: `${concept.type} · ${concept.space}`,
+      title: concept.title,
+    }
+    : null;
+  const canEditDocument = Boolean(
+    bootstrap.canEdit && concept?.lockedAt === null,
+  );
   return (
-    <main className="app-shell">
-      <header className="app-header">
-        <a
-          className="brand"
-          href="/"
-          aria-label="OKF Hub home"
-          onClick={(event) => {
-            event.preventDefault();
-            showHome();
+    <SidebarProvider className={focusMode ? "focus-mode" : undefined}>
+      {!focusMode && (
+        <AppSidebar
+          access={bootstrap.access}
+          activeImportId={imported?.id}
+          activeSpaceId={activeSpace?.id}
+          activeView={activeView}
+          canEdit={Boolean(bootstrap.canEdit)}
+          concepts={concepts}
+          currentConceptId={concept?.id}
+          imports={imports}
+          sources={[
+            ...repositories.map((source) => ({
+              id: source.id,
+              name: source.repositoryUrl.replace(/\.git$/, "").split("/")
+                .filter(Boolean).at(-1) ?? "Git repository",
+              count: source.conceptCount,
+              kind: "git" as const,
+            })),
+            ...(sharedSource
+              ? [{
+                id: sharedSource.id,
+                name: sharedSource.bucket,
+                count: sharedSource.conceptCount,
+                kind: "storage" as const,
+              }]
+              : []),
+            ...(notionSource
+              ? [{
+                id: notionSource.id,
+                name: "Notion",
+                count: notionSource.conceptCount,
+                kind: "notion" as const,
+              }]
+              : []),
+          ]}
+          spaces={spaces}
+          user={bootstrap.user}
+          workspace={bootstrap.workspace ?? {
+            name: "OKF Hub",
+            tagline: "Company knowledge",
+            logo: "",
           }}
-        >
-          <span>O</span> OKF Hub
-        </a>
-        <button
-          className="mobile-space-button"
-          type="button"
-          onClick={() => {
-            if (imported || sourceOpen || searchOpen) showHubConcept();
-            else showSources();
+          onCreate={() => {
+            showCreate("general");
           }}
-        >
-          {imported || sourceOpen || searchOpen
-            ? concept?.space ?? "Knowledge"
-            : `Sources (${imports.length})`}
-        </button>
-        <div className="document-title">
-          <small>
-            {homeOpen
-              ? "Company knowledge /"
-              : searchOpen
-              ? "Company knowledge /"
-              : imported
-              ? `${importedSourceLabel} /`
-              : `${concept?.space ?? "Hub-native knowledge"} /`}
-          </small>
-          <strong>
-            {homeOpen
-              ? "Home"
-              : searchOpen
-              ? "Search"
-              : imported?.title ?? concept?.title ?? "Hub-native knowledge"}
-          </strong>
-        </div>
-        <div className="header-status">
-          <span
-            className={`connection ${
-              homeOpen
-                ? "online"
-                : searchOpen
-                ? "online"
-                : imported
-                ? imported.source?.status === "sync_failed"
-                  ? "offline"
-                  : "online"
-                : concept?.status === "archived"
-                ? "offline"
-                : status
-            }`}
-          >
-            <i />
-            {searchOpen
-              ? "permission filtered"
-              : homeOpen
-              ? "permission filtered"
-              : imported
-              ? "read only"
-              : concept?.status === "archived"
-              ? "archived"
-              : bootstrap.canEdit && view === "draft"
-              ? status
-              : "published"}
-          </span>
-          <span className="save-state">
-            {homeOpen
-              ? "Knowledge overview"
-              : searchOpen
-              ? "Authorised results"
-              : imported
-              ? imported.sourceId === "shared"
-                ? "Shared-store owned"
-                : "Repository owned"
-              : bootstrap.canEdit
-              ? saveState === "saved" ? "Draft saved" : saveState
-              : "View only"}
-          </span>
-        </div>
-      </header>
-      <aside className="sidebar">
-        <p className="section-label">Company knowledge</p>
-        <nav>
-          <button
-            type="button"
-            className={searchOpen ? "active" : ""}
-            onClick={() => showSearch()}
-          >
-            ⌕ <span>Search</span>
-          </button>
-          <button
-            type="button"
-            className={homeOpen ? "active" : ""}
-            onClick={() => showHome()}
-          >
-            ⌂ <span>Home</span>
-          </button>
-        </nav>
-        <div className="spaces-heading">
-          <p className="section-label spaces-label">Spaces</p>
-          {bootstrap.canEdit && (
-            <button
-              type="button"
-              onClick={() => showCreate()}
-            >
-              Manage
-            </button>
-          )}
-        </div>
-        <div className="space-list">
-          {spaces.map((item, index) => (
-            <section key={item.id}>
-              <p>
-                <i className={`space-dot ${index % 2 ? "gold" : "coral"}`} />
-                <span>{item.name}</span>
-                <b>{item.count}</b>
-              </p>
-              <nav className="concept-nav">
-                {concepts.filter((candidate) => candidate.spaceId === item.id)
-                  .map((candidate) => (
-                    <button
-                      type="button"
-                      className={!homeOpen && !imported && !sourceOpen &&
-                          !searchOpen &&
-                          !createOpen && concept?.id === candidate.id
-                        ? "active"
-                        : ""}
-                      key={candidate.id}
-                      onClick={() => showHubConcept(candidate.id)}
-                    >
-                      <span>{candidate.title}</span>
-                      {candidate.status === "archived" && <b>Archived</b>}
-                    </button>
-                  ))}
-              </nav>
-            </section>
-          ))}
-        </div>
-        <nav className="space-nav sources-nav">
-          <button
-            type="button"
-            className={!searchOpen && (imported || sourceOpen) ? "active" : ""}
-            onClick={() => showSources()}
-          >
-            <i className="space-dot green" /> <span>Sources</span>
-            <b>{imports.length}</b>
-          </button>
-        </nav>
-        {imports.length > 0 && (
-          <>
-            <p className="section-label spaces-label">Imported</p>
-            <nav className="imported-nav">
-              {imports.map((item) => (
-                <button
-                  type="button"
-                  className={imported?.id === item.id ? "active" : ""}
-                  key={item.id}
-                  onClick={() => void openImported(item.sourceId, item.path)}
-                >
-                  <span>
-                    {item.title} · {item.sourceId === "shared" ? "S3" : "Git"}
-                  </span>
-                </button>
-              ))}
-            </nav>
-          </>
-        )}
-        <div className="sidebar-bottom">
-          <p className="section-label">Signed in</p>
-          <div className="account">
-            <strong>{bootstrap.user.name}</strong>
-            <span>{bootstrap.access}</span>
-          </div>
-          {bootstrap.access === "owner" && (
-            <button
-              type="button"
-              onClick={() => setAccessOpen(!accessOpen)}
-            >
-              Manage access
-            </button>
-          )}
-          <button type="button" onClick={signOut}>Sign out</button>
-          <div className="coverage">
-            <strong>{profileCoverage}/{PROFILE_MARKERS.length}</strong>
-            <span>extended profile markers intact</span>
-          </div>
-        </div>
-      </aside>
-      <section className="workspace">
-        {accessOpen && bootstrap.access === "owner" && (
-          <AccessPanel invitations={bootstrap.invitations ?? []} />
-        )}
-        {routeError
-          ? (
-            <section className="empty-state route-unavailable">
-              <p className="eyebrow">Unavailable</p>
-              <h1>Knowledge page not found</h1>
-              <p>{routeError}</p>
-              <button
-                className="primary"
-                type="button"
-                onClick={() => showHome()}
-              >
-                Back to Home
-              </button>
-            </section>
-          )
-          : homeOpen
-          ? (
-            <HomePanel
-              concepts={concepts}
-              spaces={spaces}
-              imports={imports}
-              repositories={repositories}
-              shared={sharedSource}
-              canEdit={Boolean(bootstrap.canEdit)}
-              onOpenConcept={showHubConcept}
-              onOpenImported={openImported}
-              onCreate={showCreate}
-              onSearch={showSearch}
-              onSources={showSources}
-            />
-          )
-          : createOpen && bootstrap.canEdit
-          ? (
-            <HubCreatePanel
-              spaces={spaces}
-              busy={actionBusy}
-              error={actionError}
-              onCreateSpace={createSpace}
-              onCreateConcept={createConcept}
-              onRenameSpace={renameSpace}
-              onDeleteSpace={deleteSpace}
-              onCancel={() => concept ? showHubConcept(concept.id) : showHome()}
-            />
-          )
-          : searchOpen
-          ? (
-            <SearchPanel
-              onOpenHub={showHubConcept}
-              onOpenImported={openImported}
-            />
-          )
-          : sourceOpen
-          ? (
-            <div className="source-panel">
-              <div className="source-page-heading">
-                <p className="eyebrow">Connected knowledge</p>
-                <h1>Knowledge sources</h1>
-                <p>
-                  {connectedSourceCount} connected · {imports.length}{" "}
-                  healthy concepts
-                </p>
-              </div>
-              {sourceError && (
-                <p className="source-error" role="alert">{sourceError}</p>
-              )}
-              {repositories.map((repository) => (
-                <RepositoryPanel
-                  key={repository.id}
-                  source={repository}
-                  imports={imports}
-                  canManage={bootstrap.access === "owner"}
-                  busy={sourceBusy}
-                  error=""
-                  onConnect={connectRepository}
-                  onRefresh={refreshRepository}
-                  onDisconnect={disconnectRepository}
-                  onOpen={openImported}
+          onCreateApp={() => {
+            if (!concept) return;
+            setSurface("artifacts");
+            showHubConcept(concept.id);
+          }}
+          onCreateDocument={openNewDocument}
+          onCreateSpace={() => {
+            setActionError("");
+            setSpaceDialogOpen(true);
+          }}
+          onArchiveDocument={(item) => {
+            if (
+              item.status === "active" &&
+              !globalThis.confirm(`Archive ${item.title}?`)
+            ) return;
+            void documentLifecycle(
+              item.id,
+              item.status === "active" ? "archive" : "restore",
+            );
+          }}
+          onToggleDocumentLock={(item) =>
+            void documentLifecycle(
+              item.id,
+              item.lockedAt ? "unlock" : "lock",
+            )}
+          onMoveDocument={(item, destination) =>
+            void moveDocument(item as Concept, destination)}
+          onManageAccess={() => {
+            showCreate("members");
+          }}
+          onOpenDeveloper={() => {
+            showDeveloper();
+          }}
+          onOpenConcept={showHubConcept}
+          onOpenHome={showHome}
+          onOpenImported={(sourceId, path) => void openImported(sourceId, path)}
+          onOpenSearch={openGlobalSearch}
+          onOpenSpace={showSpace}
+          onOpenSources={showSources}
+          onSignOut={() => void signOut()}
+        />
+      )}
+      <SidebarInset className="h-svh min-w-0 overflow-hidden bg-background">
+        {!focusMode && (
+          <WorkspaceHeader
+            detail={statusDetail}
+            section={pageSection}
+            status={statusLabel}
+            statusTone={statusTone}
+            title={pageTitle}
+            onSearch={openGlobalSearch}
+            actions={concept && !homeOpen && !activeSpace && !searchOpen &&
+                !sourceOpen &&
+                !createOpen && !developerOpen && !imported
+              ? (
+                <DocumentToolbar
+                  actionBusy={actionBusy}
+                  canEdit={canEditDocument}
+                  collaborators={collaborators}
+                  commentCount={concept.openCommentCount}
+                  exportHref={concept.publishedRevision
+                    ? `${SERVICE}${conceptPath(concept.id)}/export`
+                    : undefined}
+                  hasPublished={Boolean(concept.published)}
+                  focusMode={focusMode}
+                  mode={documentMode}
+                  revisionCount={concept.revisions.length}
+                  status={concept.status}
+                  surface={surface}
+                  view={view}
+                  width={documentWidth}
+                  onArchive={() => void lifecycle("archive")}
+                  onComments={() => {
+                    const editorAnchor = commentReader.current?.() ?? null;
+                    const selection = globalThis.getSelection();
+                    const selectedText = selection?.toString().trim() ?? "";
+                    const selectedElement = selection?.anchorNode instanceof
+                        Element
+                      ? selection.anchorNode
+                      : selection?.anchorNode?.parentElement;
+                    // ponytail: quote-only fallback covers read views; add stable
+                    // block anchors when inline comment decorations ship.
+                    setCommentAnchor(
+                      editorAnchor ||
+                        (selectedText &&
+                            selectedElement?.closest(".editor-frame")
+                          ? { text: selectedText, from: 0, to: 0 }
+                          : null),
+                    );
+                    setCommentSelection(null);
+                    setActiveCommentThreadId(null);
+                    setCommentsOpen(true);
+                  }}
+                  onHistory={() => setHistoryOpen((open) => !open)}
+                  onModeChange={setDocumentMode}
+                  onPublish={() => void publish()}
+                  onPresent={() => setPresenting(true)}
+                  onReferences={() => setReferencesOpen(true)}
+                  onRestore={() => void lifecycle("restore")}
+                  onSettings={() => setDocumentSettingsOpen(true)}
+                  onSurfaceChange={setSurface}
+                  onFocusModeChange={setFocusMode}
+                  onViewChange={setView}
+                  onWidthChange={setDocumentWidth}
                 />
-              ))}
-              {(bootstrap.access === "owner" || !repositories.length) && (
-                <RepositoryPanel
-                  source={null}
-                  imports={imports}
-                  canManage={bootstrap.access === "owner"}
-                  busy={sourceBusy}
-                  error=""
-                  onConnect={connectRepository}
-                  onRefresh={refreshRepository}
-                  onDisconnect={disconnectRepository}
-                  onOpen={openImported}
-                />
-              )}
-              <SharedStorePanel
-                source={sharedSource}
-                imports={imports}
-                canManage={bootstrap.access === "owner"}
-                busy={sharedBusy}
-                error={sharedError}
-                onConnect={connectSharedSource}
-                onRefresh={refreshSharedSource}
-                onOpen={openImported}
-              />
-              {bootstrap.access === "owner" && <AutomationPanel />}
-            </div>
-          )
-          : imported?.markdown
-          ? (
-            <MilkdownProvider key={`imported-${imported.path}`}>
-              <div className="workspace-bar imported-bar">
-                <div>
-                  <strong>{imported.type}</strong>
-                  <span>{imported.path}</span>
-                </div>
-                <span className="access-badge">Read only</span>
-                <button
-                  type="button"
-                  onClick={() => showSources()}
-                >
-                  Source details
-                </button>
-              </div>
-              <section className="import-provenance">
-                <span>{importedSourceLabel}</span>
-                <span>
-                  Revision <code>{imported.sourceRevision.slice(0, 12)}</code>
-                </span>
-                <span>{imported.revisionCount} imported revisions</span>
-                <span>
-                  Synced {new Date(imported.importedAt).toLocaleString()}
-                </span>
-              </section>
-              <div className="editor-frame read-only">
-                <div className="editor-context">
-                  <span className="published-label">
-                    {imported.sourceId === "shared"
-                      ? "SHARED STORE"
-                      : "REPOSITORY"} · READ ONLY
-                  </span>
-                  <span>The connected source is authoritative</span>
-                </div>
-                <DocumentPreview markdown={imported.markdown} />
-              </div>
-            </MilkdownProvider>
-          )
-          : !conceptLoaded
-          ? <div className="editor-loading">Opening authorised concept…</div>
-          : !concept
-          ? (
-            <section className="empty-state">
-              <p className="eyebrow">Hub-native knowledge</p>
-              <h1>No published knowledge yet</h1>
-              <p>
-                {bootstrap.canEdit
-                  ? "Create the first document and start writing visually."
-                  : "An editor has not published a document yet."}
-              </p>
-              {bootstrap.canEdit && (
-                <button
+              )
+              : undefined}
+          />
+        )}
+        <section className="workspace">
+          {focusMode && (
+            <Button
+              type="button"
+              variant="outline"
+              className="focus-exit"
+              onClick={() => setFocusMode(false)}
+            >
+              Exit focus
+            </Button>
+          )}
+          {routeError
+            ? (
+              <section className="empty-state route-unavailable">
+                <p className="eyebrow">Unavailable</p>
+                <h1>Knowledge page not found</h1>
+                <p>{routeError}</p>
+                <Button
                   className="primary"
                   type="button"
-                  disabled={actionBusy}
-                  onClick={() => setCreateOpen(true)}
+                  onClick={() => showHome()}
                 >
-                  Create document
-                </button>
-              )}
-              {actionError && <p className="form-error">{actionError}</p>}
-            </section>
-          )
-          : (
-            <MilkdownProvider
-              key={`${concept.id}-${concept.status}-${view}-${editorVersion}`}
-            >
-              <div className="workspace-bar">
-                <div
-                  className="people"
-                  aria-label={`${collaborators.length} collaborators online`}
-                >
-                  {collaborators.map((person) => (
-                    <span
-                      key={person.name}
-                      style={{ background: person.color }}
-                      title={person.name}
-                    >
-                      {person.name.split(" ").map((part) => part[0]).join("")}
+                  Back to Home
+                </Button>
+              </section>
+            )
+            : homeOpen
+            ? (
+              <HomePanel
+                concepts={concepts}
+                spaces={spaces}
+                imports={imports}
+                repositories={repositories}
+                shared={sharedSource}
+                notion={notionSource}
+                canEdit={Boolean(bootstrap.canEdit)}
+                onOpenConcept={showHubConcept}
+                onOpenImported={openImported}
+                onCreate={() => openNewDocument()}
+                onSearch={openGlobalSearch}
+                onSources={showSources}
+              />
+            )
+            : activeSpace
+            ? (
+              <SpacePanel
+                space={activeSpace}
+                concepts={concepts}
+                canEdit={Boolean(bootstrap.canEdit)}
+                onCreate={() => openNewDocument(activeSpace.id)}
+                onOpenConcept={showHubConcept}
+              />
+            )
+            : developerOpen
+            ? <DeveloperApiDocumentation />
+            : createOpen && bootstrap.canEdit
+            ? (
+              <WorkspaceSettings
+                workspace={bootstrap.workspace ?? {
+                  name: "OKF Hub",
+                  tagline: "Company knowledge",
+                  logo: "",
+                }}
+                spaces={spaces}
+                templates={templates}
+                invitations={bootstrap.invitations ?? []}
+                members={bootstrap.members ?? []}
+                groups={bootstrap.groups ?? []}
+                connectors={connectors}
+                repositories={repositories}
+                sharedSource={sharedSource}
+                notionSource={notionSource}
+                canExportWorkspace={bootstrap.access === "owner"}
+                canManageConnectors={bootstrap.access === "owner"}
+                connectorBusy={sourceBusy || sharedBusy || notionBusy}
+                busy={actionBusy}
+                error={actionError}
+                initialSection={settingsSection}
+                onSectionChange={(section) => {
+                  setSettingsSection(section);
+                  setBrowserRoute({ kind: "manage", section });
+                }}
+                onCreateSpace={createSpace}
+                onRenameSpace={renameSpace}
+                onDeleteSpace={deleteSpace}
+                onCreateTemplate={createTemplate}
+                onDeleteTemplate={deleteTemplate}
+                onUpdateWorkspace={updateWorkspace}
+                onConnectConnector={connectConnector}
+                onSetConnectorEnabled={setConnectorEnabled}
+                onConnectGitHub={connectGitHubRepository}
+                onCancel={() =>
+                  concept ? showHubConcept(concept.id) : showHome()}
+              />
+            )
+            : searchOpen
+            ? (
+              <SearchPanel
+                onOpenHub={showHubConcept}
+                onOpenImported={openImported}
+              />
+            )
+            : sourceOpen
+            ? (
+              <SourceWorkspace
+                repositories={repositories}
+                sharedSource={sharedSource}
+                notionSource={notionSource}
+                connectors={connectors}
+                imports={imports}
+                canManage={bootstrap.access === "owner"}
+                sourceBusy={sourceBusy}
+                sharedBusy={sharedBusy}
+                notionBusy={notionBusy}
+                sourceError={sourceError}
+                sharedError={sharedError}
+                notionError={notionError}
+                scheduleBusyId={sourceScheduleBusyId}
+                onConnectRepository={connectRepository}
+                onConnectGitHub={connectGitHubRepository}
+                onRefreshRepository={refreshRepository}
+                onDisconnectRepository={disconnectRepository}
+                onConnectShared={connectSharedSource}
+                onRefreshShared={refreshSharedSource}
+                onConnectNotion={connectNotionSource}
+                onRefreshNotion={refreshNotionSource}
+                onConnectConnector={connectConnector}
+                onSetConnectorEnabled={setConnectorEnabled}
+                onUpdateSchedule={updateSourceSchedule}
+                onOpen={openImported}
+              />
+            )
+            : imported?.markdown
+            ? (
+              <MilkdownProvider key={`imported-${imported.path}`}>
+                <section className="imported-document-header">
+                  <div className="imported-document-primary">
+                    <div className="imported-document-location">
+                      <Badge variant="outline">{imported.type}</Badge>
+                      <span>
+                        <FolderOpen /> {importedFolder}
+                      </span>
+                    </div>
+                    <div className="imported-document-actions">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setPresenting(true)}
+                      >
+                        <Presentation /> Present
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => showSources()}
+                      >
+                        <GitBranch /> Source
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="imported-document-meta">
+                    <span>
+                      <GitBranch /> {importedSourceName}
                     </span>
-                  ))}
-                  <small>{collaborators.length} online</small>
+                    <span>
+                      Revision{" "}
+                      <code>{imported.sourceRevision.slice(0, 12)}</code>
+                    </span>
+                    <span>{imported.revisionCount} imported revisions</span>
+                    <span>
+                      Synced {new Date(imported.importedAt).toLocaleString()}
+                    </span>
+                  </div>
+                </section>
+                <div className="editor-frame read-only imported-editor">
+                  <DocumentPreview
+                    markdown={imported.markdown}
+                    onLinkOpen={(href) => {
+                      const path = resolveImportedLink(imported.path, href);
+                      if (!path) return false;
+                      const target = imports.find((item) =>
+                        item.sourceId === imported.sourceId &&
+                        (item.path === path || item.path === `${path}.md`)
+                      );
+                      if (!target) return false;
+                      void openImported(target.sourceId, target.path);
+                      return true;
+                    }}
+                  />
                 </div>
-                <span className="access-badge">{bootstrap.access}</span>
-                {concept.publishedRevision && (
-                  <a
-                    className="export-link"
-                    href={`${SERVICE}${conceptPath(concept.id)}/export`}
-                  >
-                    Download OKF
-                  </a>
-                )}
+              </MilkdownProvider>
+            )
+            : !conceptLoaded
+            ? <div className="editor-loading">Opening authorised concept…</div>
+            : !concept
+            ? (
+              <section className="empty-state">
+                <p className="eyebrow">Hub-native knowledge</p>
+                <h1>No published knowledge yet</h1>
+                <p>
+                  {bootstrap.canEdit
+                    ? "Create the first document and start writing visually."
+                    : "An editor has not published a document yet."}
+                </p>
                 {bootstrap.canEdit && (
-                  <div className="lifecycle-actions">
-                    {concept.status === "active" && (
-                      <div className="view-switch" aria-label="Concept view">
-                        <button
-                          type="button"
-                          className={view === "draft" ? "active" : ""}
-                          onClick={() =>
-                            setView("draft")}
-                        >
-                          Draft
-                        </button>
-                        <button
-                          type="button"
-                          className={view === "published" ? "active" : ""}
-                          disabled={!concept.published}
-                          onClick={() =>
-                            setView("published")}
-                        >
-                          Published
-                        </button>
+                  <Button
+                    className="primary"
+                    type="button"
+                    disabled={actionBusy}
+                    onClick={() => openNewDocument()}
+                  >
+                    Create document
+                  </Button>
+                )}
+                {actionError && <p className="form-error">{actionError}</p>}
+              </section>
+            )
+            : (
+              <MilkdownProvider
+                key={`${concept.id}-${concept.status}-${view}-${editorVersion}`}
+              >
+                <Dialog
+                  open={documentSettingsOpen}
+                  onOpenChange={setDocumentSettingsOpen}
+                >
+                  <DialogContent className="sm:max-w-[480px]">
+                    <DialogHeader>
+                      <DialogTitle>Document settings</DialogTitle>
+                      <DialogDescription>
+                        Moving a document keeps every draft, revision, artifact,
+                        and audit event.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form
+                      onSubmit={(event) => void updateConcept(event)}
+                      className="grid gap-4 py-2"
+                    >
+                      <div className="grid gap-2">
+                        <label className="text-xs font-semibold">Title</label>
+                        <Input
+                          name="title"
+                          maxLength={100}
+                          defaultValue={concept.title}
+                          required
+                        />
                       </div>
+                      <div className="grid gap-2">
+                        <label className="text-xs font-semibold">Type</label>
+                        <Input
+                          name="type"
+                          maxLength={50}
+                          defaultValue={concept.type}
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-xs font-semibold">Intent</label>
+                        <select
+                          name="intent"
+                          defaultValue={concept.intent}
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                          required
+                        >
+                          <option value="canonical">
+                            Maintained knowledge
+                          </option>
+                          <option value="working">Working document</option>
+                          <option value="evidence">Evidence</option>
+                          <option value="ephemeral">Ephemeral notes</option>
+                        </select>
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-xs font-semibold">Space</label>
+                        <select
+                          name="spaceId"
+                          defaultValue={concept.spaceId}
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                          required
+                        >
+                          {spaces.map((space) => (
+                            <option key={space.id} value={space.id}>
+                              {space.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <DialogFooter className="mt-2">
+                        <Button
+                          variant="outline"
+                          type="button"
+                          onClick={() => setDocumentSettingsOpen(false)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="default"
+                          className="primary"
+                          type="submit"
+                          disabled={actionBusy}
+                        >
+                          Save settings
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+
+                <DocumentReferences
+                  canEdit={Boolean(bootstrap.canEdit)}
+                  conceptId={concept.id}
+                  open={referencesOpen}
+                  onInsert={insertReference}
+                  onOpenChange={setReferencesOpen}
+                  onOpenConcept={showHubConcept}
+                />
+
+                <RevisionHistory
+                  conceptId={concept.id}
+                  revisions={concept.revisions}
+                  open={historyOpen && Boolean(bootstrap.canEdit)}
+                  canRestore={concept.status !== "archived" &&
+                    !concept.lockedAt}
+                  busy={actionBusy}
+                  onOpenChange={setHistoryOpen}
+                  onRestore={(number) => void restoreRevision(number)}
+                />
+                {actionError && (
+                  <p className="action-error" role="alert">{actionError}</p>
+                )}
+                {concept.lockedAt && surface === "document" && (
+                  <div className="document-lock-banner" role="status">
+                    <Lock />
+                    <div>
+                      <strong>Document locked</strong>
+                      <span>
+                        Draft changes are paused until an editor unlocks it.
+                      </span>
+                    </div>
+                    {bootstrap.canEdit && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={actionBusy}
+                        onClick={() =>
+                          void documentLifecycle(concept.id, "unlock")}
+                      >
+                        Unlock
+                      </Button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setHistoryOpen(!historyOpen)}
-                    >
-                      History ({concept.revisions.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDocumentSettingsOpen(!documentSettingsOpen)}
-                    >
-                      Document settings
-                    </button>
-                    {concept.status === "active"
+                  </div>
+                )}
+                {surface === "document" && (
+                  <div
+                    className={`editor-frame ${
+                      canEditDocument ? "" : "read-only"
+                    }`}
+                  >
+                    {concept.status === "archived"
                       ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => void lifecycle("archive")}
-                            disabled={actionBusy}
-                          >
-                            Archive
-                          </button>
-                          <button
-                            className="primary"
-                            type="button"
-                            onClick={() => void publish()}
-                            disabled={actionBusy || view !== "draft"}
-                          >
-                            Publish
-                          </button>
-                        </>
+                        <section className="lifecycle-empty">
+                          <p className="eyebrow">Archived</p>
+                          <h1>Incident communication is out of discovery</h1>
+                          <p>
+                            Its published revisions remain preserved and can be
+                            restored.
+                          </p>
+                        </section>
+                      )
+                      : canEditDocument && view === "draft" &&
+                          documentMode === "edit" &&
+                          initialMarkdown !== null
+                      ? (
+                        <div
+                          className={`canvas-container document-width-${documentWidth}`}
+                        >
+                          <DocumentProperties
+                            concept={concept}
+                            spaces={spaces}
+                            canEdit={canEditDocument}
+                            onConceptUpdate={(updated) => {
+                              const next = updated as Concept;
+                              setConcept(next);
+                              setConcepts((current) =>
+                                current.map((item) =>
+                                  item.id === next.id ? next : item
+                                )
+                              );
+                            }}
+                          />
+                          <DocumentEditor
+                            key={editorVersion}
+                            conceptId={concept.id}
+                            collabEpoch={concept.collabEpoch}
+                            initialMarkdown={initialMarkdown}
+                            user={user}
+                            canEdit={canEditDocument}
+                            onMarkdown={saveMarkdown}
+                            onStatus={setStatus}
+                            onCollaborators={setCollaborators}
+                            onReferenceReady={handleReferenceReady}
+                            onCommentReady={handleCommentReady}
+                            onCommentSelection={setCommentSelection}
+                            onCommentOpen={openCommentThread}
+                          />
+                        </div>
+                      )
+                      : (view === "draft" ? markdown : concept.published)
+                      ? (
+                        <div
+                          className={`canvas-container document-width-${documentWidth}`}
+                        >
+                          <DocumentProperties
+                            concept={concept}
+                            spaces={spaces}
+                            canEdit={false}
+                            onConceptUpdate={() => {}}
+                          />
+                          <DocumentPreview
+                            key={`${concept.publishedRevision}-${view}`}
+                            conceptId={concept.id}
+                            markdown={view === "draft"
+                              ? markdown
+                              : concept.published ?? ""}
+                            onCommentOpen={openCommentThread}
+                          />
+                        </div>
                       )
                       : (
-                        <button
-                          className="primary"
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() => void lifecycle("restore")}
-                        >
-                          Restore concept
-                        </button>
+                        <div className="editor-loading">
+                          Select a concept or draft to view content.
+                        </div>
                       )}
                   </div>
                 )}
-              </div>
-              {documentSettingsOpen && bootstrap.canEdit && (
-                <section className="document-settings">
-                  <form onSubmit={(event) => void updateConcept(event)}>
-                    <strong>Document settings</strong>
-                    <label>
-                      Title
-                      <input
-                        name="title"
-                        maxLength={100}
-                        defaultValue={concept.title}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Type
-                      <input
-                        name="type"
-                        maxLength={50}
-                        defaultValue={concept.type}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Intent
-                      <select
-                        name="intent"
-                        defaultValue={concept.intent}
-                        required
-                      >
-                        <option value="canonical">Maintained knowledge</option>
-                        <option value="working">Working document</option>
-                        <option value="evidence">Evidence</option>
-                        <option value="ephemeral">Ephemeral notes</option>
-                      </select>
-                    </label>
-                    <label>
-                      Space
-                      <select
-                        name="spaceId"
-                        defaultValue={concept.spaceId}
-                        required
-                      >
-                        {spaces.map((space) => (
-                          <option key={space.id} value={space.id}>
-                            {space.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      className="primary"
-                      type="submit"
-                      disabled={actionBusy}
-                    >
-                      Save settings
-                    </button>
-                  </form>
-                  <p>
-                    Moving a document keeps every draft, revision, artifact, and
-                    audit event.
-                  </p>
-                </section>
-              )}
-              {historyOpen && bootstrap.canEdit && (
-                <section
-                  className="revision-panel"
-                  aria-label="Revision history"
-                >
-                  <strong>Published revisions</strong>
-                  {concept.revisions.length
-                    ? concept.revisions.map((revision) => (
-                      <div key={revision.number}>
-                        <span>
-                          Revision {revision.number} · {new Date(
-                            revision.publishedAt,
-                          ).toLocaleString()}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={actionBusy || concept.status === "archived"}
-                          onClick={() =>
-                            void restoreRevision(revision.number)}
-                        >
-                          Restore as draft
-                        </button>
-                      </div>
-                    ))
-                    : <p>Nothing has been published yet.</p>}
-                </section>
-              )}
-              {actionError && (
-                <p className="action-error" role="alert">{actionError}</p>
-              )}
-              <div
-                className={`editor-frame ${
-                  bootstrap.canEdit ? "" : "read-only"
-                }`}
+                {surface === "artifacts" && (
+                  <AppPanel
+                    conceptId={concept.id}
+                    conceptActive={concept.status === "active"}
+                    onInsertReference={bootstrap.canEdit
+                      ? insertArtifactReference
+                      : undefined}
+                  />
+                )}
+                {surface === "activity" && (
+                  <WorkTracePanel
+                    concept={concept}
+                    concepts={concepts}
+                    canEdit={canEditDocument}
+                    busy={actionBusy}
+                    onCreate={createWorkTrace}
+                    onFold={foldWorkTrace}
+                  />
+                )}
+              </MilkdownProvider>
+            )}
+        </section>
+        {commentSelection && (
+          <Button
+            type="button"
+            size="sm"
+            className="fixed z-50 gap-1.5 shadow-lg"
+            style={{
+              top: commentSelection.top,
+              left: commentSelection.left,
+            }}
+            onClick={() => {
+              setCommentAnchor(commentSelection.anchor);
+              setCommentSelection(null);
+              setActiveCommentThreadId(null);
+              setCommentsOpen(true);
+            }}
+          >
+            <MessageSquare /> Comment
+          </Button>
+        )}
+        {concept && (
+          <DocumentComments
+            conceptId={concept.id}
+            revisionNumber={concept.publishedRevision}
+            open={commentsOpen}
+            anchor={commentAnchor}
+            activeThreadId={activeCommentThreadId}
+            onOpenChange={(open) => {
+              setCommentsOpen(open);
+              if (!open) setActiveCommentThreadId(null);
+            }}
+            onAnchorChange={setCommentAnchor}
+            onCountChange={updateCommentCount}
+          />
+        )}
+      </SidebarInset>
+      {bootstrap.canEdit && (
+        <NewDocumentDialog
+          open={newDocumentOpen}
+          spaces={spaces}
+          concepts={concepts}
+          templates={templates}
+          initialSpaceId={newDocumentSpaceId}
+          initialParentId={newDocumentParentId}
+          busy={actionBusy}
+          error={actionError}
+          onOpenChange={setNewDocumentOpen}
+          onCreate={createConcept}
+        />
+      )}
+      <Dialog open={spaceDialogOpen} onOpenChange={setSpaceDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create space</DialogTitle>
+            <DialogDescription>
+              Spaces group related documents and carry their access rules.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="sidebar-space-form"
+            onSubmit={(event) => {
+              void createSpace(event).then((created) => {
+                if (created) {
+                  setSpaceDialogIcon("");
+                  setSpaceDialogOpen(false);
+                }
+              });
+            }}
+          >
+            <Label htmlFor="sidebar-space-name">Name</Label>
+            <Input
+              id="sidebar-space-name"
+              name="name"
+              autoFocus
+              maxLength={80}
+              placeholder="Engineering"
+              required
+            />
+            <span className="text-sm font-medium">Icon or emoji</span>
+            <input
+              type="hidden"
+              name="icon"
+              value={spaceDialogIcon}
+              readOnly
+            />
+            <SpaceIconPicker
+              value={spaceDialogIcon}
+              label="Choose space icon or emoji"
+              onChange={setSpaceDialogIcon}
+            />
+            {actionError && <p role="alert">{actionError}</p>}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setSpaceDialogOpen(false)}
               >
-                {concept.status === "archived"
-                  ? (
-                    <section className="lifecycle-empty">
-                      <p className="eyebrow">Archived</p>
-                      <h1>Incident communication is out of discovery</h1>
-                      <p>
-                        Its published revisions remain preserved and can be
-                        restored.
-                      </p>
-                    </section>
-                  )
-                  : bootstrap.canEdit && view === "draft" && initialMarkdown
-                  ? (
-                    <>
-                      <div className="editor-context">
-                        <span className="draft-label">
-                          {concept.intent.toUpperCase()} · SHARED DRAFT
-                        </span>
-                        <span>
-                          {concept.publishedRevision
-                            ? `Published revision ${concept.publishedRevision} stays live`
-                            : "Not published yet"}
-                        </span>
-                      </div>
-                      <EditorSurface
-                        key={editorVersion}
-                        conceptId={concept.id}
-                        initialMarkdown={initialMarkdown}
-                        user={user}
-                        canEdit
-                        onMarkdown={saveMarkdown}
-                        onStatus={setStatus}
-                        onCollaborators={setCollaborators}
-                      />
-                    </>
-                  )
-                  : concept.published
-                  ? (
-                    <>
-                      <div className="editor-context">
-                        <span className="published-label">
-                          {concept.intent.toUpperCase()} · PUBLISHED
-                        </span>
-                        <span>Revision {concept.publishedRevision}</span>
-                      </div>
-                      <DocumentPreview
-                        key={`${concept.publishedRevision}-${view}`}
-                        markdown={concept.published}
-                      />
-                    </>
-                  )
-                  : (
-                    <section className="lifecycle-empty">
-                      <p className="eyebrow">Private draft</p>
-                      <h1>Nothing has been published yet</h1>
-                      <p>
-                        Viewers will see this concept after an editor publishes
-                        it.
-                      </p>
-                    </section>
-                  )}
-              </div>
-              <ArtifactPanel
-                conceptId={concept.id}
-                conceptActive={concept.status === "active"}
-              />
-              <WorkTracePanel
-                concept={concept}
-                concepts={concepts}
-                canEdit={Boolean(bootstrap.canEdit)}
-                busy={actionBusy}
-                onCreate={createWorkTrace}
-                onFold={foldWorkTrace}
-              />
-            </MilkdownProvider>
-          )}
-      </section>
-    </main>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={actionBusy}>
+                {actionBusy ? "Creating…" : "Create space"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      {!presenting && (
+        <CommandPalette
+          canEdit={Boolean(bootstrap.canEdit)}
+          concept={concept && !homeOpen && !searchOpen && !sourceOpen &&
+              !createOpen && !imported
+            ? concept
+            : null}
+          open={searchPaletteOpen}
+          onCreate={() => openNewDocument()}
+          onFocus={() => setFocusMode(true)}
+          onOpenChange={setSearchPaletteOpen}
+          onOpenConcept={showHubConcept}
+          onOpenHome={showHome}
+          onOpenImported={openImported}
+          onOpenReferences={() => setReferencesOpen(true)}
+          onOpenSearch={showSearch}
+          onOpenSurface={setSurface}
+          onPresent={() => setPresenting(true)}
+        />
+      )}
+      {presenting && presentation && (
+        <MilkdownProvider key={presentation.key}>
+          <PresentationMode
+            markdown={presentation.markdown}
+            meta={presentation.meta}
+            title={presentation.title}
+            onClose={() => setPresenting(false)}
+          />
+        </MilkdownProvider>
+      )}
+    </SidebarProvider>
   );
 }

@@ -1,0 +1,26 @@
+{
+  "$schema": "./sso.schema.json",
+  "providers": [
+    {
+      "name": "Company OIDC",
+      "providerId": "company-oidc",
+      "domain": "example.com",
+      "oidcConfig": {
+        "issuer": "https://login.example.com",
+        "clientId": "replace-me",
+        "clientSecretFile": "/config/private/oidc-client-secret",
+        "scopes": ["openid", "email", "profile"]
+      }
+    },
+    {
+      "name": "Company SAML",
+      "providerId": "company-saml",
+      "domain": "example.com",
+      "samlConfig": {
+        "entryPoint": "https://idp.example.com/sso",
+        "certFile": "/config/private/saml-idp-cert.pem",
+        "wantAssertionsSigned": true
+      }
+    }
+  ]
+}
