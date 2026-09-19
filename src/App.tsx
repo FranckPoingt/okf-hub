@@ -5,6 +5,7 @@ import {
   Lock,
   MessageSquare,
   Presentation,
+  Sparkles,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -14,6 +15,7 @@ import {
   useState,
 } from "react";
 import { AppSidebar } from "./components/app-sidebar.tsx";
+import { AskOKF } from "./components/ask-okf.tsx";
 import { CommandPalette } from "./components/command-palette.tsx";
 import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
 import {
@@ -68,6 +70,7 @@ import { api, conceptPath, SERVICE } from "./lib/api.ts";
 import { enableEmbedConnectors } from "./lib/embeds.ts";
 import type { ConnectorDefinition } from "./lib/connectors.ts";
 import type {
+  AIConfig,
   Artifact,
   Bootstrap,
   Concept,
@@ -143,6 +146,12 @@ export default function App() {
     string | null
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [aiConfig, setAIConfig] = useState<AIConfig>({
+    enabled: false,
+    provider: "",
+    model: "",
+  });
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
   const [repositories, setRepositories] = useState<RepositorySource[]>([]);
@@ -222,6 +231,14 @@ export default function App() {
     if (!response.ok) throw new Error(result.error ?? "Templates unavailable");
     setTemplates(result);
   }, []);
+  const loadAIConfig = useCallback(async () => {
+    const response = await api("/api/ai/config");
+    const result = await response.json() as AIConfig & { error?: string };
+    if (!response.ok) {
+      throw new Error(result.error ?? "AI settings unavailable");
+    }
+    setAIConfig(result);
+  }, []);
   const openHubConcept = useCallback(async (id: string, record = true) => {
     setConceptLoaded(false);
     setRouteError("");
@@ -292,6 +309,10 @@ export default function App() {
     );
   }, [bootstrap?.canView, loadSources]);
   useEffect(() => {
+    if (!bootstrap?.canView) return;
+    void loadAIConfig().catch((error) => setActionError(error.message));
+  }, [bootstrap?.canView, loadAIConfig]);
+  useEffect(() => {
     if (!bootstrap?.canEdit) return;
     void loadTemplates().catch((error) => setActionError(error.message));
   }, [bootstrap?.canEdit, loadTemplates]);
@@ -317,6 +338,8 @@ export default function App() {
       setHomeOpen(false);
       setSpaceIdOpen(null);
       setSearchOpen(false);
+      setAskOpen(false);
+      setAIConfig({ enabled: false, provider: "", model: "" });
     });
   };
   const saveMarkdown = useCallback((content: string) => {
@@ -988,6 +1011,9 @@ export default function App() {
     section: SettingsSection = "general",
     record = true,
   ) => {
+    if (section === "members" && bootstrap?.access !== "owner") {
+      section = "general";
+    }
     setSettingsSection(section);
     setPresenting(false);
     setRouteError("");
@@ -1434,9 +1460,21 @@ export default function App() {
             statusTone={statusTone}
             title={pageTitle}
             onSearch={openGlobalSearch}
-            actions={concept && !homeOpen && !activeSpace && !searchOpen &&
-                !sourceOpen &&
-                !createOpen && !developerOpen && !imported
+            actions={imported
+              ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 px-2.5 text-xs"
+                  onClick={() => setAskOpen(true)}
+                >
+                  <Sparkles className="size-3.5" /> Ask OKF
+                </Button>
+              )
+              : concept && !homeOpen && !activeSpace && !searchOpen &&
+                  !sourceOpen &&
+                  !createOpen && !developerOpen && !imported
               ? (
                 <DocumentToolbar
                   actionBusy={actionBusy}
@@ -1455,6 +1493,7 @@ export default function App() {
                   view={view}
                   width={documentWidth}
                   onArchive={() => void lifecycle("archive")}
+                  onAsk={() => setAskOpen(true)}
                   onComments={() => {
                     const editorAnchor = commentReader.current?.() ?? null;
                     const selection = globalThis.getSelection();
@@ -1550,6 +1589,7 @@ export default function App() {
             : createOpen && bootstrap.canEdit
             ? (
               <WorkspaceSettings
+                aiConfig={aiConfig}
                 workspace={bootstrap.workspace ?? {
                   name: "OKF Hub",
                   tagline: "Company knowledge",
@@ -1565,6 +1605,7 @@ export default function App() {
                 sharedSource={sharedSource}
                 notionSource={notionSource}
                 canExportWorkspace={bootstrap.access === "owner"}
+                canManageMembers={bootstrap.access === "owner"}
                 canManageConnectors={bootstrap.access === "owner"}
                 connectorBusy={sourceBusy || sharedBusy || notionBusy}
                 busy={actionBusy}
@@ -1968,6 +2009,25 @@ export default function App() {
           >
             <MessageSquare /> Comment
           </Button>
+        )}
+        {(imported || concept) && (
+          <AskOKF
+            open={askOpen}
+            onOpenChange={setAskOpen}
+            target={imported
+              ? { kind: "imported", importId: imported.id, state: "source" }
+              : {
+                kind: "concept",
+                conceptId: concept!.id,
+                state: bootstrap.canEdit ? view : "published",
+              }}
+            documentTitle={(imported ?? concept)!.title}
+            config={aiConfig}
+            onOpenSettings={() => {
+              setAskOpen(false);
+              showCreate("ai");
+            }}
+          />
         )}
         {concept && (
           <DocumentComments

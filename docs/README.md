@@ -35,6 +35,8 @@ product overview and roadmap live in [README.md](../README.md) and
    Notion.
 9. Open **Workspace settings** to manage workspace identity, members, templates,
    connectors, and developer access.
+10. If an AI provider is configured, use **Ask OKF** on any document to ask
+    questions grounded in that document.
 
 ## Navigation
 
@@ -84,6 +86,31 @@ Imported knowledge stays read-only in the hub. Current source types are:
 Imported content keeps provenance, revision history, and sync status. If a
 source changes or fails, the hub keeps the last healthy import and shows the
 source issue instead of silently overwriting local knowledge.
+
+### Ask OKF
+
+Ask OKF is an optional read-only assistant for hub-native and source-owned
+documents. It answers from the open document only and cannot edit, publish,
+approve, or run actions. The same document permission check applies before any
+content is sent to the configured provider; editors may ask about drafts while
+viewers receive published content only.
+
+Asking a question sends the open document content and recent chat messages to
+that provider. Choose and configure a provider that meets your organisation's
+data-handling requirements.
+
+Configure the provider on the server in the ignored `.okf-stack.env` file, then
+restart the app:
+
+```sh
+OKF_AI_PROVIDER=ollama
+OKF_AI_MODEL=glm-5.2
+OKF_AI_URL=https://ollama.com/v1
+OLLAMA_API_KEY=<ollama-api-key>
+```
+
+Open **Workspace settings → AI** to confirm the server configuration is ready.
+Provider credentials are never sent to the browser.
 
 ### Apps
 

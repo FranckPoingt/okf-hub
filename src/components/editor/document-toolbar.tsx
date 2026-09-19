@@ -15,6 +15,7 @@ import {
   Presentation,
   RotateCcw,
   Settings2,
+  Sparkles,
   Users,
 } from "lucide-react";
 import type { Collaborator } from "../../collab-provider.ts";
@@ -51,6 +52,7 @@ type DocumentToolbarProps = {
   view: "draft" | "published";
   width: DocumentWidth;
   onArchive: () => void;
+  onAsk: () => void;
   onComments: () => void;
   onHistory: () => void;
   onModeChange: (mode: DocumentMode) => void;
@@ -80,6 +82,7 @@ export function DocumentToolbar({
   view,
   width,
   onArchive,
+  onAsk,
   onComments,
   onHistory,
   onModeChange,
@@ -130,6 +133,17 @@ export function DocumentToolbar({
           </TabsTrigger>
         </TabsList>
       </Tabs>
+
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-8 gap-1.5 px-2.5 text-xs"
+        onClick={onAsk}
+      >
+        <Sparkles className="size-3.5" />
+        <span className="hidden xl:inline">Ask OKF</span>
+      </Button>
 
       <Button
         type="button"

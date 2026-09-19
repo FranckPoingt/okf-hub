@@ -14,6 +14,8 @@ spread across documents, repositories, and connected sources.
 - Applies the same permission checks to documents, search, apps, and live
   collaboration.
 - Renders supported links as richer previews without changing stored Markdown.
+- Answers questions about accessible hub-native and connected-source documents
+  through an optional server-configured AI provider.
 - Exports a workspace or selected spaces as a normal ZIP folder hierarchy.
 
 ## Quick start
