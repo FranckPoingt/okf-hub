@@ -10,6 +10,7 @@ import {
   LayoutTemplate,
   Plus,
   Settings2,
+  Sparkles,
   Trash2,
   Users,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import {
   useState,
 } from "react";
 import type {
+  AIConfig,
   Bootstrap,
   DocumentTemplate,
   Invitation,
@@ -504,6 +506,7 @@ export function NewDocumentDialog({
 
 export function WorkspaceSettings({
   workspace,
+  aiConfig,
   spaces,
   templates,
   invitations,
@@ -514,6 +517,7 @@ export function WorkspaceSettings({
   sharedSource,
   notionSource,
   canExportWorkspace,
+  canManageMembers,
   canManageConnectors,
   connectorBusy,
   busy,
@@ -532,6 +536,7 @@ export function WorkspaceSettings({
   onCancel,
 }: {
   workspace: NonNullable<Bootstrap["workspace"]>;
+  aiConfig: AIConfig;
   spaces: Space[];
   templates: DocumentTemplate[];
   invitations: Invitation[];
@@ -542,6 +547,7 @@ export function WorkspaceSettings({
   sharedSource: SharedSource | null;
   notionSource: NotionSource | null;
   canExportWorkspace: boolean;
+  canManageMembers: boolean;
   canManageConnectors: boolean;
   connectorBusy: boolean;
   busy: boolean;
@@ -635,6 +641,13 @@ export function WorkspaceSettings({
             <Settings2 /> General
           </SettingsNavButton>
           <SettingsNavButton
+            value="ai"
+            active={section}
+            onSelect={changeSection}
+          >
+            <Sparkles /> AI
+          </SettingsNavButton>
+          <SettingsNavButton
             value="templates"
             active={section}
             onSelect={changeSection}
@@ -648,13 +661,15 @@ export function WorkspaceSettings({
           >
             <FolderCog /> Spaces
           </SettingsNavButton>
-          <SettingsNavButton
-            value="members"
-            active={section}
-            onSelect={changeSection}
-          >
-            <Users /> Members
-          </SettingsNavButton>
+          {canManageMembers && (
+            <SettingsNavButton
+              value="members"
+              active={section}
+              onSelect={changeSection}
+            >
+              <Users /> Members
+            </SettingsNavButton>
+          )}
           {canManageConnectors && (
             <SettingsNavButton
               value="connectors"
@@ -908,6 +923,45 @@ export function WorkspaceSettings({
             </div>
           </SettingsPanel>
 
+          <SettingsPanel value="ai" active={section}>
+            <div className="settings-section">
+              <SectionHeading
+                eyebrow="Ask OKF"
+                title="AI provider"
+                description="The provider runs on the OKF server. API keys are never sent to the browser."
+              />
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-3">
+                    <CardTitle>Server configuration</CardTitle>
+                    <Badge variant={aiConfig.enabled ? "default" : "secondary"}>
+                      {aiConfig.enabled ? "Ready" : "Not configured"}
+                    </Badge>
+                  </div>
+                  <CardDescription>
+                    {aiConfig.enabled
+                      ? `${aiConfig.provider} · ${aiConfig.model}`
+                      : "Set the provider and model in the server environment."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3 text-sm">
+                  <div className="grid gap-1">
+                    <strong>Provider, model, and endpoint</strong>
+                    <code>OKF_AI_PROVIDER · OKF_AI_MODEL · OKF_AI_URL</code>
+                  </div>
+                  <div className="grid gap-1">
+                    <strong>Provider credential</strong>
+                    <code>OKF_AI_API_KEY</code>
+                    <span className="text-xs text-muted-foreground">
+                      Keep this secret in the deployment environment or local
+                      ignored env file.
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </SettingsPanel>
+
           <SettingsPanel value="templates" active={section}>
             <div className="settings-section">
               <SectionHeading
@@ -1131,13 +1185,15 @@ export function WorkspaceSettings({
             </div>
           </SettingsPanel>
 
-          <SettingsPanel value="members" active={section}>
-            <AccessPanel
-              invitations={invitations}
-              members={members}
-              groups={groups}
-            />
-          </SettingsPanel>
+          {canManageMembers && (
+            <SettingsPanel value="members" active={section}>
+              <AccessPanel
+                invitations={invitations}
+                members={members}
+                groups={groups}
+              />
+            </SettingsPanel>
+          )}
 
           {canManageConnectors && (
             <SettingsPanel value="connectors" active={section}>

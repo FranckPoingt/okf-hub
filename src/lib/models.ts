@@ -5,6 +5,11 @@ export type Invitation = {
   url: string;
   status: string;
 };
+export type AIConfig = {
+  enabled: boolean;
+  provider: string;
+  model: string;
+};
 export type Bootstrap = {
   user: { id: string; name: string; email: string } | null;
   access?: "owner" | "editor" | "viewer" | "none";

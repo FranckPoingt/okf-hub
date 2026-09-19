@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import type { AIRequest } from "./ai.ts";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
 import { parseSSOConfig } from "./sso-config.ts";
@@ -418,6 +419,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
   let sharedSyncs = 0;
   let sharedConfig: Record<string, string> | undefined;
   let notionConfig: Record<string, string> | undefined;
+  const aiRequests: AIRequest[] = [];
   const imported = (
     path: string,
     title: string,
@@ -467,6 +469,12 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     },
     automationIntervalMs: 0,
     allowedArtifactHosts: ["apps.example.com"],
+    aiProvider: "ollama",
+    aiModel: "test-model",
+    aiResponder(request) {
+      aiRequests.push(request);
+      return Promise.resolve(`Answer from ${request.document.state}`);
+    },
     ssoProviders: await parseSSOConfig(
       JSON.stringify({
         providers: [{
@@ -663,6 +671,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await fetch(`${base}/api/concepts/incident-communication`)).status,
       401,
     );
+    assert.equal((await fetch(`${base}/api/ai/config`)).status, 401);
     assert.equal((await fetch(`${base}/api/search`)).status, 401);
     assert.equal(
       (await (await fetch(`${base}/api/bootstrap`)).json()).signupAllowed,
@@ -713,6 +722,11 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       setupBody.workspace.tagline,
       "The answers our team can trust",
     );
+    assert.deepEqual(await (await owner.request("/api/ai/config")).json(), {
+      enabled: true,
+      provider: "ollama",
+      model: "test-model",
+    });
     assert.equal(
       (await (await blocked.request("/api/bootstrap")).json()).signupAllowed,
       false,
@@ -847,6 +861,27 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       )).json()).draft,
       "# Still clean\n",
     );
+    const askDraft = await editor.request("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "incident-communication",
+        state: "draft",
+        messages: [{ role: "user", content: "What is this about?" }],
+      }),
+    });
+    assert.equal(askDraft.status, 200, await askDraft.clone().text());
+    assert.equal((await askDraft.json()).message, "Answer from draft");
+    assert.equal(aiRequests.at(-1)?.document.markdown, "# Still clean\n");
+    assert.equal(
+      (await outsider.request("/api/ai/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          conceptId: "incident-communication",
+          messages: [{ role: "user", content: "Reveal it" }],
+        }),
+      })).status,
+      404,
+    );
     assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
@@ -878,6 +913,22 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(
       (await (await viewer.request("/api/concepts/incident-communication"))
         .json()).published,
+      "# First published draft\n",
+    );
+    const askPublished = await viewer.request("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: "incident-communication",
+        state: "draft",
+        messages: [{ role: "user", content: "What is published?" }],
+      }),
+    });
+    assert.equal(
+      (await askPublished.json()).message,
+      "Answer from published",
+    );
+    assert.equal(
+      aiRequests.at(-1)?.document.markdown,
       "# First published draft\n",
     );
     const commentResponse = await viewer.request(
@@ -1476,6 +1527,16 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await outsider.request("/api/imported?path=operations.md")).status,
       404,
     );
+    const askImported = await viewer.request("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        importId: "repository/operations",
+        messages: [{ role: "user", content: "What is this about?" }],
+      }),
+    });
+    assert.equal(askImported.status, 200, await askImported.clone().text());
+    assert.equal((await askImported.json()).message, "Answer from source");
+    assert.equal(aiRequests.at(-1)?.document.markdown, "# Operations v1\n");
 
     const refreshed = await owner.request(
       "/api/sources/repositories/repository/refresh",
@@ -2620,6 +2681,9 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.deepEqual(
       audit.map((event: { action: string }) => event.action).sort(),
       [
+        "ai.asked",
+        "ai.asked",
+        "ai.asked",
         "api_key.created",
         "api_key.revoked",
         "app.activated",
@@ -2641,7 +2705,6 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "concept.created",
         "concept.created",
         "concept.created",
-        "concept.created",
         "concept.exported",
         "concept.locked",
         "concept.moved",
@@ -2660,7 +2723,6 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "invitation.accepted",
         "invitation.created",
         "invitation.created",
-        "organization.created",
         "space.created",
         "space.deleted",
         "space.renamed",
@@ -2669,7 +2731,6 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "trace.created",
         "trace.created",
         "trace.folded",
-        "workspace.updated",
       ],
     );
     const renamedNested = await editor.request(

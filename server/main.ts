@@ -3,6 +3,7 @@
 import * as Y from "yjs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
+import { type AIRequest, type AIResponder, createAIResponder } from "./ai.ts";
 import {
   actionAllowed,
   ActionError,
@@ -160,6 +161,11 @@ type AppOptions = {
   allowedArtifactHosts?: string[];
   githubApp?: GitHubAppClient | null;
   ssoProviders?: ConfiguredSSOProvider[];
+  aiProvider?: string;
+  aiModel?: string;
+  aiURL?: string;
+  aiAPIKey?: string;
+  aiResponder?: AIResponder;
 };
 
 type ConceptRow = {
@@ -559,6 +565,11 @@ export async function createCollabApp({
   allowedArtifactHosts = [],
   githubApp = null,
   ssoProviders = [],
+  aiProvider = "",
+  aiModel = "",
+  aiURL,
+  aiAPIKey,
+  aiResponder,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const security = await createSecurity({
@@ -572,6 +583,15 @@ export async function createCollabApp({
   });
   const db = new DatabaseSync(`${dataDir}/hub.db`);
   const credentialVault = await createCredentialVault(dataDir);
+  const respondWithAI = aiResponder ??
+    (aiProvider && aiModel
+      ? createAIResponder({
+        provider: aiProvider,
+        model: aiModel,
+        apiURL: aiURL,
+        apiKey: aiAPIKey,
+      })
+      : null);
   const defaultAutomationIntervalMinutes = automationIntervalMs > 0
     ? Math.max(1, Math.round(automationIntervalMs / 60_000))
     : 0;
@@ -2832,6 +2852,165 @@ export async function createCollabApp({
       ? null
       : await security.handle(request);
     if (securityResponse) return withCors(securityResponse, request);
+
+    if (url.pathname === "/api/ai/config" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      return Response.json({
+        enabled: Boolean(respondWithAI),
+        provider: aiProvider,
+        model: aiModel,
+      }, { headers: cors(request) });
+    }
+
+    if (url.pathname === "/api/ai/chat" && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!respondWithAI) {
+        return Response.json({ error: "Ask OKF is not configured" }, {
+          status: 503,
+          headers: cors(request),
+        });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        conceptId?: unknown;
+        importId?: unknown;
+        state?: unknown;
+        messages?: unknown;
+      };
+      const conceptId = String(body.conceptId ?? "");
+      const importId = String(body.importId ?? "");
+      if (Boolean(conceptId) === Boolean(importId)) {
+        return Response.json({ error: "Choose one document" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      if (
+        !Array.isArray(body.messages) || body.messages.length < 1 ||
+        body.messages.length > 12
+      ) {
+        return Response.json({ error: "Send 1–12 chat messages" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const messages = body.messages.map((message) => {
+        if (!message || typeof message !== "object") return null;
+        const role = "role" in message ? message.role : undefined;
+        const content = "content" in message
+          ? String(message.content ?? "").trim()
+          : "";
+        return (role === "user" || role === "assistant") && content &&
+            content.length <= 4_000
+          ? { role, content }
+          : null;
+      });
+      if (
+        messages.some((message) => !message) ||
+        messages.at(-1)?.role !== "user"
+      ) {
+        return Response.json({ error: "Chat messages are invalid" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      let document: AIRequest["document"];
+      let auditTarget: string;
+      if (importId) {
+        const item = db.prepare(
+          "SELECT * FROM okf_imported_concept WHERE id = ? AND status IN ('current', 'invalid')",
+        ).get(importId) as ImportedConceptRow | undefined;
+        if (
+          !item || !await security.check(current.user.id, "view", item.id)
+        ) {
+          return Response.json({ error: "Document not found" }, {
+            status: 404,
+            headers: cors(request),
+          });
+        }
+        try {
+          document = {
+            title: item.title,
+            space: item.sourceId,
+            state: "source",
+            markdown: withoutFrontmatter(await store.get(item.objectKey)),
+          };
+        } catch (error) {
+          console.error("Ask OKF could not read the imported document", error);
+          return Response.json({ error: "Ask OKF could not answer" }, {
+            status: 503,
+            headers: cors(request),
+          });
+        }
+        auditTarget = `import:${item.id}`;
+      } else {
+        const row = concept(conceptId);
+        const canEdit = row &&
+          await security.check(current.user.id, "edit", conceptId);
+        if (
+          !row ||
+          !await security.check(current.user.id, "view", conceptId) ||
+          (!canEdit && (!row.publishedRevision || row.status !== "active"))
+        ) {
+          return Response.json({ error: "Document not found" }, {
+            status: 404,
+            headers: cors(request),
+          });
+        }
+        const payloadDocument = await payload(
+          row,
+          Boolean(canEdit),
+          current.user.id,
+        );
+        const state = !canEdit || body.state === "published"
+          ? "published"
+          : "draft";
+        const markdown = state === "published"
+          ? payloadDocument.published
+          : payloadDocument.draft;
+        if (!markdown) {
+          return Response.json({ error: `${state} content is unavailable` }, {
+            status: 409,
+            headers: cors(request),
+          });
+        }
+        document = {
+          title: row.title,
+          space: space(row.spaceId)?.name ?? row.spaceId,
+          state,
+          markdown,
+        };
+        auditTarget = `concept:${conceptId}`;
+      }
+      try {
+        const message = await respondWithAI({
+          messages: messages as {
+            role: "user" | "assistant";
+            content: string;
+          }[],
+          document,
+        });
+        security.audit(current.user.id, "ai.asked", auditTarget);
+        return Response.json({ message }, { headers: cors(request) });
+      } catch (error) {
+        console.error("Ask OKF failed", error);
+        return Response.json({ error: "Ask OKF could not answer" }, {
+          status: 503,
+          headers: cors(request),
+        });
+      }
+    }
 
     const spaceExportRoute = url.pathname.match(
       /^\/api\/exports\/spaces\/([^/]+)$/,
@@ -5742,6 +5921,11 @@ if (import.meta.main) {
     allowedArtifactHosts,
     githubApp: githubValues.length ? createGitHubAppClient(githubConfig) : null,
     ssoProviders: ssoConfig ? await parseSSOConfig(ssoConfig, baseURL) : [],
+    aiProvider: Deno.env.get("OKF_AI_PROVIDER")?.trim(),
+    aiModel: Deno.env.get("OKF_AI_MODEL")?.trim(),
+    aiURL: Deno.env.get("OKF_AI_URL")?.trim(),
+    aiAPIKey: Deno.env.get("OKF_AI_API_KEY")?.trim() ||
+      Deno.env.get("OLLAMA_API_KEY")?.trim(),
   });
   Deno.serve({ hostname, port }, app.fetch);
 }

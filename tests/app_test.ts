@@ -56,9 +56,13 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /imported-document-header/);
   assert.match(bundle, /Shared-store owned/);
   assert.match(bundle, /Tools for this knowledge/);
+  assert.match(bundle, /Answers from/);
   assert.match(bundle, /Create draft App/);
   assert.match(bundle, /Upload bundle/);
   assert.match(bundle, /Drop or paste an app folder/);
+  const askOKF = await Deno.readTextFile("src/components/ask-okf.tsx");
+  assert.match(askOKF, /request\.current\?\.abort\(\)/);
+  assert.match(askOKF, /request\.current !== controller/);
   assert.match(bundle, /Developer settings/);
   assert.match(bundle, /Developer API/);
   assert.match(bundle, /Loading API reference/);
@@ -87,6 +91,14 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(workspaceSettings, /nextTemplateId === "understanding-brief"/);
   assert.match(workspaceSettings, /setDocumentType\("Explanation"\)/);
   assert.match(workspaceSettings, /setIntent\("working"\)/);
+  assert.match(
+    workspaceSettings,
+    /canManageMembers && \([\s\S]*value="members"/,
+  );
+  assert.match(
+    await Deno.readTextFile("src/App.tsx"),
+    /canManageMembers=\{bootstrap\.access === "owner"\}/,
+  );
   const developerPanel = await Deno.readTextFile(
     "src/components/developer-panel.tsx",
   );
