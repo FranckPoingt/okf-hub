@@ -67,6 +67,23 @@ deno fmt --check
 deno task test
 ```
 
+## Releasing
+
+Releases are automated from semantic-version tags on commits already merged to
+`main`. Update `CHANGELOG.md`, merge and verify CI, then create and push an
+annotated tag:
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v0.2.0 -m "OKF Hub v0.2.0"
+git push origin v0.2.0
+```
+
+The release workflow validates the tag and commit, runs the full test task, and
+creates the GitHub Release with generated notes. `v0.*` and tags containing a
+prerelease suffix are published as prereleases.
+
 ## Documentation
 
 - [OKF v0.2 documentation bundle](docs/index.md)

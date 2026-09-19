@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Bot, Send, Sparkles } from "lucide-react";
 import { api } from "../lib/api.ts";
 import type { AIConfig } from "../lib/models.ts";
@@ -37,12 +37,23 @@ export function AskOKF({
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const request = useRef<AbortController | null>(null);
+  const targetKey = target.kind === "concept"
+    ? `${target.kind}:${target.conceptId}:${target.state}`
+    : `${target.kind}:${target.importId}`;
 
   useEffect(() => {
+    request.current?.abort();
+    request.current = null;
     setMessages([]);
     setQuestion("");
+    setBusy(false);
     setError("");
-  }, [target.kind === "concept" ? target.conceptId : target.importId]);
+    return () => {
+      request.current?.abort();
+      request.current = null;
+    };
+  }, [targetKey]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -53,9 +64,12 @@ export function AskOKF({
     setQuestion("");
     setError("");
     setBusy(true);
+    const controller = new AbortController();
+    request.current = controller;
     try {
       const response = await api("/api/ai/chat", {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({
           ...(target.kind === "concept"
             ? { conceptId: target.conceptId, state: target.state }
@@ -67,6 +81,7 @@ export function AskOKF({
         message?: string;
         error?: string;
       };
+      if (request.current !== controller) return;
       if (!response.ok || !result.message) {
         throw new Error(result.error ?? "Ask OKF could not answer");
       }
@@ -75,9 +90,13 @@ export function AskOKF({
         content: result.message!,
       }]);
     } catch (cause) {
+      if (request.current !== controller) return;
       setError(cause instanceof Error ? cause.message : "Ask OKF failed");
     } finally {
-      setBusy(false);
+      if (request.current === controller) {
+        request.current = null;
+        setBusy(false);
+      }
     }
   };
 

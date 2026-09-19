@@ -60,6 +60,9 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Create draft App/);
   assert.match(bundle, /Upload bundle/);
   assert.match(bundle, /Drop or paste an app folder/);
+  const askOKF = await Deno.readTextFile("src/components/ask-okf.tsx");
+  assert.match(askOKF, /request\.current\?\.abort\(\)/);
+  assert.match(askOKF, /request\.current !== controller/);
   assert.match(bundle, /Developer settings/);
   assert.match(bundle, /Developer API/);
   assert.match(bundle, /Loading API reference/);
