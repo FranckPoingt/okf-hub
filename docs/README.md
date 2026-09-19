@@ -103,11 +103,17 @@ Configure the provider on the server in the ignored `.okf-stack.env` file, then
 restart the app:
 
 ```sh
-OKF_AI_PROVIDER=ollama
-OKF_AI_MODEL=glm-5.2
-OKF_AI_URL=https://ollama.com/v1
-OLLAMA_API_KEY=<ollama-api-key>
+OKF_AI_PROVIDER=<ax-provider-id>
+OKF_AI_MODEL=<provider-model-id>
+OKF_AI_API_KEY=<provider-api-key>
+# Optional for compatible or self-hosted endpoints:
+OKF_AI_URL=<provider-api-url>
 ```
+
+Ax provider IDs include `openai`, `anthropic`, `google-gemini`, `openrouter`,
+`groq`, and `ollama`. For example, Ollama Cloud uses `ollama`, its model ID,
+`https://ollama.com/v1`, and the Ollama key as `OKF_AI_API_KEY`. The legacy
+`OLLAMA_API_KEY` variable remains a fallback for existing installations.
 
 Open **Workspace settings → AI** to confirm the server configuration is ready.
 Provider credentials are never sent to the browser.

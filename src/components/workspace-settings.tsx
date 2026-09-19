@@ -946,12 +946,12 @@ export function WorkspaceSettings({
                 </CardHeader>
                 <CardContent className="grid gap-3 text-sm">
                   <div className="grid gap-1">
-                    <strong>Provider and model</strong>
+                    <strong>Provider, model, and endpoint</strong>
                     <code>OKF_AI_PROVIDER · OKF_AI_MODEL · OKF_AI_URL</code>
                   </div>
                   <div className="grid gap-1">
-                    <strong>Ollama credential</strong>
-                    <code>OLLAMA_API_KEY</code>
+                    <strong>Provider credential</strong>
+                    <code>OKF_AI_API_KEY</code>
                     <span className="text-xs text-muted-foreground">
                       Keep this secret in the deployment environment or local
                       ignored env file.

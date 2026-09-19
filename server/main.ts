@@ -567,7 +567,7 @@ export async function createCollabApp({
   ssoProviders = [],
   aiProvider = "",
   aiModel = "",
-  aiURL = "https://ollama.com/v1",
+  aiURL,
   aiAPIKey,
   aiResponder,
 }: AppOptions = {}) {
@@ -5924,7 +5924,8 @@ if (import.meta.main) {
     aiProvider: Deno.env.get("OKF_AI_PROVIDER")?.trim(),
     aiModel: Deno.env.get("OKF_AI_MODEL")?.trim(),
     aiURL: Deno.env.get("OKF_AI_URL")?.trim(),
-    aiAPIKey: Deno.env.get("OLLAMA_API_KEY")?.trim(),
+    aiAPIKey: Deno.env.get("OKF_AI_API_KEY")?.trim() ||
+      Deno.env.get("OLLAMA_API_KEY")?.trim(),
   });
   Deno.serve({ hostname, port }, app.fetch);
 }

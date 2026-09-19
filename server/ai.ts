@@ -1,4 +1,4 @@
-import { ai } from "@ax-llm/ax";
+import { ai, type AxAIArgs, axGetAIProfile } from "@ax-llm/ax";
 
 export type AIMessage = {
   role: "user" | "assistant";
@@ -25,18 +25,19 @@ export function createAIResponder({
 }: {
   provider: string;
   model: string;
-  apiURL: string;
+  apiURL?: string;
   apiKey?: string;
 }): AIResponder {
-  if (provider !== "ollama") {
-    throw new Error(`Unsupported AI provider: ${provider}`);
+  const profile = axGetAIProfile(provider);
+  if (profile.transport === "webllm") {
+    throw new Error("WebLLM is not available in the OKF server runtime");
   }
   const service = ai({
-    name: "ollama",
-    apiURL,
+    name: profile.id,
+    ...(apiURL ? { apiURL } : {}),
     apiKey,
     config: { model, maxTokens: 1_500, temperature: 0.2 },
-  });
+  } as AxAIArgs<string>);
   return async ({ messages, document }) => {
     // ponytail: one document and 60k characters cover the first slice; add
     // retrieval when whole-space questions or larger documents ship.
