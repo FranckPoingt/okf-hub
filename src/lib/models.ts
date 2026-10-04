@@ -1,3 +1,9 @@
+import type {
+  Freshness,
+  GovernanceSummary,
+  KnowledgePerson,
+} from "./governance.ts";
+
 export type Invitation = {
   invitationId: string;
   email: string;
@@ -65,7 +71,7 @@ export type WorkTrace = {
   foldedAt: string | null;
   foldedKnowledge: string | null;
 };
-export type Concept = {
+export type Concept = GovernanceSummary & {
   id: string;
   spaceId: string;
   parentId: string | null;
@@ -78,7 +84,9 @@ export type Concept = {
   status: "active" | "archived";
   publishedRevision: number | null;
   hasUnpublishedChanges: boolean;
-  publishedMetadata?: { title: string; type: string } | null;
+  publishedMetadata?:
+    | { title: string; type: string; intent?: DocumentIntent }
+    | null;
   lockedAt: string | null;
   lockedBy: string | null;
   updatedAt: string;
@@ -213,10 +221,18 @@ export type SearchRelationship = {
   sourceId: string;
   title: string;
   path?: string;
-  trust: "current" | "sync_failed";
+  trust: "current" | "sync_failed" | "unreviewed" | "stale";
+  freshness?: Freshness;
   sourceLabel: string;
 };
 export type SearchResult = SearchRelationship & {
+  ownerUserId?: string | null;
+  reviewDueDate?: string | null;
+  reviewedRevision?: number | null;
+  reviewedAt?: string | null;
+  reviewer?: KnowledgePerson | null;
+  publishedRevision?: number | null;
+  hasUnpublishedChanges?: boolean;
   type: string;
   tags: string[];
   owner: string;

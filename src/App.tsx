@@ -32,6 +32,8 @@ import {
   type CommentSelection,
   DocumentComments,
 } from "./components/editor/document-comments.tsx";
+import { deriveFreshness } from "./lib/governance.ts";
+import { DocumentGovernance } from "./components/editor/document-governance.tsx";
 import { DocumentProperties } from "./components/editor/document-properties.tsx";
 import { DocumentReferences } from "./components/editor/document-references.tsx";
 import { PresentationMode } from "./components/editor/presentation-mode.tsx";
@@ -207,6 +209,37 @@ export default function App() {
     setBrowserRoute(route, replace);
   };
   const metadataFlush = useRef<(() => Promise<void>) | null>(null);
+  const governanceFlush = useRef<(() => Promise<void>) | null>(null);
+  const handleGovernanceSaveReady = useCallback(
+    (flush: (() => Promise<void>) | null) => {
+      governanceFlush.current = flush;
+    },
+    [],
+  );
+  const handleGovernanceUpdate = useCallback((updated: Concept) => {
+    const governance = {
+      ownerUserId: updated.ownerUserId,
+      owner: updated.owner,
+      reviewDueDate: updated.reviewDueDate,
+      reviewedRevision: updated.reviewedRevision,
+      reviewedAt: updated.reviewedAt,
+      reviewedBy: updated.reviewedBy,
+      reviewer: updated.reviewer,
+    };
+    const merge = (current: Concept) => {
+      const next = { ...current, ...governance };
+      return { ...next, freshness: deriveFreshness(next) };
+    };
+    if (latestConcept.current?.id === updated.id) {
+      latestConcept.current = merge(latestConcept.current);
+    }
+    setConcept((current) =>
+      current?.id === updated.id ? merge(current) : current
+    );
+    setConcepts((current) =>
+      current.map((item) => item.id === updated.id ? merge(item) : item)
+    );
+  }, []);
   const askSessions = useRef(new Map<string, AskSession>());
   const templateDraftCache = useRef<TemplateDraftCache>(new Map());
   const [saveQueue] = useState(() =>
@@ -252,6 +285,7 @@ export default function App() {
   const finishDraft = useCallback(async () => {
     try {
       await metadataFlush.current?.();
+      await governanceFlush.current?.();
       const content = documentSnapshot.current?.();
       const id = activeConceptId.current;
       if (id && content != null && content !== latestMarkdown.current) {
@@ -1725,6 +1759,22 @@ export default function App() {
   const canEditDocument = Boolean(
     bootstrap.canEdit && concept?.lockedAt === null,
   );
+  const documentGovernance = concept
+    ? (
+      <DocumentGovernance
+        key={concept.id}
+        concept={concept}
+        canManage={Boolean(bootstrap.canEdit && concept.status === "active")}
+        view={view}
+        onConceptUpdate={handleGovernanceUpdate}
+        onSaveReady={handleGovernanceSaveReady}
+        onViewPublished={() =>
+          void finishDraft().then((saved) => {
+            if (saved) setView("published");
+          })}
+      />
+    )
+    : null;
   return (
     <SidebarProvider className={focusMode ? "focus-mode" : undefined}>
       {!focusMode && (
@@ -2116,9 +2166,26 @@ export default function App() {
                     </span>
                     <span>{imported.revisionCount} imported revisions</span>
                     <span>
-                      Synced {new Date(imported.importedAt).toLocaleString()}
+                      Snapshot updated{" "}
+                      {new Date(imported.importedAt).toLocaleString()}
                     </span>
+                    {imported.source?.lastSyncedAt && (
+                      <span>
+                        Source checked {new Date(imported.source.lastSyncedAt)
+                          .toLocaleString()}
+                      </span>
+                    )}
+                    {imported.owner && (
+                      <span>Source owner: {imported.owner}</span>
+                    )}
                   </div>
+                  {imported.source?.status === "sync_failed" && (
+                    <p className="mt-3 text-sm text-destructive" role="status">
+                      The latest source check failed. This is the retained
+                      snapshot from{" "}
+                      {new Date(imported.importedAt).toLocaleString()}.
+                    </p>
+                  )}
                 </section>
                 <div className="editor-frame read-only imported-editor">
                   <DocumentPreview
@@ -2282,6 +2349,10 @@ export default function App() {
                 <RevisionHistory
                   conceptId={concept.id}
                   revisions={concept.revisions}
+                  publishedRevision={concept.publishedRevision}
+                  reviewedRevision={concept.reviewedRevision}
+                  reviewedAt={concept.reviewedAt}
+                  reviewer={concept.reviewer}
                   open={historyOpen && Boolean(bootstrap.canEdit)}
                   canRestore={concept.status !== "archived" &&
                     !concept.lockedAt}
@@ -2348,15 +2419,40 @@ export default function App() {
                             canEdit={canEditDocument}
                             onConceptUpdate={(updated) => {
                               const next = updated as Concept;
-                              latestConcept.current = next;
-                              setConcept(next);
+                              const merge = (current: Concept) => {
+                                const merged = {
+                                  ...next,
+                                  ownerUserId: current.ownerUserId,
+                                  owner: current.owner,
+                                  reviewDueDate: current.reviewDueDate,
+                                  reviewedRevision: current.reviewedRevision,
+                                  reviewedAt: current.reviewedAt,
+                                  reviewedBy: current.reviewedBy,
+                                  reviewer: current.reviewer,
+                                };
+                                return {
+                                  ...merged,
+                                  freshness: deriveFreshness(merged),
+                                };
+                              };
+                              if (latestConcept.current?.id === next.id) {
+                                latestConcept.current = merge(
+                                  latestConcept.current,
+                                );
+                              }
+                              setConcept((current) =>
+                                current?.id === next.id
+                                  ? merge(current)
+                                  : current
+                              );
                               setConcepts((current) =>
                                 current.map((item) =>
-                                  item.id === next.id ? next : item
+                                  item.id === next.id ? merge(item) : item
                                 )
                               );
                             }}
                           />
+                          {documentGovernance}
                           <DocumentEditor
                             key={editorVersion}
                             conceptId={concept.id}
@@ -2386,6 +2482,7 @@ export default function App() {
                             canEdit={false}
                             onConceptUpdate={() => {}}
                           />
+                          {documentGovernance}
                           <DocumentPreview
                             key={`${concept.publishedRevision}-${view}`}
                             conceptId={concept.id}

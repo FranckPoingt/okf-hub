@@ -905,7 +905,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(firstPublish.status, 200, await firstPublish.text());
     assert.match(
       objects.get("policies/incident-communication/revisions/1.md") ?? "",
-      /^---\ntype: Policy\ntitle: "Incident communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
+      /^---\ntype: Policy\ntitle: "Incident communication"\nintent: canonical\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
     );
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
@@ -2929,7 +2929,7 @@ Deno.test("tracks unpublished body and metadata changes while hiding draft state
     assert.equal((await viewer.request(path)).status, 404);
     assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
     const publishedBody = "## Shared policy\n\nEveryone may read this.\n";
-    let expectedMetadata = { title, type: "Guide" };
+    let expectedMetadata = { title, type: "Guide", intent: "working" };
     let parentPublished = false;
     const checkpoint = async (markdown: string, changed: boolean) => {
       const response = await editor.request(path, {
@@ -2962,7 +2962,11 @@ Deno.test("tracks unpublished body and metadata changes while hiding draft state
       const result = await response.json();
       assert.equal(result.hasUnpublishedChanges, false);
       assert.equal((await listed(editor)).hasUnpublishedChanges, false);
-      expectedMetadata = { title: result.title, type: result.type };
+      expectedMetadata = {
+        title: result.title,
+        type: result.type,
+        intent: result.intent,
+      };
       assert.deepEqual(result.publishedMetadata, expectedMetadata);
       return result;
     };
@@ -3188,6 +3192,7 @@ Deno.test("tracks unpublished body and metadata changes while hiding draft state
     assert.deepEqual(corruptedEditor.publishedMetadata, {
       title: "Published document",
       type: "Document",
+      intent: "canonical",
     });
     const genericViewer = await state(viewer);
     assert.equal(genericViewer.title, "Published document");
