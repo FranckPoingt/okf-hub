@@ -9,6 +9,7 @@ import {
 } from "./ui/breadcrumb.tsx";
 import { SidebarTrigger } from "./ui/sidebar.tsx";
 import { Button } from "./ui/button.tsx";
+import "./editor/editor-ux.css";
 
 type WorkspaceHeaderProps = {
   detail: string;
@@ -32,7 +33,10 @@ export function WorkspaceHeader({
   const showConnection = status === "offline" || status === "syncing";
   const showStatus = status !== "online";
   return (
-    <header className="workspace-header" data-has-actions={Boolean(actions)}>
+    <header
+      className="workspace-header editor-workspace-header"
+      data-has-actions={Boolean(actions)}
+    >
       <SidebarTrigger aria-label="Toggle navigation" />
       <Breadcrumb className="min-w-0 flex-1">
         <BreadcrumbList className="flex-nowrap">
@@ -53,6 +57,7 @@ export function WorkspaceHeader({
         className="shrink-0 text-muted-foreground"
         type="button"
         aria-label="Search company knowledge"
+        title="Search company knowledge (⌘K)"
         onClick={onSearch}
       >
         <Search />
@@ -65,14 +70,17 @@ export function WorkspaceHeader({
         ? (
           <div className="workspace-header-status" aria-live="polite">
             {showConnection
-              ? <span className={`status-dot ${statusTone}`} />
+              ? (
+                <span
+                  className={`status-dot ${statusTone}`}
+                  aria-hidden="true"
+                />
+              )
               : null}
-            {showStatus
-              ? <span className="hidden capitalize md:inline">{status}</span>
-              : null}
+            {showStatus ? <span className="capitalize">{status}</span> : null}
             {detail
               ? (
-                <span className="hidden text-muted-foreground lg:inline">
+                <span className="text-muted-foreground">
                   {detail}
                 </span>
               )

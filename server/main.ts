@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import * as Y from "yjs";
+import { renderTemplate, templateVariables } from "../src/lib/templates.ts";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
 import { type AIRequest, type AIResponder, createAIResponder } from "./ai.ts";
@@ -48,6 +49,7 @@ type WorkTraceKind = typeof TRACE_KINDS[number];
 
 class MarkdownTooLarge extends Error {}
 class DocumentLocked extends Error {}
+class DocumentCheckpointChanged extends Error {}
 
 export const DEFAULT_MARKDOWN = `# Incident communication
 
@@ -235,6 +237,8 @@ type LiveDocument = {
   clients: Set<WebSocket>;
   markdown: string;
   stateWrite: Promise<void>;
+  markdownWrite: Promise<void>;
+  resetting?: Promise<void>;
 };
 
 type RevisionRow = {
@@ -395,30 +399,6 @@ function markdownHrefs(markdown: string) {
     .map((match) => match[1]);
 }
 
-function templateVariables(markdown: string) {
-  return Array.from(
-    new Set(
-      Array.from(markdown.matchAll(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g))
-        .map((match) => match[1]),
-    ),
-  );
-}
-
-function renderTemplate(
-  markdown: string,
-  values: Record<string, unknown>,
-): { error: string } | { body: string } {
-  const missing = templateVariables(markdown).filter((name) =>
-    !Object.hasOwn(values, name) || typeof values[name] !== "string"
-  );
-  if (missing.length) return { error: `Fill in ${missing.join(", ")}` };
-  const body = markdown.replace(
-    /{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g,
-    (_match, name: string) => String(values[name]),
-  );
-  return { body };
-}
-
 function searchSnippet(
   text: string,
   query: string,
@@ -516,7 +496,7 @@ function cors(request: Request) {
   return {
     "access-control-allow-origin": request.headers.get("origin") ?? "*",
     "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type, x-okf-collab-epoch",
     "access-control-allow-credentials": "true",
   };
 }
@@ -1794,9 +1774,31 @@ export async function createCollabApp({
       ? legacyStatePath
       : `${dataDir}/concepts/${encodeURIComponent(id)}.yjs`;
 
+  function createLiveDocument(row: ConceptRow, markdown: string, doc: Y.Doc) {
+    const live: LiveDocument = {
+      doc,
+      clients: new Set(),
+      markdown,
+      stateWrite: Promise.resolve(),
+      markdownWrite: Promise.resolve(),
+    };
+    doc.on("update", () => {
+      if (documents.get(row.id) !== live || live.resetting) return;
+      const snapshot = Y.encodeStateAsUpdate(doc);
+      live.stateWrite = live.stateWrite.then(() =>
+        Deno.writeFile(statePath(row.id), snapshot)
+      );
+    });
+    documents.set(row.id, live);
+    return live;
+  }
+
   async function loadDocument(row: ConceptRow, fallback?: string) {
     const loaded = documents.get(row.id);
-    if (loaded) return loaded;
+    if (loaded) {
+      await loaded.resetting;
+      return documents.get(row.id)!;
+    }
     let markdown: string;
     try {
       markdown = await Deno.readTextFile(markdownPath(row.id));
@@ -1821,43 +1823,78 @@ export async function createCollabApp({
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
-    const live: LiveDocument = {
-      doc,
-      clients: new Set(),
-      markdown,
-      stateWrite: Promise.resolve(),
-    };
-    doc.on("update", () => {
-      const snapshot = Y.encodeStateAsUpdate(doc);
-      live.stateWrite = live.stateWrite.then(() =>
-        Deno.writeFile(statePath(row.id), snapshot)
+    return createLiveDocument(row, markdown, doc);
+  }
+
+  async function resetCollaboration(conceptId: string, restored: string) {
+    const live = documents.get(conceptId)!;
+    const markdown = `${bodyOnly(restored).trimEnd()}\n`;
+    db.prepare(
+      "UPDATE okf_concept SET collabEpoch = collabEpoch + 1 WHERE id = ?",
+    ).run(conceptId);
+    live.resetting = (async () => {
+      live.clients.forEach((client) =>
+        client.close(4009, "Document checkpoint changed")
       );
-    });
-    documents.set(row.id, live);
-    return live;
+      live.doc.destroy();
+      // Drain earlier writes, including rejected stale saves, before replacing
+      // both persisted forms of the document with the restored checkpoint.
+      await Promise.all([
+        live.stateWrite.catch(() => {}),
+        live.markdownWrite.catch(() => {}),
+      ]);
+      await Deno.writeTextFile(markdownPath(conceptId), markdown);
+      await Deno.remove(statePath(conceptId)).catch((error) => {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      });
+      createLiveDocument(concept(conceptId)!, markdown, new Y.Doc());
+    })();
+    await live.resetting;
   }
 
   for (const row of concepts()) {
     await loadDocument(row, row.id === CONCEPT ? DEFAULT_MARKDOWN : undefined);
   }
 
-  async function saveDraft(conceptId: string, next: string) {
+  async function saveDraft(
+    conceptId: string,
+    next: string,
+    expectedEpoch?: number,
+  ) {
     if (new TextEncoder().encode(next).byteLength > MAX_MARKDOWN_BYTES) {
       throw new MarkdownTooLarge("Markdown is too large");
     }
     const row = concept(conceptId);
     if (!row) throw new Error("Concept not found");
-    if (row.lockedAt) {
-      throw new DocumentLocked("Unlock the document to edit it");
-    }
     const live = await loadDocument(row);
-    live.markdown = `${bodyOnly(next).trimEnd()}\n`;
-    const now = new Date().toISOString();
-    db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
-      now,
-      conceptId,
-    );
-    await Deno.writeTextFile(markdownPath(conceptId), live.markdown);
+    const validateCheckpoint = () => {
+      const current = concept(conceptId);
+      if (
+        live.resetting || documents.get(conceptId) !== live ||
+        (expectedEpoch !== undefined && expectedEpoch !== current?.collabEpoch)
+      ) {
+        throw new DocumentCheckpointChanged(
+          "This document was restored in another session. Reload it before saving your changes.",
+        );
+      }
+      if (current?.lockedAt) {
+        throw new DocumentLocked("Unlock the document to edit it");
+      }
+    };
+    validateCheckpoint();
+    const markdown = `${bodyOnly(next).trimEnd()}\n`;
+    const write = live.markdownWrite.catch(() => {}).then(async () => {
+      validateCheckpoint();
+      live.markdown = markdown;
+      const now = new Date().toISOString();
+      db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
+        now,
+        conceptId,
+      );
+      await Deno.writeTextFile(markdownPath(conceptId), markdown);
+    });
+    live.markdownWrite = write;
+    await write;
   }
 
   async function visibleWorkTraces(conceptId: string, userId: string) {
@@ -1872,11 +1909,17 @@ export async function createCollabApp({
       if (await security.check(userId, "view", trace.conceptId)) {
         const targetVisible = !trace.foldedIntoConceptId ||
           await security.check(userId, "view", trace.foldedIntoConceptId);
+        const labels = {
+          conceptTitle: await publishedLabelFor(userId, trace.conceptId),
+          foldedIntoTitle: targetVisible && trace.foldedIntoConceptId
+            ? await publishedLabelFor(userId, trace.foldedIntoConceptId)
+            : null,
+        };
         visible.push(
-          targetVisible ? trace : {
+          targetVisible ? { ...trace, ...labels } : {
             ...trace,
+            ...labels,
             foldedIntoConceptId: null,
-            foldedIntoTitle: null,
             foldedAt: null,
             foldedKnowledge: null,
           },
@@ -1886,22 +1929,123 @@ export async function createCollabApp({
     return visible;
   }
 
+  function changedSincePublication(
+    row: ConceptRow,
+    draft: string,
+    published: string | null,
+  ) {
+    if (!published) return true;
+    const metadata = published.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1] ??
+      "";
+    return bodyOnly(published).trimEnd() !== draft.trimEnd() ||
+      metadata.match(/^type:\s*(.+)$/m)?.[1] !== row.type ||
+      metadata.match(/^title:\s*(.+)$/m)?.[1] !== JSON.stringify(row.title);
+  }
+
+  // Published revisions are immutable; coalesce reads and keep a bounded per-app cache.
+  const publishedRevisionCache = new Map<string, Promise<string>>();
+  function publishedRevisionMarkdown(objectKey: string) {
+    const cached = publishedRevisionCache.get(objectKey);
+    if (cached) {
+      publishedRevisionCache.delete(objectKey);
+      publishedRevisionCache.set(objectKey, cached);
+      return cached;
+    }
+    const reading = store.get(objectKey);
+    publishedRevisionCache.set(objectKey, reading);
+    if (publishedRevisionCache.size > 128) {
+      publishedRevisionCache.delete(
+        publishedRevisionCache.keys().next().value!,
+      );
+    }
+    void reading.catch(() => {
+      if (publishedRevisionCache.get(objectKey) === reading) {
+        publishedRevisionCache.delete(objectKey);
+      }
+    });
+    return reading;
+  }
+
+  const unavailablePublishedMetadata = () => ({
+    title: "Published document",
+    type: "Document",
+  });
+
+  function publishedMetadata(markdown: string) {
+    const frontmatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1];
+    const metadata = unavailablePublishedMetadata();
+    const rawTitle = frontmatter?.match(/^title:\s*(.+)$/m)?.[1];
+    if (rawTitle) {
+      try {
+        const title: unknown = JSON.parse(rawTitle);
+        if (typeof title === "string" && title.trim()) metadata.title = title;
+      } catch {
+        // Never substitute a private working title for malformed publication data.
+      }
+    }
+    const type = frontmatter?.match(/^type:\s*(.+)$/m)?.[1]?.trim();
+    if (type && /^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)) {
+      metadata.type = type;
+    }
+    return metadata;
+  }
+
+  async function currentPublication(row: ConceptRow) {
+    const revision = revisions(row.id).find((item) =>
+      item.number === row.publishedRevision
+    );
+    if (!revision) return null;
+    const markdown = await publishedRevisionMarkdown(revision.objectKey);
+    return { markdown, metadata: publishedMetadata(markdown) };
+  }
+
+  async function publishedLabelFor(userId: string, conceptId: string) {
+    const row = concept(conceptId);
+    if (row && await security.check(userId, "edit", conceptId)) {
+      return row.title;
+    }
+    try {
+      return row && (await currentPublication(row))?.metadata.title ||
+        unavailablePublishedMetadata().title;
+    } catch {
+      return unavailablePublishedMetadata().title;
+    }
+  }
+
+  async function hasUnpublishedChanges(row: ConceptRow) {
+    const [live, publication] = await Promise.all([
+      loadDocument(row),
+      currentPublication(row),
+    ]);
+    return changedSincePublication(
+      row,
+      live.markdown,
+      publication?.markdown ?? null,
+    );
+  }
+
   async function payload(row: ConceptRow, canEdit: boolean, userId: string) {
     const live = await loadDocument(row);
     const history = revisions(row.id);
     const traces = await visibleWorkTraces(row.id, userId);
-    const published = row.publishedRevision
-      ? await store.get(
-        history.find((item) => item.number === row.publishedRevision)!
-          .objectKey,
-      )
-      : null;
+    const publication = await currentPublication(row);
     return {
       ...row,
+      ...(!canEdit
+        ? publication?.metadata ?? unavailablePublishedMetadata()
+        : {}),
+      publishedMetadata: publication?.metadata ?? null,
       openCommentCount: openCommentCount(row.id),
       space: space(row.spaceId)?.name ?? row.spaceId,
+      hasUnpublishedChanges: canEdit
+        ? changedSincePublication(
+          row,
+          live.markdown,
+          publication?.markdown ?? null,
+        )
+        : false,
       draft: canEdit ? live.markdown : null,
-      published: published ? bodyOnly(published) : null,
+      published: publication ? bodyOnly(publication.markdown) : null,
       revisions: canEdit ? history : [],
       activity: security.activity(`concept:${row.id}`),
       workTraces: canEdit
@@ -2216,16 +2360,18 @@ export async function createCollabApp({
         let content = canEditHub && row.status === "active"
           ? (await loadDocument(row)).markdown
           : "";
-        if (!content && row.publishedRevision) {
-          const revision = revisions(row.id).find((item) =>
-            item.number === row.publishedRevision
-          );
-          if (revision) {
-            try {
-              content = bodyOnly(await store.get(revision.objectKey));
-            } catch {
-              // The title remains discoverable while its stored body is unavailable.
+        let metadata = canEditHub
+          ? { title: row.title, type: row.type }
+          : unavailablePublishedMetadata();
+        if ((!content || !canEditHub) && row.publishedRevision) {
+          try {
+            const publication = await currentPublication(row);
+            if (publication) {
+              if (!content) content = bodyOnly(publication.markdown);
+              if (!canEditHub) metadata = publication.metadata;
             }
+          } catch {
+            // Keep only a generic label when publication storage is unavailable.
           }
         }
         documents.push({
@@ -2234,15 +2380,15 @@ export async function createCollabApp({
           sourceId: "hub",
           sourceLabel: "OKF Hub",
           sourceStatus: "current",
-          title: row.title,
-          type: row.type,
+          title: metadata.title,
+          type: metadata.type,
           tags: [],
           owner: canEditHub && !row.publishedRevision
             ? userName
             : "OKF Hub authors",
           status: row.status,
           trust: "current",
-          searchText: [row.title, row.type, content].join("\n"),
+          searchText: [metadata.title, metadata.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
         });
       }
@@ -2986,7 +3132,10 @@ export async function createCollabApp({
           });
         }
         document = {
-          title: row.title,
+          title: state === "published"
+            ? payloadDocument.publishedMetadata?.title ??
+              unavailablePublishedMetadata().title
+            : row.title,
           space: space(row.spaceId)?.name ?? row.spaceId,
           state,
           markdown,
@@ -4507,7 +4656,11 @@ export async function createCollabApp({
       );
     }
 
-    if (url.pathname === "/api/templates" && request.method === "POST") {
+    const templateRoute = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
+    if (
+      (url.pathname === "/api/templates" && request.method === "POST") ||
+      (templateRoute && request.method === "PUT")
+    ) {
       const current = await security.session(request);
       if (!current) {
         return Response.json({ error: "Sign in required" }, {
@@ -4521,15 +4674,35 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const body = await request.json().catch(() => ({})) as Record<
-        string,
-        unknown
-      >;
-      const name = String(body.name ?? "").trim();
-      const description = String(body.description ?? "").trim();
-      const markdown = String(body.body ?? "");
+      const existing = templateRoute ? template(templateRoute[1]) : null;
+      if (templateRoute && !existing) {
+        return Response.json({ error: "Template not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (existing?.id === UNDERSTANDING_BRIEF_TEMPLATE.id) {
+        return Response.json({
+          error: "Duplicate a built-in template to edit it",
+        }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const parsed: unknown = await request.json().catch(() => null);
+      const body =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : {};
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const description = typeof body.description === "string"
+        ? body.description.trim()
+        : "";
+      const markdown = typeof body.body === "string" ? body.body : "";
       if (
         !name || name.length > 80 || description.length > 240 ||
+        (body.description !== undefined &&
+          typeof body.description !== "string") ||
         !markdown.trim() ||
         new TextEncoder().encode(markdown).byteLength > MAX_MARKDOWN_BYTES
       ) {
@@ -4542,6 +4715,7 @@ export async function createCollabApp({
       }
       if (
         templates().some((item) =>
+          item.id !== existing?.id &&
           item.name.toLocaleLowerCase() === name.toLocaleLowerCase()
         )
       ) {
@@ -4550,9 +4724,20 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const id = crypto.randomUUID();
+      const id = existing?.id ?? crypto.randomUUID();
       const now = new Date().toISOString();
-      try {
+      if (existing) {
+        db.prepare(
+          "UPDATE okf_template SET name = ?, description = ?, body = ?, variables = ?, updatedAt = ? WHERE id = ?",
+        ).run(
+          name,
+          description,
+          markdown,
+          JSON.stringify(templateVariables(markdown)),
+          now,
+          id,
+        );
+      } else {
         db.prepare(
           "INSERT INTO okf_template (id, name, description, body, variables, createdBy, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ).run(
@@ -4565,20 +4750,18 @@ export async function createCollabApp({
           now,
           now,
         );
-        security.audit(current.user.id, "template.created", `template:${id}`);
-        return Response.json(templatePayload(template(id)!), {
-          status: 201,
-          headers: cors(request),
-        });
-      } catch {
-        return Response.json({ error: "Template name already exists" }, {
-          status: 409,
-          headers: cors(request),
-        });
       }
+      security.audit(
+        current.user.id,
+        existing ? "template.updated" : "template.created",
+        `template:${id}`,
+      );
+      return Response.json(templatePayload(template(id)!), {
+        status: existing ? 200 : 201,
+        headers: cors(request),
+      });
     }
 
-    const templateRoute = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
     if (templateRoute && request.method === "DELETE") {
       const current = await security.session(request);
       if (!current) {
@@ -4795,23 +4978,33 @@ export async function createCollabApp({
         });
       }
       const archived = url.searchParams.get("include") === "archived";
-      const visible = [];
-      for (const row of concepts()) {
-        if (!await security.check(current.user.id, "view", row.id)) continue;
-        const canEdit = await security.check(current.user.id, "edit", row.id);
-        if (
-          row.status === "active"
-            ? canEdit || row.publishedRevision
-            : canEdit && archived
-        ) {
-          visible.push({
+      const visible = await Promise.all(
+        concepts().map(async (row) => {
+          if (!await security.check(current.user.id, "view", row.id)) {
+            return null;
+          }
+          const canEdit = await security.check(current.user.id, "edit", row.id);
+          if (
+            !(row.status === "active"
+              ? canEdit || row.publishedRevision
+              : canEdit && archived)
+          ) return null;
+          const publication = await currentPublication(row);
+          return {
             ...row,
+            ...(!canEdit
+              ? publication?.metadata ?? unavailablePublishedMetadata()
+              : {}),
+            publishedMetadata: publication?.metadata ?? null,
             space: space(row.spaceId)?.name ?? row.spaceId,
             openCommentCount: openCommentCount(row.id),
-          });
-        }
-      }
-      return Response.json(visible, {
+            hasUnpublishedChanges: canEdit
+              ? await hasUnpublishedChanges(row)
+              : false,
+          };
+        }),
+      );
+      return Response.json(visible.filter((row) => row !== null), {
         headers: cors(request),
       });
     }
@@ -5398,13 +5591,14 @@ export async function createCollabApp({
         string,
         unknown
       >;
-      const title = String(body.title ?? "").trim();
-      const type = String(body.type ?? "").trim();
-      const spaceId = String(body.spaceId ?? "");
-      const intent = String(body.intent ?? row.intent) as DocumentIntent;
+      const latest = concept(conceptId)!;
+      const title = String(body.title ?? latest.title).trim();
+      const type = String(body.type ?? latest.type).trim();
+      const spaceId = String(body.spaceId ?? latest.spaceId);
+      const intent = String(body.intent ?? latest.intent) as DocumentIntent;
       const parentId = Object.hasOwn(body, "parentId")
         ? body.parentId ? String(body.parentId) : null
-        : row.parentId;
+        : latest.parentId;
       if (
         !title || title.length > 100 ||
         !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type) ||
@@ -5452,14 +5646,16 @@ export async function createCollabApp({
       }
       try {
         await security.moveHubConcept(conceptId, row.spaceId, spaceId);
+        const fields = { title, type, intent, spaceId, parentId };
+        const changedFields = Object.entries(fields).filter(([key]) =>
+          Object.hasOwn(body, key)
+        );
         db.prepare(
-          "UPDATE okf_concept SET title = ?, type = ?, intent = ?, spaceId = ?, parentId = ?, updatedAt = ? WHERE id = ?",
+          `UPDATE okf_concept SET ${
+            changedFields.map(([key]) => `${key} = ?, `).join("")
+          }updatedAt = ? WHERE id = ?`,
         ).run(
-          title,
-          type,
-          intent,
-          spaceId,
-          parentId,
+          ...changedFields.map(([, value]) => value),
           new Date().toISOString(),
           conceptId,
         );
@@ -5520,8 +5716,21 @@ export async function createCollabApp({
         });
       }
       try {
-        await saveDraft(conceptId, await request.text());
-        return new Response(null, { status: 204, headers: cors(request) });
+        const epoch = request.headers.get("x-okf-collab-epoch");
+        await saveDraft(
+          conceptId,
+          await request.text(),
+          epoch === null ? undefined : Number(epoch),
+        );
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...cors(request),
+            "x-okf-unpublished-changes": String(
+              await hasUnpublishedChanges(concept(conceptId)!),
+            ),
+          },
+        });
       } catch (error) {
         if (error instanceof MarkdownTooLarge) {
           return new Response(error.message, {
@@ -5532,6 +5741,12 @@ export async function createCollabApp({
         if (error instanceof DocumentLocked) {
           return new Response(error.message, {
             status: 423,
+            headers: cors(request),
+          });
+        }
+        if (error instanceof DocumentCheckpointChanged) {
+          return new Response(error.message, {
+            status: 409,
             headers: cors(request),
           });
         }
@@ -5737,7 +5952,9 @@ export async function createCollabApp({
               headers: cors(request),
             });
           }
-          await saveDraft(conceptId, bodyOnly(await store.get(item.objectKey)));
+          const restored = bodyOnly(await store.get(item.objectKey));
+          await saveDraft(conceptId, restored);
+          await resetCollaboration(conceptId, restored);
           return Response.json(
             await payload(concept(conceptId)!, true, current.user.id),
             {
@@ -5791,7 +6008,14 @@ export async function createCollabApp({
       const live = await loadDocument(row);
       const { socket, response } = Deno.upgradeWebSocket(request);
       socket.binaryType = "arraybuffer";
+      const staleClient = () =>
+        live.resetting || documents.get(conceptId) !== live ||
+        concept(conceptId)?.collabEpoch !== row.collabEpoch;
       socket.addEventListener("open", () => {
+        if (staleClient()) {
+          socket.close(4009, "Document checkpoint changed");
+          return;
+        }
         live.clients.add(socket);
         socket.send(frame(DOCUMENT_UPDATE, Y.encodeStateAsUpdate(live.doc)));
         socket.send("synced");
@@ -5799,6 +6023,12 @@ export async function createCollabApp({
       socket.addEventListener("message", async (event) => {
         if (typeof event.data === "string") return;
         const message = await bytes(event.data);
+        if (staleClient()) {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close(4009, "Document checkpoint changed");
+          }
+          return;
+        }
         if (!message?.length) return;
         if (message[0] === DOCUMENT_UPDATE && canEdit) {
           Y.applyUpdate(live.doc, message.subarray(1), socket);
@@ -5862,7 +6092,10 @@ export async function createCollabApp({
       await activeAutomation;
       for (const live of documents.values()) {
         live.clients.forEach((client) => client.close());
-        await live.stateWrite;
+        await Promise.all([
+          live.stateWrite,
+          live.markdownWrite.catch(() => {}),
+        ]);
         live.doc.destroy();
       }
       db.close();

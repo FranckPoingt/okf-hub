@@ -15,7 +15,7 @@ import {
   useState,
 } from "react";
 import { AppSidebar } from "./components/app-sidebar.tsx";
-import { AskOKF } from "./components/ask-okf.tsx";
+import { AskOKF, type AskSession } from "./components/ask-okf.tsx";
 import { CommandPalette } from "./components/command-palette.tsx";
 import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
 import {
@@ -36,6 +36,8 @@ import { DocumentProperties } from "./components/editor/document-properties.tsx"
 import { DocumentReferences } from "./components/editor/document-references.tsx";
 import { PresentationMode } from "./components/editor/presentation-mode.tsx";
 import { RevisionHistory } from "./components/editor/revision-history.tsx";
+import { DraftReview } from "./components/editor/draft-review.tsx";
+import { DraftSaveQueue, type SaveState } from "./lib/draft-save.ts";
 import {
   type DocumentMode,
   type DocumentSurface,
@@ -50,6 +52,7 @@ import { WorkspaceHeader } from "./components/workspace-header.tsx";
 import { SearchPanel, WorkTracePanel } from "./components/workspace-panels.tsx";
 import {
   NewDocumentDialog,
+  type TemplateDraftCache,
   WorkspaceSettings,
 } from "./components/workspace-settings.tsx";
 import { Badge } from "./components/ui/badge.tsx";
@@ -123,9 +126,14 @@ export default function App() {
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [saveState, setSaveState] = useState<"saved" | "failed">(
-    "saved",
-  );
+  const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [draftSavedAt, setDraftSavedAt] = useState("");
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [newDocumentTemplateId, setNewDocumentTemplateId] = useState<string>();
+  const [templateSnapshot, setTemplateSnapshot] = useState<
+    { title: string; body: string } | null
+  >(null);
+  const [templateSaved, setTemplateSaved] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(
     "general",
   );
@@ -175,9 +183,114 @@ export default function App() {
   const [sourceError, setSourceError] = useState("");
   const [sharedError, setSharedError] = useState("");
   const [notionError, setNotionError] = useState("");
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
+  const latestMarkdown = useRef(markdown);
+  latestMarkdown.current = markdown;
+  const documentSnapshot = useRef<(() => string | null) | null>(null);
+  const handleDraftSnapshot = useCallback(
+    (read: (() => string | null) | null) => {
+      documentSnapshot.current = read;
+    },
+    [],
   );
+  const activeConceptId = useRef<string | null>(null);
+  const latestConcept = useRef(concept);
+  latestConcept.current = concept;
+  const navigationVersion = useRef(0);
+  const lastRoutePath = useRef(
+    globalThis.location.pathname + globalThis.location.search,
+  );
+  const recordRoute = (
+    route: Exclude<AppRoute, { kind: "not_found" }>,
+    replace = false,
+  ) => {
+    lastRoutePath.current = routePath(route);
+    setBrowserRoute(route, replace);
+  };
+  const metadataFlush = useRef<(() => Promise<void>) | null>(null);
+  const askSessions = useRef(new Map<string, AskSession>());
+  const templateDraftCache = useRef<TemplateDraftCache>(new Map());
+  const [saveQueue] = useState(() =>
+    new DraftSaveQueue(async (id, content) => {
+      const response = await api(conceptPath(id), {
+        method: "PUT",
+        body: content,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          ...(latestConcept.current?.id === id
+            ? {
+              "x-okf-collab-epoch": String(latestConcept.current.collabEpoch),
+            }
+            : {}),
+        },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        throw new Error(result.error ?? "Could not save draft");
+      }
+      const changed =
+        response.headers.get("x-okf-unpublished-changes") === "true";
+      setConcept((current) =>
+        current?.id === id
+          ? { ...current, hasUnpublishedChanges: changed }
+          : current
+      );
+      setConcepts((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, hasUnpublishedChanges: changed } : item
+        )
+      );
+    }, (id, state) => {
+      if (activeConceptId.current === id) {
+        setSaveState(state);
+        if (state === "saved") setDraftSavedAt(new Date().toISOString());
+      }
+    })
+  );
+
+  const finishDraft = useCallback(async () => {
+    try {
+      await metadataFlush.current?.();
+      const content = documentSnapshot.current?.();
+      const id = activeConceptId.current;
+      if (id && content != null && content !== latestMarkdown.current) {
+        latestMarkdown.current = content;
+        setMarkdown(content);
+        saveQueue.stage(id, content);
+      }
+      if (!await saveQueue.flush(id)) {
+        throw new Error(
+          saveQueue.error(id) ??
+            "Your changes could not be saved. Retry saving before leaving this document.",
+        );
+      }
+      setActionError("");
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Your changes could not be saved.",
+      );
+      return false;
+    }
+  }, [saveQueue]);
+
+  useEffect(() => {
+    const protectDraft = (event: BeforeUnloadEvent) => {
+      const content = documentSnapshot.current?.();
+      const unstaged = content != null && content !== latestMarkdown.current;
+      if (
+        !unstaged && !saveQueue.hasPending() && !templateDraftCache.current.size
+      ) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    globalThis.addEventListener("beforeunload", protectDraft);
+    return () => globalThis.removeEventListener("beforeunload", protectDraft);
+  }, [saveQueue]);
+
   const referenceInserter = useRef<
     ((title: string, href: string) => void) | null
   >(null);
@@ -240,13 +353,25 @@ export default function App() {
     setAIConfig(result);
   }, []);
   const openHubConcept = useCallback(async (id: string, record = true) => {
+    const requestVersion = ++navigationVersion.current;
+    if (!await finishDraft()) return false;
+    if (requestVersion !== navigationVersion.current) return false;
     setConceptLoaded(false);
     setRouteError("");
     const response = await api(conceptPath(id));
     const result = await response.json() as Concept & { error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
+    if (requestVersion !== navigationVersion.current) return false;
+    if (!response.ok) {
+      setConceptLoaded(true);
+      throw new Error(result.error ?? "Concept unavailable");
+    }
+    activeConceptId.current = id;
+    setDraftSavedAt(result.updatedAt);
+    setSaveState(saveQueue.state(id));
+    setReviewOpen(false);
     setConcept(result);
     const content = bootstrap?.canEdit ? result.draft : result.published;
+    if (bootstrap?.canEdit) saveQueue.accept(id, content ?? "");
     setInitialMarkdown(content ?? null);
     setMarkdown(content ?? "");
     setView(bootstrap?.canEdit ? "draft" : "published");
@@ -271,8 +396,11 @@ export default function App() {
         ? requestedSurface
         : "document",
     );
-    if (record) setBrowserRoute({ kind: "concept", id });
-  }, [bootstrap?.canEdit]);
+    if (record) recordRoute({ kind: "concept", id });
+    else {lastRoutePath.current = globalThis.location.pathname +
+        globalThis.location.search;}
+    return true;
+  }, [bootstrap?.canEdit, finishDraft, saveQueue]);
   const refreshHubLists = useCallback(async () => {
     const [spacesResponse, conceptsResponse] = await Promise.all([
       api("/api/spaces"),
@@ -317,11 +445,23 @@ export default function App() {
     void loadTemplates().catch((error) => setActionError(error.message));
   }, [bootstrap?.canEdit, loadTemplates]);
 
-  const signOut = () => {
-    void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
+  const signOut = async () => {
+    if (!await finishDraft() || !await saveQueue.flushAll()) return;
+    try {
+      const response = await api("/api/auth/sign-out", { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Could not sign out. Please try again.");
+      }
+      navigationVersion.current++;
+      saveQueue.clear();
+      askSessions.current.clear();
+      templateDraftCache.current.clear();
+      activeConceptId.current = null;
+      setTemplateSnapshot(null);
       setBootstrap({ user: null });
       setConcept(null);
       setConcepts([]);
+      setTemplates([]);
       setSpaces([]);
       setConceptLoaded(false);
       setHubReady(false);
@@ -340,65 +480,93 @@ export default function App() {
       setSearchOpen(false);
       setAskOpen(false);
       setAIConfig({ enabled: false, provider: "", model: "" });
-    });
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not sign out. Please try again.",
+      );
+    }
   };
   const saveMarkdown = useCallback((content: string) => {
     if (!bootstrap?.canEdit || !concept || concept.lockedAt) return;
+    latestMarkdown.current = content;
     setMarkdown(content);
-    setSaveState("saved");
-    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
-    saveTimer.current = globalThis.setTimeout(() => {
-      api(conceptPath(concept.id), {
-        method: "PUT",
-        body: content,
-        headers: { "content-type": "text/markdown; charset=utf-8" },
-      }).then((response) => {
-        if (!response.ok) throw new Error("save failed");
-        setSaveState("saved");
-      }).catch(() => setSaveState("failed"));
-    }, 300);
-  }, [bootstrap?.canEdit, concept]);
+    const changed = !concept.publishedRevision ||
+      content.trimEnd() !== (concept.published ?? "").trimEnd();
+    setConcepts((current) =>
+      current.map((item) =>
+        item.id === concept.id
+          ? {
+            ...item,
+            hasUnpublishedChanges: changed,
+            updatedAt: new Date().toISOString(),
+          }
+          : item
+      )
+    );
+    saveQueue.stage(concept.id, content);
+  }, [bootstrap?.canEdit, concept, saveQueue]);
 
   const lifecycle = async (path: string, body?: unknown) => {
     if (!concept) return null;
     setActionBusy(true);
     setActionError("");
-    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
-    const response = await api(`${conceptPath(concept.id)}/${path}`, {
-      method: "POST",
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Action failed");
+    try {
+      if (!await finishDraft()) return null;
+      const response = await api(`${conceptPath(concept.id)}/${path}`, {
+        method: "POST",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Action failed");
+      saveQueue.accept(result.id, result.draft ?? "");
+      setConcept(result);
+      await refreshHubLists().catch(() => {});
+      return result;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Action failed. Please try again.",
+      );
       return null;
+    } finally {
+      setActionBusy(false);
     }
-    setConcept(result);
-    await refreshHubLists().catch(() => {});
-    return result;
   };
   const documentLifecycle = async (id: string, action: string) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`${conceptPath(id)}/${action}`, {
-      method: "POST",
-    });
-    const result = await response.json().catch(() => ({})) as Concept & {
-      error?: string;
-    };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Document action failed");
-      return;
+    try {
+      if (id === activeConceptId.current && !await finishDraft()) return;
+      setActionError("");
+      const response = await api(`${conceptPath(id)}/${action}`, {
+        method: "POST",
+      });
+      const result = await response.json().catch(() => ({})) as Concept & {
+        error?: string;
+      };
+      if (!response.ok) {
+        setActionError(result.error ?? "Document action failed");
+        return;
+      }
+      if (concept?.id === id) {
+        saveQueue.accept(result.id, result.draft ?? "");
+        setConcept(result);
+        setInitialMarkdown(result.draft ?? null);
+        setMarkdown(result.draft ?? "");
+        setEditorVersion((current) => current + 1);
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    if (concept?.id === id) {
-      setConcept(result);
-      setInitialMarkdown(result.draft ?? null);
-      setMarkdown(result.draft ?? "");
-      setEditorVersion((current) => current + 1);
-    }
-    await refreshHubLists();
   };
 
   const createSpace = async (event: FormEvent<HTMLFormElement>) => {
@@ -408,20 +576,30 @@ export default function App() {
     const name = String(fields.get("name") ?? "");
     const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/spaces", {
-      method: "POST",
-      body: JSON.stringify({ name, icon }),
-    });
-    const result = await response.json() as Space & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Creation failed");
+    try {
+      setActionError("");
+      const response = await api("/api/spaces", {
+        method: "POST",
+        body: JSON.stringify({ name, icon }),
+      });
+      const result = await response.json() as Space & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Creation failed");
+        return false;
+      }
+      form.reset();
+      await refreshHubLists();
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    form.reset();
-    await refreshHubLists();
-    return true;
   };
   const updateWorkspace = async (value: {
     name: string;
@@ -429,19 +607,29 @@ export default function App() {
     logo: string;
   }) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/workspace", {
-      method: "PUT",
-      body: JSON.stringify(value),
-    });
-    const result = await response.json() as Bootstrap & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Workspace update failed");
+    try {
+      setActionError("");
+      const response = await api("/api/workspace", {
+        method: "PUT",
+        body: JSON.stringify(value),
+      });
+      const result = await response.json() as Bootstrap & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Workspace update failed");
+        return false;
+      }
+      setBootstrap(result);
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    setBootstrap(result);
-    return true;
   };
 
   const renameSpace = async (
@@ -453,115 +641,205 @@ export default function App() {
     const name = String(fields.get("name") ?? "");
     const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`/api/spaces/${space.id}`, {
-      method: "PUT",
-      body: JSON.stringify({ name, icon }),
-    });
-    const result = await response.json() as Space & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Rename failed");
-    if (concept?.spaceId === space.id) {
-      setConcept({ ...concept, space: result.name });
+    try {
+      setActionError("");
+      const response = await api(`/api/spaces/${space.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, icon }),
+      });
+      const result = await response.json() as Space & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Rename failed");
+      if (concept?.spaceId === space.id) {
+        setConcept({ ...concept, space: result.name });
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const deleteSpace = async (space: Space) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`/api/spaces/${space.id}`, {
-      method: "DELETE",
-    });
-    setActionBusy(false);
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as {
-        error?: string;
-      };
-      return setActionError(result.error ?? "Deletion failed");
+    try {
+      setActionError("");
+      const response = await api(`/api/spaces/${space.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        return setActionError(result.error ?? "Deletion failed");
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const createTemplate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (actionBusy) return false;
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/templates", {
-      method: "POST",
-      body: JSON.stringify({
-        name: fields.get("name"),
-        description: fields.get("description"),
-        body: fields.get("body"),
-      }),
-    });
-    const result = await response.json().catch(() => ({})) as {
-      error?: string;
-    };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Template creation failed");
+    try {
+      setActionError("");
+      const response = await api("/api/templates", {
+        method: "POST",
+        body: JSON.stringify({
+          name: fields.get("name"),
+          description: fields.get("description"),
+          body: fields.get("body"),
+        }),
+      });
+      const result = await response.json() as DocumentTemplate & {
+        error?: string;
+      };
+      if (!response.ok) {
+        setActionError(result.error ?? "Template creation failed");
+        return false;
+      }
+      setTemplates((
+        current,
+      ) => [...current.filter((item) => item.id !== result.id), result]);
+      form.reset();
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    form.reset();
-    await loadTemplates();
-    return true;
+  };
+
+  const updateTemplate = async (
+    id: string,
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (actionBusy) return false;
+    const fields = new FormData(event.currentTarget);
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const response = await api(`/api/templates/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: fields.get("name"),
+          description: fields.get("description"),
+          body: fields.get("body"),
+        }),
+      });
+      const result = await response.json() as DocumentTemplate & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Template update failed");
+      }
+      setTemplates((current) =>
+        current.map((item) => item.id === result.id ? result : item)
+      );
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error ? cause.message : "Template update failed",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const deleteTemplate = async (item: DocumentTemplate) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(
-      `/api/templates/${encodeURIComponent(item.id)}`,
-      {
-        method: "DELETE",
-      },
-    );
-    setActionBusy(false);
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as {
-        error?: string;
-      };
-      return setActionError(result.error ?? "Template deletion failed");
+    try {
+      setActionError("");
+      const response = await api(
+        `/api/templates/${encodeURIComponent(item.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        return setActionError(result.error ?? "Template deletion failed");
+      }
+      setTemplates((current) =>
+        current.filter((template) => template.id !== item.id)
+      );
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await loadTemplates();
   };
 
   const createConcept = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     setActionBusy(true);
-    setActionError("");
-    const templateId = String(fields.get("templateId") ?? "");
-    const variables = Object.fromEntries(
-      Array.from(fields.entries())
-        .filter(([name]) => name.startsWith("variable:"))
-        .map((
-          [name, value],
-        ) => [name.slice("variable:".length), String(value)]),
-    );
-    const response = await api("/api/concepts", {
-      method: "POST",
-      body: JSON.stringify({
-        title: fields.get("title"),
-        type: fields.get("type"),
-        intent: fields.get("intent"),
-        spaceId: fields.get("spaceId"),
-        parentId: fields.get("parentId") || null,
-        ...(templateId ? { templateId, variables } : {}),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Creation failed");
+    try {
+      setActionError("");
+      const templateId = String(fields.get("templateId") ?? "");
+      const variables = Object.fromEntries(
+        Array.from(fields.entries())
+          .filter(([name]) => name.startsWith("variable:"))
+          .map((
+            [name, value],
+          ) => [name.slice("variable:".length), String(value)]),
+      );
+      const response = await api("/api/concepts", {
+        method: "POST",
+        body: JSON.stringify({
+          title: fields.get("title"),
+          type: fields.get("type"),
+          intent: fields.get("intent"),
+          spaceId: fields.get("spaceId"),
+          parentId: fields.get("parentId") || null,
+          ...(templateId ? { templateId, variables } : {}),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Creation failed");
+        return false;
+      }
+      await refreshHubLists();
+      await openHubConcept(result.id);
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
-    await openHubConcept(result.id);
-    return true;
   };
 
   const updateConcept = async (event: FormEvent<HTMLFormElement>) => {
@@ -570,29 +848,40 @@ export default function App() {
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`${conceptPath(concept.id)}/metadata`, {
-      method: "PUT",
-      body: JSON.stringify({
-        title: fields.get("title"),
-        type: fields.get("type"),
-        intent: fields.get("intent"),
-        spaceId: fields.get("spaceId"),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Update failed");
-    setConcept(result);
-    setDocumentSettingsOpen(false);
-    await refreshHubLists();
+    try {
+      setActionError("");
+      const response = await api(`${conceptPath(concept.id)}/metadata`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: fields.get("title"),
+          type: fields.get("type"),
+          intent: fields.get("intent"),
+          spaceId: fields.get("spaceId"),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Update failed");
+      setConcept(result);
+      setDocumentSettingsOpen(false);
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const publish = async () => {
-    const result = await lifecycle("publish", { markdown });
+    const result = await lifecycle("publish");
     if (result) {
       setSaveState("saved");
+      setMarkdown(result.draft ?? "");
       setView("published");
+      setReviewOpen(false);
     }
   };
 
@@ -615,7 +904,7 @@ export default function App() {
 
   const restoreRevision = async (number: number) => {
     const result = await lifecycle(`revisions/${number}/restore`);
-    if (!result?.draft) return;
+    if (result?.draft == null) return;
     setInitialMarkdown(result.draft);
     setMarkdown(result.draft);
     setEditorVersion((current) => current + 1);
@@ -629,24 +918,33 @@ export default function App() {
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`${conceptPath(concept.id)}/traces`, {
-      method: "POST",
-      body: JSON.stringify({
-        kind: fields.get("kind"),
-        title: fields.get("title"),
-        summary: fields.get("summary"),
-        occurredAt: fields.get("occurredAt"),
-        sourceUrl: fields.get("sourceUrl"),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      return setActionError(result.error ?? "Work trace failed");
+    try {
+      setActionError("");
+      const response = await api(`${conceptPath(concept.id)}/traces`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: fields.get("kind"),
+          title: fields.get("title"),
+          summary: fields.get("summary"),
+          occurredAt: fields.get("occurredAt"),
+          sourceUrl: fields.get("sourceUrl"),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        return setActionError(result.error ?? "Work trace failed");
+      }
+      setConcept(result);
+      form.reset();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    setConcept(result);
-    form.reset();
   };
 
   const foldWorkTrace = async (
@@ -658,30 +956,39 @@ export default function App() {
     const fields = new FormData(event.currentTarget);
     const targetConceptId = String(fields.get("targetConceptId") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api(
-      `${conceptPath(concept.id)}/traces/${trace.id}/fold`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          targetConceptId,
-          knowledge: fields.get("knowledge"),
-          ...(targetConceptId === concept.id
-            ? { targetMarkdown: markdown }
-            : {}),
-        }),
-      },
-    );
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Fold failed");
-    setConcept(result);
-    if (targetConceptId === concept.id && result.draft) {
-      setInitialMarkdown(result.draft);
-      setMarkdown(result.draft);
-      setEditorVersion((current) => current + 1);
+    try {
+      setActionError("");
+      const response = await api(
+        `${conceptPath(concept.id)}/traces/${trace.id}/fold`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetConceptId,
+            knowledge: fields.get("knowledge"),
+            ...(targetConceptId === concept.id
+              ? { targetMarkdown: markdown }
+              : {}),
+          }),
+        },
+      );
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Fold failed");
+      setConcept(result);
+      if (targetConceptId === concept.id && result.draft) {
+        setInitialMarkdown(result.draft);
+        setMarkdown(result.draft);
+        setEditorVersion((current) => current + 1);
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const connectRepository = async (
@@ -910,30 +1217,55 @@ export default function App() {
     path: string,
     record = true,
   ) => {
+    const requestVersion = ++navigationVersion.current;
+    if (!await finishDraft()) return false;
+    if (requestVersion !== navigationVersion.current) return null;
     setSourceError("");
     setRouteError("");
-    const response = await api(
-      `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
-    );
-    const result = await response.json() as ImportedConcept & {
-      error?: string;
-    };
-    if (!response.ok) {
-      setSourceError(result.error ?? "Import unavailable");
+    try {
+      const response = await api(
+        `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
+      );
+      const result = await response.json() as ImportedConcept & {
+        error?: string;
+      };
+      if (requestVersion !== navigationVersion.current) return null;
+      if (!response.ok) {
+        setSourceError(result.error ?? "Import unavailable");
+        return false;
+      }
+      setImported(result);
+      setHomeOpen(false);
+      setSpaceIdOpen(null);
+      setSourceOpen(false);
+      setSearchOpen(false);
+      setDeveloperOpen(false);
+      setPresenting(false);
+      if (record) recordRoute({ kind: "imported", sourceId, path });
+      return true;
+    } catch (cause) {
+      if (requestVersion !== navigationVersion.current) return null;
+      setSourceError(
+        cause instanceof Error ? cause.message : "Import unavailable",
+      );
       return false;
     }
-    setImported(result);
-    setHomeOpen(false);
-    setSpaceIdOpen(null);
-    setSourceOpen(false);
-    setSearchOpen(false);
-    setDeveloperOpen(false);
-    setPresenting(false);
-    if (record) setBrowserRoute({ kind: "imported", sourceId, path });
-    return true;
   };
 
-  const showHubConcept = (id?: string, record = true) => {
+  const showHubConcept = async (id?: string, record = true) => {
+    if (id && id !== concept?.id) {
+      try {
+        await openHubConcept(id, record);
+      } catch (error) {
+        setConceptLoaded(true);
+        setActionError(
+          error instanceof Error ? error.message : "Document unavailable",
+        );
+      }
+      return;
+    }
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
     setRouteError("");
     setImported(null);
     setHomeOpen(false);
@@ -943,20 +1275,19 @@ export default function App() {
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (id && id !== concept?.id) {
-      void openHubConcept(id, record).catch((error) =>
-        setActionError(error.message)
-      );
-    } else if (id && record) {
-      setBrowserRoute({ kind: "concept", id });
+    if (id && record) {
+      recordRoute({ kind: "concept", id });
     } else if (!id && concept) {
-      if (record) setBrowserRoute({ kind: "concept", id: concept.id });
+      if (record) recordRoute({ kind: "concept", id: concept.id });
     } else if (!id) {
       setHomeOpen(true);
-      if (record) setBrowserRoute({ kind: "home" });
+      if (record) recordRoute({ kind: "home" });
     }
   };
-  const showHome = (record = true) => {
+  const showHome = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(true);
@@ -967,9 +1298,12 @@ export default function App() {
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (record) setBrowserRoute({ kind: "home" });
+    if (record) recordRoute({ kind: "home" });
   };
-  const showSpace = (id: string, record = true) => {
+  const showSpace = async (id: string, record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setSpaceIdOpen(id);
@@ -980,9 +1314,12 @@ export default function App() {
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (record) setBrowserRoute({ kind: "space", id });
+    if (record) recordRoute({ kind: "space", id });
   };
-  const showSearch = (record = true) => {
+  const showSearch = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
@@ -992,10 +1329,13 @@ export default function App() {
     setImported(null);
     setCreateOpen(false);
     setDeveloperOpen(false);
-    if (record) setBrowserRoute({ kind: "search" });
+    if (record) recordRoute({ kind: "search" });
   };
   const openGlobalSearch = () => setSearchPaletteOpen(true);
-  const showSources = (record = true) => {
+  const showSources = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
@@ -1005,12 +1345,15 @@ export default function App() {
     setSearchOpen(false);
     setCreateOpen(false);
     setDeveloperOpen(false);
-    if (record) setBrowserRoute({ kind: "sources" });
+    if (record) recordRoute({ kind: "sources" });
   };
-  const showCreate = (
+  const showCreate = async (
     section: SettingsSection = "general",
     record = true,
   ) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     if (section === "members" && bootstrap?.access !== "owner") {
       section = "general";
     }
@@ -1026,9 +1369,12 @@ export default function App() {
     setSearchOpen(false);
     setDeveloperOpen(false);
     setActionError("");
-    if (record) setBrowserRoute({ kind: "manage", section });
+    if (record) recordRoute({ kind: "manage", section });
   };
-  const showDeveloper = (record = true) => {
+  const showDeveloper = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
@@ -1038,9 +1384,14 @@ export default function App() {
     setSearchOpen(false);
     setCreateOpen(false);
     setDeveloperOpen(true);
-    if (record) setBrowserRoute({ kind: "developer" });
+    if (record) recordRoute({ kind: "developer" });
   };
-  const openNewDocument = (spaceId?: string, parentId?: string) => {
+  const openNewDocument = (
+    spaceId?: string,
+    parentId?: string,
+    templateId?: string,
+  ) => {
+    setNewDocumentTemplateId(templateId);
     setNewDocumentSpaceId(spaceId);
     setNewDocumentParentId(parentId);
     setActionError("");
@@ -1119,6 +1470,14 @@ export default function App() {
     };
     const apply = async () => {
       const route = parseAppRoute(globalThis.location.pathname);
+      if (!await finishDraft()) {
+        globalThis.history.replaceState({}, "", lastRoutePath.current);
+        return;
+      }
+      if (route.kind !== "not_found") {
+        lastRoutePath.current = globalThis.location.pathname +
+          globalThis.location.search;
+      }
       try {
         if (route.kind === "home") return showHome(false);
         if (route.kind === "search") return showSearch(false);
@@ -1140,7 +1499,7 @@ export default function App() {
             ? "general"
             : route.section;
           if (section !== route.section) {
-            setBrowserRoute({ kind: "manage", section }, true);
+            recordRoute({ kind: "manage", section }, true);
           }
           return showCreate(section, false);
         }
@@ -1149,7 +1508,7 @@ export default function App() {
           return;
         }
         if (route.kind === "imported") {
-          if (!await openImported(route.sourceId, route.path, false)) {
+          if (await openImported(route.sourceId, route.path, false) === false) {
             unavailable();
           }
           return;
@@ -1274,6 +1633,10 @@ export default function App() {
     : imported
     ? importedSourceLabel
     : concept?.space ?? "Hub-native knowledge";
+  const displayedConcept =
+    concept && view === "published" && concept.publishedMetadata
+      ? { ...concept, ...concept.publishedMetadata }
+      : concept;
   const pageTitle = homeOpen
     ? "Home"
     : activeSpace
@@ -1286,7 +1649,7 @@ export default function App() {
     ? "Workspace"
     : developerOpen
     ? "API documentation"
-    : imported?.title ?? concept?.title ?? "Hub-native knowledge";
+    : imported?.title ?? displayedConcept?.title ?? "Hub-native knowledge";
   const statusTone =
     homeOpen || activeSpace || searchOpen || sourceOpen || createOpen ||
       developerOpen
@@ -1355,8 +1718,8 @@ export default function App() {
     ? {
       key: `${concept.id}-${view}`,
       markdown: view === "draft" ? markdown : concept.published ?? "",
-      meta: `${concept.type} · ${concept.space}`,
-      title: concept.title,
+      meta: `${displayedConcept!.type} · ${concept.space}`,
+      title: displayedConcept!.title,
     }
     : null;
   const canEditDocument = Boolean(
@@ -1484,7 +1847,34 @@ export default function App() {
                   exportHref={concept.publishedRevision
                     ? `${SERVICE}${conceptPath(concept.id)}/export`
                     : undefined}
-                  hasPublished={Boolean(concept.published)}
+                  hasPublished={Boolean(concept.publishedRevision)}
+                  hasUnpublishedChanges={!concept.publishedRevision ||
+                    markdown.trimEnd() !==
+                      (concept.published ?? "").trimEnd() ||
+                    concept.hasUnpublishedChanges}
+                  saveState={saveState}
+                  onReviewChanges={() =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setReviewOpen(true);
+                    })}
+                  onRetrySave={() => void finishDraft()}
+                  onSaveAsTemplate={() => {
+                    setActionError("");
+                    setTemplateSaved(false);
+                    void finishDraft().then((saved) => {
+                      const current = latestConcept.current;
+                      if (saved && current) {
+                        setTemplateSnapshot({
+                          title: view === "published"
+                            ? current.publishedMetadata?.title ?? current.title
+                            : current.title,
+                          body: view === "published"
+                            ? current.published ?? ""
+                            : latestMarkdown.current,
+                        });
+                      }
+                    });
+                  }}
                   focusMode={focusMode}
                   mode={documentMode}
                   revisionCount={concept.revisions.length}
@@ -1493,7 +1883,10 @@ export default function App() {
                   view={view}
                   width={documentWidth}
                   onArchive={() => void lifecycle("archive")}
-                  onAsk={() => setAskOpen(true)}
+                  onAsk={() =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setAskOpen(true);
+                    })}
                   onComments={() => {
                     const editorAnchor = commentReader.current?.() ?? null;
                     const selection = globalThis.getSelection();
@@ -1516,15 +1909,24 @@ export default function App() {
                     setCommentsOpen(true);
                   }}
                   onHistory={() => setHistoryOpen((open) => !open)}
-                  onModeChange={setDocumentMode}
+                  onModeChange={(mode) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setDocumentMode(mode);
+                    })}
                   onPublish={() => void publish()}
                   onPresent={() => setPresenting(true)}
                   onReferences={() => setReferencesOpen(true)}
                   onRestore={() => void lifecycle("restore")}
                   onSettings={() => setDocumentSettingsOpen(true)}
-                  onSurfaceChange={setSurface}
+                  onSurfaceChange={(next) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setSurface(next);
+                    })}
                   onFocusModeChange={setFocusMode}
-                  onViewChange={setView}
+                  onViewChange={(next) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setView(next);
+                    })}
                   onWidthChange={setDocumentWidth}
                 />
               )
@@ -1532,6 +1934,10 @@ export default function App() {
           />
         )}
         <section className="workspace">
+          {actionError &&
+            (homeOpen || activeSpace || searchOpen || sourceOpen ||
+              developerOpen) &&
+            <p className="action-error" role="alert">{actionError}</p>}
           {focusMode && (
             <Button
               type="button"
@@ -1567,6 +1973,7 @@ export default function App() {
                 shared={sharedSource}
                 notion={notionSource}
                 canEdit={Boolean(bootstrap.canEdit)}
+                canConnectSources={bootstrap.access === "owner"}
                 onOpenConcept={showHubConcept}
                 onOpenImported={openImported}
                 onCreate={() => openNewDocument()}
@@ -1596,6 +2003,7 @@ export default function App() {
                   logo: "",
                 }}
                 spaces={spaces}
+                templateDraftCache={templateDraftCache.current}
                 templates={templates}
                 invitations={bootstrap.invitations ?? []}
                 members={bootstrap.members ?? []}
@@ -1613,12 +2021,15 @@ export default function App() {
                 initialSection={settingsSection}
                 onSectionChange={(section) => {
                   setSettingsSection(section);
-                  setBrowserRoute({ kind: "manage", section });
+                  recordRoute({ kind: "manage", section });
                 }}
                 onCreateSpace={createSpace}
                 onRenameSpace={renameSpace}
                 onDeleteSpace={deleteSpace}
                 onCreateTemplate={createTemplate}
+                onUpdateTemplate={updateTemplate}
+                onUseTemplate={(id) =>
+                  openNewDocument(undefined, undefined, id)}
                 onDeleteTemplate={deleteTemplate}
                 onUpdateWorkspace={updateWorkspace}
                 onConnectConnector={connectConnector}
@@ -1851,6 +2262,23 @@ export default function App() {
                   onOpenConcept={showHubConcept}
                 />
 
+                <DraftReview
+                  open={reviewOpen}
+                  onOpenChange={setReviewOpen}
+                  onKeepEditing={() => {
+                    setReviewOpen(false);
+                    setView("draft");
+                  }}
+                  publishedMarkdown={concept.published}
+                  draftMarkdown={markdown}
+                  documentTitle={concept.title}
+                  documentType={concept.type}
+                  publishedMetadata={concept.publishedMetadata}
+                  busy={actionBusy}
+                  canPublish={canEditDocument}
+                  error={actionError}
+                  onPublish={() => void publish()}
+                />
                 <RevisionHistory
                   conceptId={concept.id}
                   revisions={concept.revisions}
@@ -1896,7 +2324,7 @@ export default function App() {
                       ? (
                         <section className="lifecycle-empty">
                           <p className="eyebrow">Archived</p>
-                          <h1>Incident communication is out of discovery</h1>
+                          <h1>{concept.title} is out of discovery</h1>
                           <p>
                             Its published revisions remain preserved and can be
                             restored.
@@ -1909,13 +2337,18 @@ export default function App() {
                       ? (
                         <div
                           className={`canvas-container document-width-${documentWidth}`}
+                          inert={actionBusy ? true : undefined}
                         >
                           <DocumentProperties
+                            onSaveReady={(flush) => {
+                              metadataFlush.current = flush;
+                            }}
                             concept={concept}
                             spaces={spaces}
                             canEdit={canEditDocument}
                             onConceptUpdate={(updated) => {
                               const next = updated as Concept;
+                              latestConcept.current = next;
                               setConcept(next);
                               setConcepts((current) =>
                                 current.map((item) =>
@@ -1932,6 +2365,7 @@ export default function App() {
                             user={user}
                             canEdit={canEditDocument}
                             onMarkdown={saveMarkdown}
+                            onSnapshotReady={handleDraftSnapshot}
                             onStatus={setStatus}
                             onCollaborators={setCollaborators}
                             onReferenceReady={handleReferenceReady}
@@ -1947,7 +2381,7 @@ export default function App() {
                           className={`canvas-container document-width-${documentWidth}`}
                         >
                           <DocumentProperties
-                            concept={concept}
+                            concept={displayedConcept!}
                             spaces={spaces}
                             canEdit={false}
                             onConceptUpdate={() => {}}
@@ -2021,8 +2455,29 @@ export default function App() {
                 conceptId: concept!.id,
                 state: bootstrap.canEdit ? view : "published",
               }}
-            documentTitle={(imported ?? concept)!.title}
+            documentTitle={(imported ?? displayedConcept)!.title}
             config={aiConfig}
+            documentHref={imported
+              ? routePath({
+                kind: "imported",
+                sourceId: imported.sourceId,
+                path: imported.path,
+              })
+              : routePath({ kind: "concept", id: concept!.id })}
+            documentVersion={imported
+              ? `Source revision ${imported.sourceRevision}`
+              : view === "published"
+              ? `Published revision ${concept!.publishedRevision}`
+              : saveState === "saved"
+              ? `Saved draft · ${
+                new Date(draftSavedAt || concept!.updatedAt)
+                  .toLocaleTimeString()
+              }`
+              : "Save your latest draft changes"}
+            sessions={askSessions.current}
+            documentReady={Boolean(
+              imported || view === "published" || saveState === "saved",
+            )}
             onOpenSettings={() => {
               setAskOpen(false);
               showCreate("ai");
@@ -2053,12 +2508,109 @@ export default function App() {
           templates={templates}
           initialSpaceId={newDocumentSpaceId}
           initialParentId={newDocumentParentId}
+          initialTemplateId={newDocumentTemplateId}
           busy={actionBusy}
           error={actionError}
           onOpenChange={setNewDocumentOpen}
           onCreate={createConcept}
         />
       )}
+      <Dialog
+        open={Boolean(templateSnapshot)}
+        onOpenChange={(open) => {
+          if (!open && !actionBusy) setTemplateSnapshot(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {templateSaved ? "Template saved" : "Save as template"}
+            </DialogTitle>
+            <DialogDescription>
+              {templateSaved
+                ? "Your reusable copy is ready in the template library."
+                : "Create a reusable copy of this document for workspace editors."}
+            </DialogDescription>
+          </DialogHeader>
+          {templateSaved
+            ? (
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setTemplateSnapshot(null)}
+                >
+                  Done
+                </Button>
+                <Button
+                  onClick={() => {
+                    setTemplateSnapshot(null);
+                    void showCreate("templates");
+                  }}
+                >
+                  Open template library
+                </Button>
+              </DialogFooter>
+            )
+            : (
+              <form
+                className="grid gap-4"
+                onSubmit={(event) =>
+                  void createTemplate(event).then((saved) => {
+                    if (saved) setTemplateSaved(true);
+                  })}
+              >
+                <input
+                  type="hidden"
+                  name="body"
+                  value={templateSnapshot?.body ?? ""}
+                />
+                <div className="grid gap-2">
+                  <Label htmlFor="document-template-name">Template name</Label>
+                  <Input
+                    id="document-template-name"
+                    name="name"
+                    defaultValue={(templateSnapshot?.title ?? "").slice(0, 80)}
+                    disabled={actionBusy}
+                    required
+                    maxLength={80}
+                    autoFocus
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="document-template-description">
+                    Description
+                  </Label>
+                  <Input
+                    id="document-template-description"
+                    name="description"
+                    disabled={actionBusy}
+                    maxLength={240}
+                    placeholder="When should someone use this template?"
+                  />
+                </div>
+                {actionError && (
+                  <p className="form-error" role="alert">{actionError}</p>
+                )}
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={actionBusy}
+                    onClick={() => setTemplateSnapshot(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={actionBusy || !templateSnapshot?.body.trim()}
+                  >
+                    {actionBusy ? "Saving…" : "Save template"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={spaceDialogOpen} onOpenChange={setSpaceDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
