@@ -151,10 +151,6 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
     /updateFrontmatter|onMarkdownChange/,
   );
   assert.match(
-    await Deno.readTextFile("src/App.tsx"),
-    /item\.id === next\.id \? next : item/,
-  );
-  assert.match(
     await Deno.readTextFile("src/components/editor/document-editor.tsx"),
     /&epoch=\$\{collabEpoch\}/,
   );

@@ -3,6 +3,7 @@ import { GitCompareArrows } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, conceptPath } from "../../lib/api.ts";
 import type { Revision } from "../../lib/models.ts";
+import type { KnowledgePerson } from "../../lib/governance.ts";
 import { Badge } from "../ui/badge.tsx";
 import { Button } from "../ui/button.tsx";
 import {
@@ -20,6 +21,10 @@ type RevisionBodies = Record<number, string>;
 export function RevisionHistory({
   conceptId,
   revisions,
+  publishedRevision,
+  reviewedRevision,
+  reviewedAt,
+  reviewer,
   open,
   canRestore,
   busy,
@@ -28,6 +33,10 @@ export function RevisionHistory({
 }: {
   conceptId: string;
   revisions: Revision[];
+  publishedRevision: number | null;
+  reviewedRevision: number | null;
+  reviewedAt: string | null;
+  reviewer: KnowledgePerson | null;
   open: boolean;
   canRestore: boolean;
   busy: boolean;
@@ -40,6 +49,8 @@ export function RevisionHistory({
   const revisionKey = revisions.map((revision) => revision.number).join(",");
   const visibleRevisions = bodies
     ? revisions.filter((revision, index) =>
+      revision.number === publishedRevision ||
+      revision.number === reviewedRevision ||
       index === revisions.length - 1 ||
       bodies[revision.number] !== bodies[revisions[index + 1].number]
     )
@@ -116,7 +127,7 @@ export function RevisionHistory({
                 className="flex gap-1 overflow-x-auto border-b p-3 sm:flex-col sm:overflow-y-auto sm:border-r sm:border-b-0"
                 aria-label="Published revisions"
               >
-                {visibleRevisions.map((revision, index) => (
+                {visibleRevisions.map((revision) => (
                   <Button
                     key={revision.number}
                     type="button"
@@ -127,10 +138,13 @@ export function RevisionHistory({
                     onClick={() => setSelectedNumber(revision.number)}
                   >
                     <span className="grid gap-0.5">
-                      <span className="flex items-center gap-2 font-medium">
+                      <span className="flex flex-wrap items-center gap-2 font-medium">
                         Revision {revision.number}
-                        {index === 0 && (
-                          <Badge variant="secondary">Current content</Badge>
+                        {revision.number === publishedRevision && (
+                          <Badge variant="secondary">Current publication</Badge>
+                        )}
+                        {revision.number === reviewedRevision && reviewedAt && (
+                          <Badge variant="outline">Reviewed</Badge>
                         )}
                       </span>
                       <span className="text-xs font-normal text-muted-foreground">
@@ -171,6 +185,20 @@ export function RevisionHistory({
                     </span>
                   </div>
                 </div>
+                {selected?.number === reviewedRevision && reviewedAt && (
+                  <p className="mb-4 text-xs text-muted-foreground">
+                    Reviewed by {reviewer?.name ?? "Former workspace member"} on
+                    {" "}
+                    <time
+                      dateTime={reviewedAt}
+                      title={new Date(reviewedAt).toLocaleString()}
+                    >
+                      {new Date(reviewedAt).toLocaleDateString(undefined, {
+                        dateStyle: "medium",
+                      })}
+                    </time>.
+                  </p>
+                )}
                 {error
                   ? <p className="text-sm text-destructive">{error}</p>
                   : !comparison

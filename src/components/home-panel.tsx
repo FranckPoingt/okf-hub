@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ArrowRight,
   Database,
@@ -6,6 +7,7 @@ import {
   Plus,
   Search,
 } from "lucide-react";
+import { formatReviewDate, FreshnessBadge } from "./knowledge-freshness.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
@@ -57,6 +59,7 @@ export function HomePanel(
     onSources: () => void;
   },
 ) {
+  const [tab, setTab] = useState("recent");
   const sourceLabels = new Map(
     repositories.map((source) => [
       source.id,
@@ -75,6 +78,8 @@ export function HomePanel(
       location: item.space,
       updatedAt: item.updatedAt,
       imported: false as const,
+      freshness: item.freshness,
+      reviewDueDate: item.reviewDueDate,
       open: () => onOpenConcept(item.id),
     })),
     ...imports.map((item) => ({
@@ -84,6 +89,8 @@ export function HomePanel(
       location: sourceLabels.get(item.sourceId) ?? "Connected source",
       updatedAt: item.importedAt,
       imported: true as const,
+      freshness: undefined,
+      reviewDueDate: undefined,
       open: () => void onOpenImported(item.sourceId, item.path),
     })),
   ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(
@@ -94,6 +101,25 @@ export function HomePanel(
     item.status === "active" &&
     (item.hasUnpublishedChanges ?? !item.publishedRevision)
   ).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const attention = concepts.filter((item) =>
+    item.status === "active" && item.publishedRevision &&
+    (item.publishedMetadata?.intent ?? item.intent) === "canonical" &&
+    (!item.owner ||
+      ["unreviewed", "due", "overdue"].includes(item.freshness.status))
+  ).sort((left, right) => {
+    const priority = {
+      overdue: 0,
+      due: 1,
+      unreviewed: 2,
+      current: 3,
+      unpublished: 4,
+    };
+    return priority[left.freshness.status] - priority[right.freshness.status] ||
+      (left.reviewDueDate ?? "9999").localeCompare(
+        right.reviewDueDate ?? "9999",
+      ) ||
+      left.title.localeCompare(right.title);
+  });
   const sources = [
     ...repositories,
     ...(shared ? [shared] : []),
@@ -166,7 +192,22 @@ export function HomePanel(
                 type="button"
                 onClick={onSources}
               >
-                {sourceAttention} need attention
+                {sourceAttention}{" "}
+                {sourceAttention === 1 ? "source needs" : "sources need"}{" "}
+                attention
+              </button>
+            </>
+          )}
+          {canEdit && attention.length > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <button
+                className="font-medium text-foreground hover:underline"
+                type="button"
+                onClick={() => setTab("attention")}
+              >
+                {attention.length}{" "}
+                {attention.length === 1 ? "page needs" : "pages need"} attention
               </button>
             </>
           )}
@@ -208,8 +249,15 @@ export function HomePanel(
           </div>
         )}
 
-        <Tabs className="mt-7" defaultValue="recent">
-          <TabsList variant="line" className="w-full justify-start border-b">
+        <Tabs
+          className="mt-7"
+          value={tab}
+          onValueChange={(value) => setTab(String(value))}
+        >
+          <TabsList
+            variant="line"
+            className="h-auto! min-h-8 w-full flex-wrap justify-start border-b"
+          >
             <TabsTrigger value="recent" className="flex-none px-3">
               Recent
             </TabsTrigger>
@@ -219,6 +267,16 @@ export function HomePanel(
                 {drafts.length > 0 && (
                   <Badge variant="secondary" className="h-5 min-w-5 px-1.5">
                     {drafts.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            )}
+            {canEdit && (
+              <TabsTrigger value="attention" className="flex-none px-3">
+                Needs attention
+                {attention.length > 0 && (
+                  <Badge variant="secondary" className="h-5 min-w-5 px-1.5">
+                    {attention.length}
                   </Badge>
                 )}
               </TabsTrigger>
@@ -249,9 +307,23 @@ export function HomePanel(
                       {item.type} · {item.location}
                     </small>
                   </span>
-                  <time className="font-normal text-muted-foreground">
-                    {dateFormatter.format(new Date(item.updatedAt))}
-                  </time>
+                  <span className="flex flex-col items-end gap-1.5">
+                    {item.freshness && (
+                      <FreshnessBadge
+                        freshness={item.freshness}
+                        reviewDueDate={item.reviewDueDate}
+                      />
+                    )}
+                    <time
+                      dateTime={item.updatedAt}
+                      title={`${
+                        item.imported ? "Snapshot updated" : "Document updated"
+                      } ${new Date(item.updatedAt).toLocaleString()}`}
+                      className="font-normal text-muted-foreground"
+                    >
+                      {dateFormatter.format(new Date(item.updatedAt))}
+                    </time>
+                  </span>
                 </Button>
               ))}
               {!recent.length && (
@@ -306,6 +378,69 @@ export function HomePanel(
             </TabsContent>
           )}
 
+          {canEdit && (
+            <TabsContent value="attention" className="pt-3">
+              <p className="mb-3 text-xs text-muted-foreground">
+                Published lasting knowledge that needs an owner or a review.
+                Unpublished work stays in Drafts.
+              </p>
+              <div className="overflow-hidden rounded-lg border bg-card">
+                {attention.map((item) => (
+                  <Button
+                    variant="ghost"
+                    className="flex h-auto w-full flex-wrap items-center justify-start gap-3 rounded-none border-b px-4 py-3 text-left whitespace-normal last:border-b-0 hover:bg-muted/60"
+                    type="button"
+                    key={item.id}
+                    onClick={() => onOpenConcept(item.id)}
+                  >
+                    <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      <FileText />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-sm font-medium text-foreground">
+                        {item.publishedMetadata?.title ?? item.title}
+                      </strong>
+                      <small className="mt-0.5 block font-normal text-muted-foreground">
+                        {item.space} · {item.owner?.name ?? "Unassigned"}
+                        {item.reviewDueDate &&
+                          ` · Review due ${
+                            formatReviewDate(item.reviewDueDate)
+                          }`}
+                      </small>
+                    </span>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {!item.owner && (
+                        <Badge
+                          variant="secondary"
+                          title="Assign an owner to keep this published knowledge accountable."
+                        >
+                          Unassigned owner
+                        </Badge>
+                      )}
+                      {item.freshness.status !== "current" && (
+                        <FreshnessBadge
+                          freshness={item.freshness}
+                          reviewDueDate={item.reviewDueDate}
+                        />
+                      )}
+                    </span>
+                  </Button>
+                ))}
+                {!attention.length && (
+                  <div className="px-4 py-12 text-center">
+                    <p className="text-sm font-medium">
+                      No knowledge needs attention
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Published lasting knowledge has an owner and no pending
+                      reviews.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          )}
+
           <TabsContent value="sources" className="pt-3">
             <div className="overflow-hidden rounded-lg border bg-card">
               {sources.map((source) => (
@@ -331,6 +466,10 @@ export function HomePanel(
                     </strong>
                     <small className="mt-0.5 block truncate font-normal text-muted-foreground">
                       {source.conceptCount} imported documents
+                      {source.lastSyncedAt &&
+                        ` · Last successful check ${
+                          dateFormatter.format(new Date(source.lastSyncedAt))
+                        }`}
                     </small>
                   </span>
                   <Badge
@@ -339,10 +478,10 @@ export function HomePanel(
                       : "outline"}
                   >
                     {source.status === "current"
-                      ? "Current"
+                      ? "Sync current"
                       : source.status === "syncing"
                       ? "Syncing"
-                      : "Needs attention"}
+                      : "Source check failed"}
                   </Badge>
                 </Button>
               ))}

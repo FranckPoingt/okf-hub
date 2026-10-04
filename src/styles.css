@@ -2944,6 +2944,10 @@ label {
   padding: 56px 64px 12px;
 }
 
+.document-governance {
+  margin-inline: 64px;
+}
+
 .canvas-title-input {
   width: 100%;
   border: none !important;
@@ -3161,6 +3165,9 @@ label {
   }
   .canvas-header {
     padding: 36px 22px 8px;
+  }
+  .document-governance {
+    margin-inline: 22px;
   }
   .editor-frame {
     padding-inline: 0;
