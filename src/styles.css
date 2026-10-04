@@ -3628,6 +3628,9 @@ label {
 .template-editor-surface .ProseMirror {
   min-height: 570px;
 }
+.template-editor-surface .milkdown .editor {
+  padding: 48px clamp(20px, 4vw, 64px) 80px;
+}
 .template-variable-guide {
   padding: 18px;
   border-left: 1px solid var(--border);
@@ -4035,9 +4038,8 @@ label {
   }
   .settings-nav {
     position: static;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(max-content, 1fr));
-    overflow-x: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
   }
   .settings-nav [data-slot="button"] {
     justify-content: center;
@@ -4072,6 +4074,12 @@ label {
   }
   .template-workbench {
     grid-template-columns: 1fr;
+  }
+  .template-editor-surface {
+    padding: 12px;
+  }
+  .template-editor-surface .milkdown .editor {
+    padding: 28px 20px 56px;
   }
   .template-variable-guide {
     border-top: 1px solid var(--border);

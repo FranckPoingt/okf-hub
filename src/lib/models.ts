@@ -77,6 +77,8 @@ export type Concept = {
   intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
+  hasUnpublishedChanges: boolean;
+  publishedMetadata?: { title: string; type: string } | null;
   lockedAt: string | null;
   lockedBy: string | null;
   updatedAt: string;

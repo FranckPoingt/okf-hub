@@ -32,6 +32,7 @@ export function HomePanel(
     shared,
     notion,
     canEdit,
+    canConnectSources = false,
     onOpenConcept,
     onOpenImported,
     onCreate,
@@ -45,6 +46,7 @@ export function HomePanel(
     shared: SharedSource | null;
     notion: NotionSource | null;
     canEdit: boolean;
+    canConnectSources?: boolean;
     onOpenConcept: (id: string) => void;
     onOpenImported: (
       sourceId: string,
@@ -89,20 +91,26 @@ export function HomePanel(
     8,
   );
   const drafts = concepts.filter((item) =>
-    item.status === "active" && !item.publishedRevision
+    item.status === "active" &&
+    (item.hasUnpublishedChanges ?? !item.publishedRevision)
   ).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const sources = [
     ...repositories,
     ...(shared ? [shared] : []),
     ...(notion ? [notion] : []),
   ];
-  const sourceAttention = sources.filter((item) => item.status !== "current")
-    .length;
+  const sourceAttention =
+    sources.filter((item) => item.status === "sync_failed")
+      .length;
+  const firstKnowledge = !imports.length &&
+    !concepts.some((item) =>
+      item.status === "active" && item.publishedRevision
+    );
 
   return (
     <section className="home-panel">
       <div className="mx-auto w-full max-w-4xl">
-        <header className="flex items-start justify-between gap-6">
+        <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="eyebrow">Company knowledge</p>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">Home</h1>
@@ -110,12 +118,20 @@ export function HomePanel(
               Pick up where you left off or find trusted knowledge.
             </p>
           </div>
-          {canEdit && (
-            <Button type="button" onClick={onCreate}>
-              <Plus data-icon="inline-start" />
-              New document
-            </Button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {canEdit && (
+              <Button type="button" onClick={onCreate}>
+                <Plus data-icon="inline-start" />
+                New document
+              </Button>
+            )}
+            {canConnectSources && (
+              <Button type="button" variant="outline" onClick={onSources}>
+                <Database data-icon="inline-start" />
+                {sources.length ? "Manage sources" : "Connect a source"}
+              </Button>
+            )}
+          </div>
         </header>
 
         <Button
@@ -155,6 +171,42 @@ export function HomePanel(
             </>
           )}
         </div>
+
+        {firstKnowledge && (
+          <div className="mt-6 rounded-lg border bg-card p-5">
+            <h2 className="text-base font-semibold">
+              {canEdit
+                ? "Start your team's knowledge hub"
+                : "Your team's knowledge starts here"}
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              {canEdit
+                ? "Start with a document, use a template, and publish when it is ready for teammates to read. Connected sources bring existing knowledge into the same search."
+                : "Published pages and connected-source documents appear here when your team shares them with you. Ask a workspace owner if you need access to existing knowledge."}
+            </p>
+            {canEdit && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button type="button" onClick={onCreate}>
+                  <Plus /> Create a document
+                </Button>
+                {drafts[0] && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onOpenConcept(drafts[0].id)}
+                  >
+                    Continue {drafts[0].title}
+                  </Button>
+                )}
+                {canConnectSources && !sources.length && (
+                  <Button type="button" variant="outline" onClick={onSources}>
+                    <Database /> Connect existing knowledge
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <Tabs className="mt-7" defaultValue="recent">
           <TabsList variant="line" className="w-full justify-start border-b">
@@ -204,7 +256,9 @@ export function HomePanel(
               ))}
               {!recent.length && (
                 <p className="px-4 py-12 text-center text-sm text-muted-foreground">
-                  No documents are visible yet.
+                  {canEdit
+                    ? "Create a document or connect a source to add knowledge here."
+                    : "No documents have been shared with you yet."}
                 </p>
               )}
             </div>
@@ -229,7 +283,9 @@ export function HomePanel(
                         {item.title}
                       </strong>
                       <small className="mt-0.5 block truncate font-normal text-muted-foreground">
-                        {item.type} · {item.space}
+                        {item.publishedRevision
+                          ? `Changes to revision ${item.publishedRevision}`
+                          : "Never published"} · {item.space}
                       </small>
                     </span>
                     <time className="font-normal text-muted-foreground">
@@ -241,7 +297,8 @@ export function HomePanel(
                   <div className="px-4 py-12 text-center">
                     <p className="text-sm font-medium">No unpublished drafts</p>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      New drafts will appear here until they are published.
+                      New documents and changes to published pages appear here
+                      until you publish them.
                     </p>
                   </div>
                 )}
@@ -277,12 +334,14 @@ export function HomePanel(
                     </small>
                   </span>
                   <Badge
-                    variant={source.status === "current"
-                      ? "outline"
-                      : "destructive"}
+                    variant={source.status === "sync_failed"
+                      ? "destructive"
+                      : "outline"}
                   >
                     {source.status === "current"
                       ? "Current"
+                      : source.status === "syncing"
+                      ? "Syncing"
                       : "Needs attention"}
                   </Badge>
                 </Button>
@@ -291,9 +350,15 @@ export function HomePanel(
                 <div className="px-4 py-12 text-center">
                   <p className="text-sm font-medium">No sources connected</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Connect GitHub, object storage, or Notion to bring in
-                    trusted knowledge.
+                    {canConnectSources
+                      ? "Connect GitHub, object storage, or Notion to bring in trusted knowledge."
+                      : "A workspace owner can connect repositories, object storage, or Notion."}
                   </p>
+                  {canConnectSources && (
+                    <Button type="button" className="mt-4" onClick={onSources}>
+                      <Database /> Connect a source
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -303,7 +368,7 @@ export function HomePanel(
               type="button"
               onClick={onSources}
             >
-              Manage sources
+              {canConnectSources ? "Manage sources" : "View sources"}
               <ArrowRight data-icon="inline-end" />
             </Button>
           </TabsContent>

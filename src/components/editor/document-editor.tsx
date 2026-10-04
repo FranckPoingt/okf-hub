@@ -4,6 +4,7 @@ import {
   editorViewCtx,
   editorViewOptionsCtx,
   prosePluginsCtx,
+  serializerCtx,
 } from "@milkdown/kit/core";
 import { diffComponent } from "@milkdown/kit/component/diff";
 import { diff, startDiffReviewCmd } from "@milkdown/kit/plugin/diff";
@@ -16,7 +17,7 @@ import {
   type EditorView,
 } from "@milkdown/kit/prose/view";
 import { Milkdown, useEditor } from "@milkdown/react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import * as Y from "yjs";
 import {
   type Collaborator,
@@ -27,6 +28,7 @@ import { api, conceptPath, SERVICE } from "../../lib/api.ts";
 import { embedPreview } from "../../lib/embeds.ts";
 import type { CommentThread } from "../../lib/models.ts";
 import type { CommentSelection } from "./document-comments.tsx";
+import { MarkdownWritingHelp } from "./markdown-writing-help.tsx";
 
 const withoutPageTitle = (markdown: string) =>
   markdown.replace(/^#\s+[^\n]*(?:\n|$)/, "");
@@ -412,11 +414,18 @@ export function RevisionDiff({
 export function LocalMarkdownEditor({
   value,
   onChange,
+  onSnapshotReady,
 }: {
   value: string;
   onChange: (markdown: string) => void;
+  onSnapshotReady?: (read: (() => string | null) | null) => void;
 }) {
+  const markdownChange = useRef(onChange);
+  markdownChange.current = onChange;
+  const snapshotReady = useRef(onSnapshotReady);
+  snapshotReady.current = onSnapshotReady;
   useEditor((root) => {
+    let editorMounted = false;
     const crepe = new Crepe({
       root,
       defaultValue: value,
@@ -432,11 +441,33 @@ export function LocalMarkdownEditor({
         },
       },
     });
+    crepe.editor.config((ctx) => {
+      ctx.update(prosePluginsCtx, (plugins) => [
+        ...plugins,
+        new Plugin({
+          view: () => ({
+            update: (view, previous) => {
+              if (!editorMounted || previous.doc.eq(view.state.doc)) return;
+              markdownChange.current(ctx.get(serializerCtx)(view.state.doc));
+            },
+          }),
+        }),
+      ]);
+    });
     crepe.on((listener) => {
-      listener.markdownUpdated((_ctx, markdown, previous) => {
-        if (markdown !== previous) onChange(markdown);
+      listener.mounted(() => {
+        editorMounted = true;
+        snapshotReady.current?.(() =>
+          editorMounted ? crepe.getMarkdown() : null
+        );
       });
     });
+    const destroy = crepe.destroy;
+    crepe.destroy = async () => {
+      editorMounted = false;
+      snapshotReady.current?.(null);
+      return await destroy();
+    };
     return crepe;
   }, []);
   return <Milkdown />;
@@ -449,6 +480,7 @@ export function DocumentEditor({
   user,
   canEdit,
   onMarkdown,
+  onSnapshotReady,
   onStatus,
   onCollaborators,
   onReferenceReady,
@@ -462,6 +494,7 @@ export function DocumentEditor({
   user: Collaborator;
   canEdit: boolean;
   onMarkdown: (markdown: string) => void;
+  onSnapshotReady?: (read: (() => string | null) | null) => void;
   onStatus: (status: ConnectionStatus) => void;
   onCollaborators: (users: Collaborator[]) => void;
   onReferenceReady?: (
@@ -473,7 +506,13 @@ export function DocumentEditor({
   onCommentSelection?: (selection: CommentSelection) => void;
   onCommentOpen?: (threadId: string) => void;
 }) {
+  const markdownChange = useRef(onMarkdown);
+  markdownChange.current = onMarkdown;
+  const snapshotReady = useRef(onSnapshotReady);
+  snapshotReady.current = onSnapshotReady;
+  const [ready, setReady] = useState(false);
   useEditor((root) => {
+    setReady(false);
     const doc = new Y.Doc();
     const provider = new DenoCollabProvider(
       `${SERVICE.replace("http", "ws")}/collab?conceptId=${
@@ -503,7 +542,10 @@ export function DocumentEditor({
     crepe.editor.use(collab).config((ctx) => {
       ctx.update(
         editorViewOptionsCtx,
-        (options) => ({ ...options, editable: () => canEdit }),
+        (options) => ({
+          ...options,
+          editable: () => canEdit && editorConnected,
+        }),
       );
       ctx.update(prosePluginsCtx, (plugins) => [
         ...plugins,
@@ -514,23 +556,9 @@ export function DocumentEditor({
     crepe.on((listener) => {
       listener.mounted((ctx) => {
         const view = ctx.get(editorViewCtx);
-        onCommentReady?.(() => {
-          const { from, to, empty } = view.state.selection;
-          if (empty) return null;
-          return {
-            text: view.state.doc.textBetween(from, to, " ").trim(),
-            from,
-            to,
-          };
-        });
-        onReferenceReady?.((title, href) => {
-          const link = view.state.schema.marks.link?.create({ href });
-          const text = view.state.schema.text(title, link ? [link] : []);
-          view.dispatch(
-            view.state.tr.replaceSelectionWith(text).scrollIntoView(),
-          );
-          view.focus();
-        });
+        snapshotReady.current?.(() =>
+          editorConnected ? crepe.getMarkdown() : null
+        );
         stopCommentHighlights = attachCommentHighlights(view, conceptId);
         const service = ctx.get(collabServiceCtx).bindDoc(doc).setAwareness(
           provider.awareness,
@@ -553,15 +581,38 @@ export function DocumentEditor({
             view.dispatch(transaction);
           }
           editorConnected = true;
+          view.setProps({ editable: () => canEdit && editorConnected });
+          onCommentReady?.(() => {
+            const { from, to, empty } = view.state.selection;
+            if (empty) return null;
+            return {
+              text: view.state.doc.textBetween(from, to, " ").trim(),
+              from,
+              to,
+            };
+          });
+          onReferenceReady?.((title, href) => {
+            const link = view.state.schema.marks.link?.create({ href });
+            const text = view.state.schema.text(title, link ? [link] : []);
+            view.dispatch(
+              view.state.tr.replaceSelectionWith(text).scrollIntoView(),
+            );
+            view.focus();
+          });
+          setReady(true);
         });
         provider.connect();
       });
       listener.markdownUpdated((_ctx, markdown, previous) => {
-        if (canEdit && markdown !== previous) onMarkdown(markdown);
+        if (editorConnected && canEdit && markdown !== previous) {
+          markdownChange.current(markdown);
+        }
       });
     });
     const destroy = crepe.destroy;
     crepe.destroy = async () => {
+      editorConnected = false;
+      snapshotReady.current?.(null);
       stopCommentHighlights();
       onCommentSelection?.(null);
       onReferenceReady?.(null);
@@ -585,5 +636,18 @@ export function DocumentEditor({
     onCommentSelection,
     onCommentOpen,
   ]);
-  return <Milkdown />;
+  return (
+    <div className="document-writing-surface" aria-busy={!ready}>
+      {ready
+        ? <MarkdownWritingHelp />
+        : (
+          <p className="px-1 py-2 text-sm text-muted-foreground" role="status">
+            Connecting to document…
+          </p>
+        )}
+      <div inert={!ready}>
+        <Milkdown />
+      </div>
+    </div>
+  );
 }
