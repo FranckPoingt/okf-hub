@@ -3173,8 +3173,8 @@ export async function createCollabApp({
       return {
         ...visible,
         score,
-        canCompareDefinitions: Boolean(respondWithAI) &&
-          item.canReviewConflicts,
+        canCompareDefinitions: item.canReviewConflicts,
+        aiEnabled: Boolean(respondWithAI),
         snippet: searchSnippet(searchText, query, item.title, [
           item.type,
           item.owner,

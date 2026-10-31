@@ -4034,6 +4034,9 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
       item.id === "active-customer"
     );
     assert.equal(editorHub.canReviewConflicts, true);
+    // Without a provider the editor still sees Compare, disabled.
+    assert.equal(editorHub.canCompareDefinitions, true);
+    assert.equal(editorHub.aiEnabled, false);
     assert.ok(
       editorHub.backlinks.some((item: { id: string }) =>
         item.id === "repository/secret"

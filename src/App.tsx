@@ -1937,6 +1937,12 @@ export default function App() {
       title: displayedConcept!.title,
     }
     : null;
+  const openAISettings = bootstrap.canEdit
+    ? () => {
+      setReferencesOpen(false);
+      showCreate("ai");
+    }
+    : undefined;
   const canEditDocument = Boolean(
     bootstrap.canEdit && concept?.lockedAt === null,
   );
@@ -2441,6 +2447,7 @@ export default function App() {
                     imported
                     onOpenHub={showHubConcept}
                     onOpenImported={openImported}
+                    onOpenSettings={openAISettings}
                   />
                 </div>
               </MilkdownProvider>
@@ -2590,6 +2597,7 @@ export default function App() {
                   onOpenChange={setReferencesOpen}
                   onOpenConcept={showHubConcept}
                   onOpenImported={openImported}
+                  onOpenSettings={openAISettings}
                 />
 
                 <DraftReview
@@ -2628,6 +2636,7 @@ export default function App() {
                     documentId={concept.id}
                     onOpenHub={showHubConcept}
                     onOpenImported={openImported}
+                    onOpenSettings={openAISettings}
                   />
                 )}
                 {actionError && (
@@ -2762,6 +2771,7 @@ export default function App() {
                             documentId={concept.id}
                             onOpenHub={showHubConcept}
                             onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
                             key={`${concept.publishedRevision}-${view}`}
                             conceptId={concept.id}
                             markdown={view === "draft"

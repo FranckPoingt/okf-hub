@@ -18,6 +18,7 @@ export function KnowledgeDocument({
   onCommentOpen,
   onOpenHub,
   onOpenImported,
+  onOpenSettings,
 }: {
   documentId: string;
   markdown?: string;
@@ -26,6 +27,7 @@ export function KnowledgeDocument({
   onCommentOpen?: (threadId: string) => void;
   onOpenHub: (id: string) => void;
   onOpenImported: (sourceId: string, path: string) => Promise<unknown>;
+  onOpenSettings?: () => void;
 }) {
   const [state, setState] = useState<
     { documentId: string; result?: SearchResult; error?: string } | null
@@ -94,7 +96,10 @@ export function KnowledgeDocument({
               deciding which applies.
             </p>
             {relationships("Compare with", current?.result?.conflicts)}
-            <CompareDefinitions current={current?.result} />
+            <CompareDefinitions
+              current={current?.result}
+              onOpenSettings={onOpenSettings}
+            />
           </div>
         )}
         {relationships("Also defined in", current?.result?.alsoDefinedIn)}
