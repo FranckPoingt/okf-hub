@@ -23,7 +23,12 @@ import {
   prepareArtifactUpload,
   readArtifactUpload,
 } from "./artifact-upload.ts";
-import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
+import { APP_FILES_ROUTE, createAppCapabilities } from "./app-capabilities.ts";
+import {
+  ArtifactInputError,
+  BUNDLE_CSP,
+  createArtifactStore,
+} from "./artifact-store.ts";
 import { createArtifactUsage } from "./artifact-usage.ts";
 import { createConnectorRegistry } from "./connector-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
@@ -1055,6 +1060,7 @@ export async function createCollabApp({
   `);
   const artifactStore = createArtifactStore(db, allowedArtifactHosts);
   const artifactUsage = createArtifactUsage(db);
+  const appCapabilities = createAppCapabilities();
   const freshness = createFreshnessStore(db);
   const frontmatter = createFrontmatterStore(db);
   const connectors = createConnectorRegistry({
@@ -2646,6 +2652,20 @@ export async function createCollabApp({
     return { conceptId, state };
   }
 
+  function recordAppOpen(
+    { conceptId, state }: Awaited<ReturnType<typeof visibleApp>>,
+    appId: string,
+    path: string,
+    userId: string,
+  ) {
+    const opened = state.apps.find((app) => app?.id === appId);
+    if (
+      (!path || path === opened?.bundle?.entry) &&
+      opened?.version === opened?.liveVersion &&
+      concept(conceptId)?.type === "Artifact"
+    ) artifactUsage.record(conceptId, userId);
+  }
+
   const actionCatalog = createActionCatalog([
     artifactSaveAction(() => actionCatalog),
     {
@@ -3109,6 +3129,27 @@ export async function createCollabApp({
   const mcp = createMcpHandler(actionCatalog, security.authenticate);
 
   const fetch = async (request: Request): Promise<Response> => {
+    // Cookie-free capability route for opaque-origin App sandboxes; see docs/extensibility.md.
+    const appFiles = new URL(request.url).pathname.match(APP_FILES_ROUTE);
+    if (appFiles) {
+      return await appCapabilities.serve(
+        request,
+        appFiles[1],
+        appFiles[2] ?? "",
+        async ({ appId, version, userId }, path) => {
+          const visible = await visibleApp(userId, appId);
+          const file = artifactStore.file(
+            appId,
+            path,
+            visible.state.canEdit,
+            version,
+          );
+          if (file) recordAppOpen(visible, appId, path, userId);
+          return file;
+        },
+        BUNDLE_CSP,
+      );
+    }
     if (!allowedOrigin(request)) {
       return new Response("Origin not allowed", { status: 403 });
     }
@@ -4424,12 +4465,12 @@ export async function createCollabApp({
       }
       try {
         const appId = decodeURIComponent(appFileRoute[1]);
-        const { conceptId, state } = await visibleApp(current.user.id, appId);
+        const visible = await visibleApp(current.user.id, appId);
         const path = decodeURIComponent(appFileRoute[2] ?? "");
         const file = artifactStore.file(
           appId,
           path,
-          state.canEdit,
+          visible.state.canEdit,
         );
         if (!file) {
           return new Response("App file not found", {
@@ -4437,12 +4478,7 @@ export async function createCollabApp({
             headers: cors(request),
           });
         }
-        const opened = state.apps.find((app) => app?.id === appId);
-        if (
-          (!path || path === opened?.bundle?.entry) &&
-          opened?.version === opened?.liveVersion &&
-          concept(conceptId)?.type === "Artifact"
-        ) artifactUsage.record(conceptId, current.user.id);
+        recordAppOpen(visible, appId, path, current.user.id);
         const headers = new Headers(cors(request));
         headers.set("content-type", file.type);
         headers.set("cache-control", "no-store");
@@ -4456,6 +4492,41 @@ export async function createCollabApp({
             headers: cors(request),
           },
         );
+      }
+    }
+    const appCapabilityRoute = url.pathname.match(
+      /^\/api\/apps\/([^/]+)\/capability$/,
+    );
+    if (appCapabilityRoute && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      try {
+        const appId = decodeURIComponent(appCapabilityRoute[1]);
+        const { state } = await visibleApp(current.user.id, appId);
+        const opened = state.apps.find((app) => app?.id === appId);
+        if (!opened?.bundle) throw new ActionError("App not found", 404);
+        const token = await appCapabilities.mint({
+          appId,
+          version: opened.version,
+          userId: current.user.id,
+        });
+        return Response.json({
+          url: `/app-files/${token}/${
+            opened.bundle.entry.split("/").map(encodeURIComponent).join("/")
+          }`,
+        }, { headers: cors(request) });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "App unavailable",
+        }, {
+          status: error instanceof ActionError ? error.status : 400,
+          headers: cors(request),
+        });
       }
     }
     if (

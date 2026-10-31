@@ -26,11 +26,12 @@ intend to share, with:
 
 Use ordinary browser JavaScript and local assets. The Hub sandbox blocks network
 calls, external scripts, nested frames, and form submission. Bundle dependencies
-locally as classic scripts; ES module scripts and `import` statements cannot
-load in the sandbox yet. Avoid browser storage that relies on a normal page
-origin. Both the server and saver reject common unsupported dependencies, but
-code still needs review and a browser check. The `context.md` heading supplies
-the title unless you pass `--title`.
+locally, as classic scripts or ES modules. Module `import` specifiers must be
+relative (`./app.js`), not bare (`react`) or root paths (`/app.js`). Avoid
+browser storage that relies on a normal page origin. Both the server and saver
+reject common unsupported dependencies, but code still needs review and a
+browser check. The `context.md` heading supplies the title unless you pass
+`--title`.
 
 Dotfiles, `node_modules`, credential files such as `credentials.json`,
 `secret.json`, `auth.json`, and `api-key.json`, and key files are excluded.
@@ -73,16 +74,40 @@ records. SHA-256 covers the final stored bytes, including rewritten CSS. The
 work trace identifies the manifest and includes it in the bundle hash. The
 source folder stays unchanged.
 
-Reference classic UMD or IIFE builds, for example a library's `*.umd.js` file on
-jsdelivr or unpkg. Vendoring rewrites ESM imports, but the saver then rejects
-them: the sandbox has an opaque origin, and the Hub refuses its cross-origin
-module requests. React 19 ships no UMD build, so use React 18 UMD or compile the
-artifact into a single classic script first. CSS font URLs and stylesheet
-imports are vendored recursively. Network APIs, dynamic imports, and runtime
-downloads remain unsupported. A runtime Tailwind loader may need replacing with
-precompiled CSS. Vendoring does not compile JSX, install npm packages, or
-guarantee an artifact runs correctly; review dependency licenses and test the
-saved App. The sandbox and CSP are unchanged.
+ES modules and classic UMD or IIFE builds both work. Vendoring rewrites ESM
+imports and follows the static imports of downloaded modules recursively, with
+each URL downloaded once. That matters for esm.sh, which answers with a small
+stub that re-exports the real file. Vendored modules may not use bare
+specifiers. The saver adds `target=es2022` to esm.sh URLs without a `target`, so
+the Deno CLI receives a browser build rather than one importing `node:` modules.
+React 19 ships no UMD build; use it through esm.sh, pinning one version:
+
+```html
+<div id="root"></div>
+<script type="module">
+import { createElement as h, useState } from "https://esm.sh/react@19.2.0";
+import { createRoot } from "https://esm.sh/react-dom@19.2.0/client?bundle";
+function App() {
+  const [count, setCount] = useState(0);
+  return h(
+    "button",
+    { onClick: () => setCount(count + 1) },
+    `Clicked ${count}`,
+  );
+}
+createRoot(document.getElementById("root")).render(h(App));
+</script>
+```
+
+Import `react` without `?bundle`: `react-dom/client?bundle` inlines everything
+except React itself, and imports the same `react` file, so the App gets a single
+React instance. Two copies of React break hooks. JSX still needs compiling
+before saving. CSS font URLs and stylesheet imports are vendored recursively.
+Network APIs, dynamic imports, and runtime downloads remain unsupported. A
+runtime Tailwind loader may need replacing with precompiled CSS. Vendoring does
+not compile JSX, install npm packages, or guarantee an artifact runs correctly;
+review dependency licenses and test the saved App. The sandbox and CSP are
+unchanged.
 
 The 200-file and 8 MiB encoded bundle limits include downloaded dependencies and
 `vendor.json`. Without `--vendor`, remote dependencies are rejected with a hint

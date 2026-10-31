@@ -405,9 +405,9 @@ Deno.test("packing enforces self-contained dependencies and Hub resource limits"
     await assert.rejects(() => packArtifact(folder), /srcset/);
     await Deno.writeTextFile(
       join(folder, "index.html"),
-      '<script type=module>import x from "./app.js"</script>',
+      '<script type=module>import x from "https://esm.sh/x"</script>',
     );
-    await assert.rejects(() => packArtifact(folder), /module/i);
+    await assert.rejects(() => packArtifact(folder), /--vendor/);
     await Deno.writeTextFile(
       join(folder, "index.html"),
       '<script src="app.js"></script>',
@@ -416,7 +416,15 @@ Deno.test("packing enforces self-contained dependencies and Hub resource limits"
       join(folder, "app.js"),
       'import x from "./external.js";',
     );
-    await assert.rejects(() => packArtifact(folder), /module/i);
+    await assert.rejects(() => packArtifact(folder), /included locally/);
+    await Deno.writeTextFile(
+      join(folder, "index.html"),
+      '<script type="module" src="app.js"></script>',
+    );
+    await Deno.writeTextFile(join(folder, "app.js"), 'import "./lib.mjs";');
+    await Deno.writeTextFile(join(folder, "lib.mjs"), "export const ok = 1;");
+    assert.ok((await packArtifact(folder)).content);
+    await Deno.remove(join(folder, "lib.mjs"));
     await Deno.remove(join(folder, "app.js"));
     await Deno.writeTextFile(
       join(folder, "index.html"),

@@ -1711,11 +1711,6 @@ const formatBytes = (bytes: number) =>
     ? `${(bytes / 1024).toFixed(1)} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
-const appFileUrl = (artifact: Artifact) =>
-  `${SERVICE}/api/apps/${encodeURIComponent(artifact.id)}/files/${
-    artifact.bundle?.entry.split("/").map(encodeURIComponent).join("/") ?? ""
-  }`;
-
 function CapabilityPicker({
   actions,
   grants,
@@ -1773,7 +1768,26 @@ function CapabilityPicker({
 function AppFrame({ artifact }: { artifact: Artifact }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(280);
+  const [bundleUrl, setBundleUrl] = useState<string>();
+  const bundled = Boolean(artifact.bundle);
   useEffect(() => setHeight(280), [artifact.id, artifact.version]);
+  // Each load mints a short-lived capability URL the opaque-origin sandbox can fetch.
+  useEffect(() => {
+    setBundleUrl(undefined);
+    if (!bundled) return;
+    let active = true;
+    api(`/api/apps/${encodeURIComponent(artifact.id)}/capability`, {
+      method: "POST",
+    })
+      .then((response) => response.ok ? response.json() : {})
+      .then((body: { url?: string }) => {
+        if (active && body.url) setBundleUrl(`${SERVICE}${body.url}`);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [artifact.id, artifact.version, bundled]);
   useEffect(() => {
     const receive = async (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return;
@@ -1840,7 +1854,7 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
       allow=""
       loading="lazy"
       src={artifact.bundle
-        ? appFileUrl(artifact)
+        ? bundleUrl
         : artifact.type === "https_url"
         ? artifact.url
         : undefined}

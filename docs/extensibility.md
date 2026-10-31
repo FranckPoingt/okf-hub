@@ -87,6 +87,35 @@ Only actions explicitly granted in the reviewed App version can cross the
 bridge. `okf.data` is isolated by App and user. Secrets, cookies, the parent
 DOM, raw SQL, and direct network access are not exposed.
 
+#### Bundle capability URLs
+
+The App iframe uses `sandbox="allow-scripts"`, so its origin is opaque. Module
+scripts and imports are CORS requests that send `Origin: null` without cookies.
+The cookie-authenticated `/api/apps/:id/files/*` route correctly refuses them.
+When the Hub shows an App, it calls `POST /api/apps/:id/capability`. That
+requires a session that can view the App. The call mints a 256-bit random token
+scoped to one user and the one App version that user would see. It expires after
+10 minutes and the Hub mints a new one on every load. Only its SHA-256 hash is
+kept, in server memory. The iframe loads from `/app-files/<token>/<path>`, which
+needs no cookie. That route answers `GET` only, sends
+`Access-Control-Allow-Origin: *` and never sends
+`Access-Control-Allow-Credentials`. It keeps the bundle CSP (also sent as a
+response header), `nosniff`, and file MIME types. On every request it re-checks
+the user's current view permission and the pinned version. Unknown, expired,
+revoked, and superseded tokens all receive the same 404. Opening the entry file
+through the route records App usage as before.
+
+Threat model: the Hub never accepts `Origin: null` with credentials. Doing so
+would let any sandboxed page on the internet read Hub data with a visitor's
+session. A capability token is a bearer secret, so anyone who obtains one can
+read the static files of that one App version until it expires, but nothing
+else. It cannot call actions, read documents or App data, or reach any other
+route, because the bridge stays the parent's `postMessage` relay and that relay
+uses the parent's session and the reviewed grants. The token appears in the
+iframe URL. `no-referrer` and the CSP keep it out of referrers and requests. An
+App could still navigate its own frame to leak the token, but that would expose
+only files the App already contains.
+
 ## Deliberately deferred
 
 Generated server code does not run inside the Deno application process. That

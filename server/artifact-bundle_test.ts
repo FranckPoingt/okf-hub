@@ -57,8 +57,8 @@ Deno.test("vendors CDN scripts, compact ESM imports, CSS and fonts with stored b
   assert.equal(calls.length, 4);
   assert.match(fileText(files[0]), /from"\.\/vendor\//);
   assert.doesNotMatch(fileText(files[0]), /https:/);
-  // Vendoring rewrites ESM, but the sandbox can't load modules yet.
-  assert.throws(() => validateDependencies(files), /Module scripts/);
+  assert.ok(calls.includes("https://esm.sh/chart?bundle&target=es2022"));
+  validateDependencies(files);
   for (const record of manifest) {
     assert.equal(
       record.sha256,
@@ -76,7 +76,7 @@ Deno.test("vendors CDN scripts, compact ESM imports, CSS and fonts with stored b
   );
 });
 
-Deno.test("vendoring rejects nested imports, off-allowlist redirects and resource excess", async () => {
+Deno.test("vendoring follows nested ESM imports once and rejects bare specifiers, off-allowlist redirects and resource excess", async () => {
   const files = () => [
     text(
       "index.html",
@@ -84,15 +84,43 @@ Deno.test("vendoring rejects nested imports, off-allowlist redirects and resourc
       '<script src="https://esm.sh/chart?bundle"></script>',
     ),
   ];
+  const nested = files();
+  const requested: string[] = [];
+  await vendorDependencies(nested, (input) => {
+    requested.push(String(input));
+    return Promise.resolve(
+      new Response(
+        String(input).endsWith("/shared.js")
+          ? "export const a=1;"
+          : 'export{a}from"/shared.js";import"/shared.js";',
+        { headers: { "content-type": "text/javascript" } },
+      ),
+    );
+  });
+  assert.deepEqual(requested.map(String), [
+    "https://esm.sh/chart?bundle&target=es2022",
+    "https://esm.sh/shared.js",
+  ]);
+  validateDependencies(nested);
   await assert.rejects(
     () =>
       vendorDependencies(files(), () =>
         Promise.resolve(
-          new Response('export{a}from"/nested.js";', {
+          new Response('import"react";', {
             headers: { "content-type": "text/javascript" },
           }),
         )),
-    /Nested import.*https:\/\/esm.sh\/nested.js/,
+    /Bare import.*react/,
+  );
+  await assert.rejects(
+    () =>
+      vendorDependencies(files(), () =>
+        Promise.resolve(
+          new Response('import"https://evil.example/x.js";', {
+            headers: { "content-type": "text/javascript" },
+          }),
+        )),
+    /not allowed.*evil/,
   );
   await assert.rejects(
     () =>
@@ -146,21 +174,41 @@ Deno.test("App store rejects CDN dependencies on create and revise, including in
     const app = store.create({ ...base, content: "<p>Hello</p>" })!;
     assert.throws(() => store.revise(app.id, remote, "user"), /--vendor/);
     assert.equal(store.list("test", true)[0]!.version, 1);
-    assert.throws(
-      () =>
+    const moduleApp = store.create({
+      ...base,
+      content: bundleContent([
+        text(
+          "index.html",
+          "text/html",
+          '<script type="module">import{chart}from"./vendor/chart.js";</script>',
+        ),
+        text("vendor/chart.js", "text/javascript", "export const chart=1;"),
+      ]),
+    })!;
+    assert.equal(
+      store.file(moduleApp.id, "vendor/chart.js", true, 1)!.type,
+      "text/javascript",
+    );
+    assert.equal(store.file(moduleApp.id, "vendor/chart.js", true, 2), null);
+    for (
+      const module of [
+        'import{chart}from"https://esm.sh/chart";',
+        'import{chart}from"vendor/chart.js";',
+        'import{chart}from"/vendor/chart.js";',
+        'import("./vendor/chart.js");',
+      ]
+    ) {
+      assert.throws(() =>
         store.create({
           ...base,
           content: bundleContent([
-            text(
-              "index.html",
-              "text/html",
-              '<script type="module">import{chart}from"./vendor/chart.js";</script>',
-            ),
+            text("index.html", "text/html", '<script src="app.js"></script>'),
+            text("app.js", "text/javascript", module),
             text("vendor/chart.js", "text/javascript", "export const chart=1;"),
           ]),
-        }),
-      /Module scripts/,
-    );
+        })
+      );
+    }
     const bundled = store.create({
       ...base,
       content: bundleContent([text("index.html", "text/html", "<p>Hi</p>")]),
