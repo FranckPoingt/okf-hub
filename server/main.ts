@@ -3213,6 +3213,8 @@ export async function createCollabApp({
   async function searchKnowledge(
     userId: string,
     input: Record<string, unknown>,
+    // Callers running many queries for one request (Ask) pass this once.
+    visible?: Awaited<ReturnType<typeof visibleSearchDocuments>>,
   ) {
     const query = String(input.query ?? "").trim();
     if (query.length > 120) {
@@ -3227,10 +3229,8 @@ export async function createCollabApp({
     ) {
       throw new ActionError("Choose a supported attention filter");
     }
-    const { documents, canIncludeArchived } = await visibleSearchDocuments(
-      userId,
-      input.includeArchived === true,
-    );
+    const { documents, canIncludeArchived } = visible ??
+      await visibleSearchDocuments(userId, input.includeArchived === true);
     const graph = buildKnowledgeGraph(documents);
     // Candidates come from FTS rows for the state each user may see, intersected with visible documents.
     const relevance = query
@@ -3985,22 +3985,22 @@ export async function createCollabApp({
       }
       if (scope === "workspace") {
         try {
+          const visible = await visibleSearchDocuments(current.user.id, false);
           const { context, citations } = await retrieveKnowledge(
             messages.at(-1)!.content,
             async (query) =>
-              (await searchKnowledge(current.user.id, {
-                query,
-              })).results.map((item) => {
-                const row = item.kind === "hub-native"
-                  ? concept(item.id)
-                  : null;
-                return row
-                  ? {
-                    ...item,
-                    sourceLabel: space(row.spaceId)?.name ?? row.spaceId,
-                  }
-                  : item;
-              }),
+              (await searchKnowledge(current.user.id, { query }, visible))
+                .results.map((item) => {
+                  const row = item.kind === "hub-native"
+                    ? concept(item.id)
+                    : null;
+                  return row
+                    ? {
+                      ...item,
+                      sourceLabel: space(row.spaceId)?.name ?? row.spaceId,
+                    }
+                    : item;
+                }),
             async (item) => {
               if (!await security.check(current.user.id, "view", item.id)) {
                 return null;
@@ -4029,12 +4029,11 @@ export async function createCollabApp({
             24_000,
             semanticIndex
               ? async (question) => {
-                const visible = new Map(
-                  (await visibleSearchDocuments(current.user.id, false))
-                    .documents.map((item) => [item.id, item]),
+                const visibleById = new Map(
+                  visible.documents.map((item) => [item.id, item]),
                 );
                 return await semanticIndex.search(question, ({ id, state }) => {
-                  const item = visible.get(id);
+                  const item = visibleById.get(id);
                   if (!item || state !== searchState(item)) {
                     return Promise.resolve(null);
                   }
