@@ -2465,8 +2465,6 @@ export default function App() {
             ? (
               <ArtifactFirstView
                 concept={concept}
-                spaceIcon={spaces.find((item) => item.id === concept.spaceId)
-                  ?.icon ?? ""}
                 apps={conceptApps}
                 markdown={markdown}
                 view={view}
@@ -2479,7 +2477,6 @@ export default function App() {
                   setSurface("document");
                 }}
                 onOpenConcept={showHubConcept}
-                onOpenSpaceArtifacts={showSpaceArtifacts}
                 onViewChange={setView}
               />
             )

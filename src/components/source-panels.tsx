@@ -1508,7 +1508,6 @@ export function SourceWorkspace(
     <div className="source-panel source-workspace">
       <header className="source-page-heading">
         <div>
-          <p className="eyebrow">Connected knowledge</p>
           <h1>Knowledge sources</h1>
           <p>
             Bring authoritative OKF into one permission-aware index. Imported

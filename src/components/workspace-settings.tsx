@@ -85,12 +85,10 @@ import { Tabs, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import type { SettingsSection } from "../routes.ts";
 
 function SectionHeading({
-  eyebrow,
   title,
   description,
   action,
 }: {
-  eyebrow: string;
   title: string;
   description: string;
   action?: ReactNode;
@@ -98,7 +96,6 @@ function SectionHeading({
   return (
     <div className="settings-section-heading">
       <div>
-        <p className="eyebrow">{eyebrow}</p>
         <h2>{title}</h2>
         <p>{description}</p>
       </div>
@@ -922,13 +919,8 @@ export function WorkspaceSettings({
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           <ArrowLeft /> Back
         </Button>
-        <div>
-          <p className="eyebrow">{workspace.name}</p>
-          <h1 id="settings-heading">Workspace settings</h1>
-          <p>
-            Manage workspace identity, structure, members, and developer access.
-          </p>
-        </div>
+        {/* Breadcrumb and section heading already title the page. */}
+        <h1 id="settings-heading" className="sr-only">Workspace settings</h1>
       </header>
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
@@ -991,7 +983,6 @@ export function WorkspaceSettings({
           <SettingsPanel value="general" active={section}>
             <div className="settings-section">
               <SectionHeading
-                eyebrow="Workspace"
                 title="Knowledge configuration"
                 description="A compact overview of the structure this workspace currently exposes."
               />
@@ -1225,7 +1216,6 @@ export function WorkspaceSettings({
           <SettingsPanel value="ai" active={section}>
             <div className="settings-section">
               <SectionHeading
-                eyebrow="Ask OKF"
                 title="AI provider"
                 description="The provider runs on the OKF server. API keys are never sent to the browser."
               />
@@ -1265,7 +1255,6 @@ export function WorkspaceSettings({
             <div hidden={templateBuilderOpen}>
               <div className="settings-section">
                 <SectionHeading
-                  eyebrow="Templates"
                   title="Template library"
                   description="Start with the built-in understanding brief or add a workspace pattern."
                   action={
@@ -1451,7 +1440,6 @@ export function WorkspaceSettings({
           <SettingsPanel value="spaces" active={section}>
             <div className="settings-section">
               <SectionHeading
-                eyebrow="Structure"
                 title="Spaces"
                 description="Spaces organize documents and provide their default access boundary."
               />
@@ -1587,7 +1575,6 @@ export function WorkspaceSettings({
             <SettingsPanel value="connectors" active={section}>
               <div className="settings-section">
                 <SectionHeading
-                  eyebrow="Connected knowledge"
                   title="Connector settings"
                   description="Enable providers and configure how they import knowledge or embed source links."
                 />

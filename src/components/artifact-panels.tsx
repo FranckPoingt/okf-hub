@@ -293,7 +293,6 @@ function ContextPanelBody({
 
 export function ArtifactFirstView({
   concept,
-  spaceIcon = "",
   apps,
   markdown,
   view,
@@ -303,11 +302,9 @@ export function ArtifactFirstView({
   onActivateApp,
   onOpenAsDocument,
   onOpenConcept,
-  onOpenSpaceArtifacts,
   onViewChange,
 }: {
   concept: Concept;
-  spaceIcon?: string;
   apps: Artifact[];
   markdown: string;
   view: "draft" | "published";
@@ -317,7 +314,6 @@ export function ArtifactFirstView({
   onActivateApp: (appId: string) => Promise<void>;
   onOpenAsDocument: () => void;
   onOpenConcept: (id: string) => void;
-  onOpenSpaceArtifacts: (spaceId: string) => void;
   onViewChange: (view: "draft" | "published") => void;
 }) {
   const isMobile = useIsMobile();
@@ -369,17 +365,8 @@ export function ArtifactFirstView({
     <div className="artifact-first-shell">
       <header className="artifact-first-bar" aria-label="Artifact header">
         <div className="artifact-first-identity">
-          <button
-            type="button"
-            className="artifact-space-chip"
-            onClick={() => onOpenSpaceArtifacts(concept.spaceId)}
-            title={`Browse artifacts in ${concept.space}`}
-          >
-            <SpaceIcon value={spaceIcon} className="size-3.5" />
-            <span>{concept.space}</span>
-          </button>
-          <span className="artifact-bar-sep" aria-hidden="true">/</span>
-          <h1 className="artifact-first-title">{concept.title}</h1>
+          {/* The top bar breadcrumb already shows space and title. */}
+          <h1 className="sr-only">{concept.title}</h1>
         </div>
 
         <div className="artifact-first-meta" aria-label="Artifact metadata">
@@ -741,10 +728,7 @@ export function ArtifactGallery({
       <div className="mx-auto w-full max-w-5xl">
         <header className="flex flex-wrap items-start justify-between gap-6">
           <div>
-            <p className="eyebrow">
-              {space ? `${space.name} · Artifacts` : "Company artifacts"}
-            </p>
-            <div className="mt-1 flex items-center gap-3">
+            <div className="flex items-center gap-3">
               {space && (
                 <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-xl text-muted-foreground">
                   <SpaceIcon value={space.icon} className="size-5" />

@@ -152,7 +152,6 @@ export function DeveloperApiDocumentation() {
     >
       <header className="developer-api-heading">
         <div>
-          <p className="eyebrow">Developer</p>
           <h1 id="developer-api-title">
             {managingKeys ? "API keys" : "API documentation"}
           </h1>

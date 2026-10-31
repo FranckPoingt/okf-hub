@@ -149,8 +149,7 @@ export function HomePanel(
       <div className="mx-auto w-full max-w-4xl">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="eyebrow">Company knowledge</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight">Home</h1>
+            <h1 className="text-3xl font-semibold tracking-tight">Home</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Pick up where you left off or find trusted knowledge.
             </p>

@@ -138,7 +138,6 @@ export function SearchPanel(
   return (
     <section className="search-panel" aria-labelledby="search-heading">
       <div className="source-page-heading">
-        <p className="eyebrow">Permission-aware discovery</p>
         <h1 id="search-heading">Advanced search</h1>
         <p>Search every source you can access, then narrow the results.</p>
         <Button type="button" onClick={onAsk}>Ask OKF</Button>

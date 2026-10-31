@@ -4286,44 +4286,6 @@ label {
   min-width: 0;
 }
 
-.artifact-space-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: .75rem;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.artifact-space-chip:hover {
-  color: var(--foreground);
-  border-color: color-mix(in srgb, var(--foreground) 22%, var(--border));
-}
-
-.artifact-bar-sep {
-  color: var(--muted-foreground);
-  opacity: .45;
-  font-size: .8125rem;
-}
-
-.artifact-first-title {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: .9375rem;
-  font-weight: 600;
-  letter-spacing: -.015em;
-}
-
 .artifact-first-meta {
   display: flex;
   flex-wrap: wrap;
