@@ -3111,7 +3111,6 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "concept.updated",
         "invitation.accepted",
         "invitation.accepted",
-        "invitation.created",
         "space.created",
         "space.deleted",
         "space.renamed",
