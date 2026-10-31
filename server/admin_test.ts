@@ -187,12 +187,19 @@ Deno.test("host operators recover access without wiping data", async () => {
 
     // None of the operator operations are reachable over HTTP.
     const outsider = new Client(hub.base);
-    assert.equal(
-      (await outsider.post("/api/auth/sign-in/magic-link", {
-        email: "agent@example.com",
-      })).status,
-      404,
-    );
+    for (
+      const path of [
+        "/api/auth/sign-in/magic-link",
+        "/api/auth/sign-in/magic-link/",
+        "/api/auth/Sign-In/Magic-Link",
+      ]
+    ) {
+      assert.equal(
+        (await outsider.post(path, { email: "agent@example.com" })).status,
+        404,
+        path,
+      );
+    }
     assert.equal(
       (await signUp(outsider, "outsider@example.com", {
         setupToken: token,

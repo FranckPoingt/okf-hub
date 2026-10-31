@@ -1253,7 +1253,10 @@ export async function createSecurity({
       }
     }
     // Login links are minted only by the host operator CLI.
-    if (url.pathname === "/api/auth/sign-in/magic-link") {
+    if (
+      url.pathname.toLowerCase().replace(/\/+/g, "/").replace(/\/$/, "") ===
+        "/api/auth/sign-in/magic-link"
+    ) {
       return json({ error: "Not found" }, 404);
     }
     if (
