@@ -1310,12 +1310,27 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     );
     await editor.signUp("Editor", "editor@example.com", editorInvitation);
     await viewer.signUp("Viewer", "viewer@example.com", viewerInvitation);
+    // A reload without ?invitation= still finds the invitation issued to this email.
+    const pending = await (await editor.request("/api/bootstrap")).json();
+    assert.equal(pending.invitationRequired, true);
     assert.equal(
       (await editor.request("/api/invitations/accept", {
         method: "POST",
-        body: JSON.stringify({ invitationId: editorInvitation }),
+        body: JSON.stringify({}),
       })).status,
       200,
+    );
+    const owned = await (await owner.request("/api/bootstrap")).json();
+    assert.ok(
+      !owned.invitations.some((item: { invitationId: string }) =>
+        item.invitationId === editorInvitation
+      ),
+      "accepted invitations leave the pending list",
+    );
+    assert.ok(
+      owned.invitations.some((item: { invitationId: string }) =>
+        item.invitationId === viewerInvitation
+      ),
     );
     assert.equal(
       (await viewer.request("/api/invitations/accept", {

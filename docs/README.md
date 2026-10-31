@@ -103,10 +103,11 @@ calendar day; the following day it becomes overdue. With no deadline, the hub
 shows the recorded review date without inventing an expiry.
 
 **Home → Needs attention** collects maintained, published documents that need an
-owner or review. Search also exposes ownership and review filters. Editors see a
-separate **Draft changes** label when search shows unpublished writing beside
-the review status of its publication. Drafts and source connection failures
-remain separately identifiable.
+owner or review, plus documents you can edit that are **stale** because a source
+or dependency changed (the reason is shown). Search also exposes ownership and
+review filters. Editors see a separate **Draft changes** label when search shows
+unpublished writing beside the review status of its publication. Drafts and
+source connection failures remain separately identifiable.
 
 Review status and trust are separate signals. The review badge (current, due,
 overdue, needs review) comes from the ownership and review settings above. The

@@ -8,6 +8,7 @@ import {
   Search,
 } from "lucide-react";
 import { formatReviewDate, FreshnessBadge } from "./knowledge-freshness.tsx";
+import { TrustBadge } from "./trust-badge.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
@@ -113,11 +114,15 @@ export function HomePanel(
     item.status === "active" &&
     (item.hasUnpublishedChanges ?? !item.publishedRevision)
   ).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  // Review status (`freshness`) and dependency staleness (`trust`) stay separate signals.
   const attention = concepts.filter((item) =>
-    item.status === "active" && item.publishedRevision &&
-    (item.publishedMetadata?.intent ?? item.intent) === "canonical" &&
-    (!item.owner ||
-      ["unreviewed", "due", "overdue"].includes(item.freshness.status))
+    item.status === "active" && (
+      item.trust === "stale" ||
+      item.publishedRevision &&
+        (item.publishedMetadata?.intent ?? item.intent) === "canonical" &&
+        (!item.owner ||
+          ["unreviewed", "due", "overdue"].includes(item.freshness.status))
+    )
   ).sort((left, right) => {
     const priority = {
       overdue: 0,
@@ -417,8 +422,9 @@ export function HomePanel(
           {canEdit && (
             <TabsContent value="attention" className="pt-3">
               <p className="mb-3 text-xs text-muted-foreground">
-                Published lasting knowledge that needs an owner or a review.
-                Unpublished work stays in Drafts.
+                Published lasting knowledge that needs an owner or a review, and
+                documents that went stale because a source or dependency
+                changed. Unpublished work stays in Drafts.
               </p>
               <div className="overflow-hidden rounded-lg border bg-card">
                 {attention.map((item) => (
@@ -442,6 +448,10 @@ export function HomePanel(
                           ` · Review due ${
                             formatReviewDate(item.reviewDueDate)
                           }`}
+                        {item.trust === "stale" &&
+                          ` · Stale: ${
+                            item.trustReason ?? "a dependency changed"
+                          }`}
                       </small>
                     </span>
                     <span className="flex flex-wrap items-center gap-1.5">
@@ -453,6 +463,10 @@ export function HomePanel(
                           Unassigned owner
                         </Badge>
                       )}
+                      <TrustBadge
+                        trust={item.trust}
+                        reason={item.trustReason}
+                      />
                       {item.freshness.status !== "current" && (
                         <FreshnessBadge
                           freshness={item.freshness}
