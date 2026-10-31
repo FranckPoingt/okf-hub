@@ -128,7 +128,7 @@ Deno.test("marks described code changes stale and clears them on concept updates
   }
 });
 
-Deno.test("cascades stale and missing sources to dependent documents", () => {
+Deno.test("cascades stale and missing sources to dependent documents", async () => {
   const db = new DatabaseSync(":memory:");
   db.exec(`
     CREATE TABLE okf_concept (id TEXT PRIMARY KEY, status TEXT NOT NULL);
@@ -141,13 +141,16 @@ Deno.test("cascades stale and missing sources to dependent documents", () => {
       ('repo/gone', 'gone.md', 'deleted');
   `);
   const store = createFreshnessStore(db);
+  const hidden = new Set<string>();
+  const dependency = (id: string) =>
+    store.dependency(id, (target) => Promise.resolve(!hidden.has(target)));
   const sources = (markdown: string) =>
     store.setSources("artifact", documentSources(markdown)!);
 
   sources(
     "---\ntype: Artifact\nsources:\n  - id: spec\n    resource: https://example.com\n  - billing\n---\n",
   );
-  assert.equal(store.dependency("artifact"), null);
+  assert.equal(await dependency("artifact"), null);
 
   store.save("repo/billing", {
     describes: ["src/billing/**"],
@@ -155,20 +158,27 @@ Deno.test("cascades stale and missing sources to dependent documents", () => {
     stale: { from: "a".repeat(40), to: "b".repeat(40), paths: ["src/x.ts"] },
   });
   assert.equal(
-    store.dependency("artifact"),
+    await dependency("artifact"),
     "Depends on billing: Described code changed in aaaaaaa..bbbbbbb: src/x.ts",
   );
 
   sources("---\ntype: Artifact\nsources: [gone.md]\n---\n");
-  assert.match(store.dependency("artifact")!, /gone\.md: source missing/);
+  assert.match((await dependency("artifact"))!, /gone\.md: source missing/);
 
   sources("---\ntype: Artifact\nsources: [/knowledge/old]\n---\n");
-  assert.match(store.dependency("artifact")!, /source archived/);
+  assert.match((await dependency("artifact"))!, /source archived/);
 
   // Hub documents cascade through each other, without looping.
   store.setSources("summary", ["repo/billing", "artifact"]);
   sources("---\ntype: Artifact\nsources: [summary]\n---\n");
-  assert.match(store.dependency("artifact")!, /^Depends on summary: Depends/);
+  assert.match((await dependency("artifact"))!, /^Depends on summary: Depends/);
+
+  // A stale source the reader cannot view gives no signal, like a URL.
+  hidden.add("repo/billing");
+  assert.equal(await dependency("artifact"), null);
+  hidden.clear();
+  hidden.add("summary");
+  assert.equal(await dependency("artifact"), null);
 
   assert.equal(documentSources("# Body only\n"), null);
   assert.deepEqual(documentSources("---\ntype: Guide\n---\n"), []);

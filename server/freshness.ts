@@ -193,17 +193,20 @@ export function createFreshnessStore(db: DatabaseSync) {
     ).run(conceptId, JSON.stringify(sources));
   }
 
-  function referenceProblem(
+  async function referenceProblem(
     reference: string,
     seen: Set<string>,
-  ): string | null {
+    canView: (id: string) => Promise<boolean>,
+  ): Promise<string | null> {
     const hub = db.prepare("SELECT id, status FROM okf_concept WHERE id = ?")
       .get(reference.replace(/^\/knowledge\//, "")) as
         | { id: string; status: string }
         | undefined;
+    // Hidden targets behave like untracked external references: no signal.
     if (hub) {
+      if (!await canView(hub.id)) return null;
       if (hub.status !== "active") return "source archived";
-      return seen.has(hub.id) ? null : dependency(hub.id, seen);
+      return seen.has(hub.id) ? null : await dependency(hub.id, canView, seen);
     }
     const path = reference.replace(/^\.?\//, "");
     const imported = db.prepare(
@@ -216,23 +219,25 @@ export function createFreshnessStore(db: DatabaseSync) {
     if (imported.status === "deleted" || imported.status === "renamed") {
       return "source missing";
     }
+    if (!await canView(imported.id)) return null;
     const stale = get(imported.id).stale;
     return stale ? staleMessage(stale) : null;
   }
 
   // Derived on read: the first referenced concept that is stale or missing.
-  // The label is the reference as written in the dependent document, so the
-  // reason never discloses a title the reader may not be allowed to see.
-  function dependency(
+  // The label is the reference as written in the dependent document, and
+  // references the reader cannot view never contribute a reason.
+  async function dependency(
     conceptId: string,
+    canView: (id: string) => Promise<boolean>,
     seen = new Set<string>(),
-  ): string | null {
+  ): Promise<string | null> {
     seen.add(conceptId);
     const row = db.prepare(
       "SELECT sources FROM okf_concept_sources WHERE conceptId = ?",
     ).get(conceptId) as { sources: string } | undefined;
     for (const reference of JSON.parse(row?.sources ?? "[]") as string[]) {
-      const problem = referenceProblem(reference, seen);
+      const problem = await referenceProblem(reference, seen, canView);
       if (problem) return `Depends on ${reference}: ${problem}`;
     }
     return null;

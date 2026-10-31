@@ -2064,8 +2064,11 @@ export async function createCollabApp({
     return await payload(concept(conceptId)!, true, userId);
   }
 
-  function dependencyTrust(conceptId: string) {
-    const reason = freshness.dependency(conceptId);
+  async function dependencyTrust(conceptId: string, userId: string) {
+    const reason = await freshness.dependency(
+      conceptId,
+      async (id) => Boolean(await security.check(userId, "view", id)),
+    );
     return reason
       ? { trust: "stale" as const, trustReason: reason }
       : { trust: "current" as const };
@@ -2084,7 +2087,7 @@ export async function createCollabApp({
     return {
       ...row,
       openCommentCount: openCommentCount(row.id),
-      ...dependencyTrust(row.id),
+      ...await dependencyTrust(row.id, userId),
       space: space(row.spaceId)?.name ?? row.spaceId,
       draft: canEdit ? live.markdown : null,
       published: published ? bodyOnly(published) : null,
@@ -2402,7 +2405,7 @@ export async function createCollabApp({
             ? userName
             : "OKF Hub authors",
           status: row.status,
-          ...dependencyTrust(row.id),
+          ...await dependencyTrust(row.id, userId),
           searchText: [row.title, row.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
           stableId: row.id,
