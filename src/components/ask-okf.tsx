@@ -70,7 +70,7 @@ export function AskOKF({
   workspaceOnly?: boolean;
   config: AIConfig;
   sessions?: Map<string, AskSession>;
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void;
 }) {
   const localSessions = useRef(new Map<string, AskSession>());
   const cache = sessions ?? localSessions.current;
@@ -296,9 +296,17 @@ export function AskOKF({
               <p className="text-sm text-muted-foreground">
                 Provider credentials stay on the OKF server.
               </p>
-              <Button type="button" onClick={onOpenSettings}>
-                Open AI settings
-              </Button>
+              {onOpenSettings
+                ? (
+                  <Button type="button" onClick={onOpenSettings}>
+                    Open AI settings
+                  </Button>
+                )
+                : (
+                  <p className="text-sm text-muted-foreground">
+                    Ask a workspace editor to connect one.
+                  </p>
+                )}
             </div>
           )
           : (

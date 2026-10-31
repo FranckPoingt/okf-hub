@@ -2863,10 +2863,12 @@ export default function App() {
             documentReady={Boolean(
               imported || view === "published" || saveState === "saved",
             )}
-            onOpenSettings={() => {
-              setAskOpen(false);
-              showCreate("ai");
-            }}
+            onOpenSettings={bootstrap.canEdit
+              ? () => {
+                setAskOpen(false);
+                showCreate("ai");
+              }
+              : undefined}
           />
         )}
         {concept && (
