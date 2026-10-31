@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Work becomes shared knowledge · OKF Hub</title>
+    <style>
+    :root {
+      color-scheme: light dark;
+      --background: Canvas;
+      --foreground: CanvasText;
+      --primary: light-dark(rgb(51 156 255), rgb(131 195 255));
+      --primary-foreground: light-dark(rgb(255 255 255), rgb(13 13 13));
+      --secondary: color-mix(in srgb, var(--foreground) 4%, var(--background));
+      --secondary-foreground: var(--foreground);
+      --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+      --muted-foreground: color-mix(in srgb, var(--foreground) 68%, var(--background));
+      --input: color-mix(in srgb, var(--foreground) 18%, transparent);
+      --ring: var(--primary);
+      --viz-series-1: var(--primary);
+      --font-size-base: 14px;
+      --font-size-normal: max(11px, var(--font-size-base));
+      --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+      --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+      --line-height-normal: calc(var(--font-size-normal) * 1.5);
+      --line-height-small: calc(var(--font-size-small) + 4px);
+      --font-weight-normal: 400;
+      --font-weight-medium: 500;
+      --radius-lg: 10px;
+      --corner-shape: round;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      color: var(--foreground);
+      background: var(--background);
+      font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+      font-size: var(--font-size-normal);
+      font-weight: var(--font-weight-normal);
+      line-height: var(--line-height-normal);
+    }
+    main {
+      max-width: 736px;
+      margin-inline: auto;
+    }
+    h3 {
+      margin: 0;
+      font-size: var(--font-size-h3);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.3;
+    }
+    strong {
+      font-weight: var(--font-weight-medium);
+    }
+    .text-small {
+      font-size: var(--font-size-small);
+      line-height: var(--line-height-small);
+    }
+    .text-muted {
+      color: var(--muted-foreground);
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .viz-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn {
+      font: inherit;
+      appearance: button;
+      display: inline-flex;
+      inline-size: fit-content;
+      max-inline-size: 100%;
+      min-height: 28px;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      margin: 0;
+      padding: 0 8px;
+      -webkit-app-region: no-drag;
+      border: 1px solid var(--input);
+      border-radius: var(--radius-lg);
+      corner-shape: var(--corner-shape);
+      color: var(--secondary-foreground);
+      background: var(--secondary);
+      cursor: var(--cursor-interaction, pointer);
+      text-align: center;
+      text-decoration: none;
+      white-space: nowrap;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    .btn:not(:disabled):hover {
+      background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+    }
+    .btn-primary {
+      border-color: transparent;
+      color: var(--primary-foreground);
+      background: var(--foreground);
+      background-clip: padding-box;
+    }
+    .btn-primary:not(:disabled):hover {
+      background: color-mix(in srgb, var(--foreground) 80%, transparent);
+      background-clip: padding-box;
+    }
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+    .btn:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+    @media (pointer: coarse) {
+      .btn {
+        min-width: 44px;
+        min-height: 44px;
+      }
+    }
+    @media (max-width: 400px) {
+      body {
+        padding: 16px;
+      }
+    }
+    </style>
+    <script>
+    (() => {
+      if (typeof window.openai?.setWidgetState === "function") return;
+      const key = "okf-hub-artifact-loop-state-v1";
+      let state = null;
+      try {
+        state = JSON.parse(localStorage.getItem(key));
+      } catch {}
+      window.openai = {
+        widgetState: state,
+        async setWidgetState(value) {
+          this.widgetState = value;
+          try {
+            localStorage.setItem(key, JSON.stringify(value));
+          } catch {}
+        },
+      };
+    })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <div id="okf-artifact-loop">
+        <div class="okf-loop-heading">
+          <h3>Work becomes shared knowledge</h3>
+          <span class="text-small text-muted">OKF Hub product direction</span>
+        </div>
+        <div class="viz-controls" aria-label="Explore the knowledge loop">
+          <button type="button" class="btn" data-action="previous"
+            disabled>Previous</button>
+          <button type="button" class="btn btn-primary"
+            data-action="next">Next</button>
+          <span class="text-small tabular-nums" data-step-count>1 / 5</span>
+        </div>
+        <div class="okf-loop-stage" aria-live="polite" aria-atomic="true">
+          <strong data-stage-title>Work happens</strong>
+          <span class="sr-only" data-stage-summary></span>
+        </div>
+        <svg class="okf-loop-diagram" role="img"
+          aria-labelledby="okf-loop-svg-title okf-loop-svg-desc">
+          <title id="okf-loop-svg-title">Work happens</title>
+          <desc
+            id="okf-loop-svg-desc">Workplace experience leads to an observation and a product hypothesis.</desc>
+          <defs>
+            <marker id="okf-loop-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="currentColor"
+                stroke-width="1.5"></path>
+            </marker>
+          </defs>
+          <g data-diagram-content></g>
+        </svg>
+        <div class="text-small text-muted"
+          data-stage-detail>Interactive explanations · dashboards · slides</div>
+      </div>
+      <style>
+      #okf-artifact-loop {
+        width: 100%;
+      }
+      #okf-artifact-loop .okf-loop-heading {
+        display: grid;
+        gap: 6px;
+        padding-inline-end: 94px;
+        margin-block-end: 18px;
+      }
+      #okf-artifact-loop .okf-loop-stage {
+        margin-block: 20px 8px;
+      }
+      #okf-artifact-loop .okf-loop-diagram {
+        display: block;
+        width: 100%;
+        overflow: visible;
+      }
+      #okf-artifact-loop .okf-loop-diagram text {
+        fill: var(--foreground);
+        font-family: inherit;
+        font-size: inherit;
+      }
+      #okf-artifact-loop .okf-loop-diagram .okf-node-label {
+        font-weight: 500;
+      }
+      #okf-artifact-loop .okf-loop-diagram .okf-node-detail {
+        fill: var(--foreground);
+      }
+      #okf-artifact-loop .okf-loop-diagram .okf-node-mark {
+        fill: var(--muted);
+      }
+      #okf-artifact-loop .okf-loop-diagram .okf-node-active {
+        fill: color-mix(in srgb, var(--viz-series-1) 13%, transparent);
+      }
+      #okf-artifact-loop .okf-loop-diagram .okf-connector {
+        fill: none;
+        stroke: color-mix(in srgb, var(--foreground) 32%, transparent);
+        stroke-width: 1.5;
+      }
+      #okf-artifact-loop .okf-loop-diagram marker {
+        color: color-mix(in srgb, var(--foreground) 32%, transparent);
+      }
+      #okf-artifact-loop [data-stage-detail] {
+        margin-block-start: 10px;
+      }
+      </style>
+      <script>
+      (() => {
+        const root = document.getElementById("okf-artifact-loop");
+        if (!root) return;
+        const svg = root.querySelector(".okf-loop-diagram");
+        const diagram = root.querySelector("[data-diagram-content]");
+        const previous = root.querySelector('[data-action="previous"]');
+        const next = root.querySelector('[data-action="next"]');
+        const count = root.querySelector("[data-step-count]");
+        const title = root.querySelector("[data-stage-title]");
+        const summary = root.querySelector("[data-stage-summary]");
+        const detail = root.querySelector("[data-stage-detail]");
+        const svgTitle = root.querySelector("#okf-loop-svg-title");
+        const svgDescription = root.querySelector("#okf-loop-svg-desc");
+        const namespace = "http://www.w3.org/2000/svg";
+        const stages = [
+          {
+            title: "Work happens",
+            detail: "Interactive explanations · dashboards · slides",
+            summary:
+              "Franck observes colleagues creating interactive explanations, dashboards, and slides with AI. Useful outputs are scattered. This leads to the hypothesis of a shared home for them.",
+            nodes: [
+              { title: "Workplace experience", lines: ["People create", "with AI"] },
+              {
+                title: "Observed friction",
+                lines: ["Useful things", "are scattered"],
+              },
+              {
+                title: "Product hypothesis",
+                lines: ["Give creations", "a shared home"],
+              },
+            ],
+            active: 1,
+            layout: "chain",
+          },
+          {
+            title: "Work produces an artifact",
+            detail: "This explanation is the first example.",
+            summary:
+              "The OKF product conversation produces this interactive explanation. Its editable interface, logic, and assets travel with it.",
+            nodes: [
+              {
+                title: "Product conversation",
+                lines: ["OKF Hub", "product direction"],
+              },
+              {
+                title: "Interactive explanation",
+                lines: ["Explore one", "knowledge loop"],
+              },
+              {
+                title: "Native artifact",
+                lines: ["Retain editable", "code and assets"],
+              },
+            ],
+            active: 1,
+            layout: "chain",
+          },
+          {
+            title: "OKF preserves the meaning",
+            detail: "The artifact and its context belong to one subject.",
+            summary:
+              "The native artifact and a semantic context document connect to the same subject. Context records purpose, sources, ownership, assumptions, and open questions.",
+            nodes: [
+              { title: "Artifact", lines: ["Interface, logic,", "and assets"] },
+              {
+                title: "OKF context",
+                lines: ["Purpose, evidence,", "and ownership"],
+              },
+              { title: "Shared subject", lines: ["OKF Hub", "product direction"] },
+            ],
+            active: 2,
+            layout: "merge",
+          },
+          {
+            title: "The team reuses it",
+            detail: "Proposed flow: find it by subject and share a stable link.",
+            summary:
+              "The proposed team flow makes the explanation discoverable through its subject, gives it a stable link, and supplies relevant context to the next person or agent.",
+            nodes: [
+              { title: "Shared subject", lines: ["OKF Hub", "product direction"] },
+              {
+                title: "Shared explanation",
+                lines: ["Find, discuss,", "and revisit"],
+              },
+              {
+                title: "Next person or agent",
+                lines: ["Use the artifact", "with its context"],
+              },
+            ],
+            active: 1,
+            layout: "chain",
+          },
+          {
+            title: "The next work gets better",
+            detail: "A product hypothesis to test with real team reuse.",
+            summary:
+              "A later task starts with the existing artifact, assumptions, and open questions. It improves the artifact and records a new version with the reason for change. The loop returns to subsequent work; this benefit remains a hypothesis to validate.",
+            nodes: [
+              { title: "Next task", lines: ["Test real", "team reuse"] },
+              {
+                title: "Existing knowledge",
+                lines: ["Use assumptions", "and open questions"],
+              },
+              {
+                title: "Improved artifact",
+                lines: ["New version", "and reason for change"],
+              },
+            ],
+            active: 2,
+            layout: "loop",
+          },
+        ];
+        let step = 0;
+
+        function savedStep(state) {
+          const candidate = state?.privateContent?.version === 1 &&
+              state.privateContent.widget === "okf-artifact-loop"
+            ? state.privateContent.step
+            : state?.modelContent?.subject === "OKF Hub product direction"
+            ? state.modelContent.step
+            : null;
+          return Number.isInteger(candidate) && candidate >= 0 &&
+              candidate < stages.length
+            ? candidate
+            : 0;
+        }
+
+        function element(name, attributes = {}) {
+          const node = document.createElementNS(namespace, name);
+          for (const [key, value] of Object.entries(attributes)) {
+            node.setAttribute(key, String(value));
+          }
+          return node;
+        }
+
+        function connector(path) {
+          diagram.appendChild(
+            element("path", {
+              d: path,
+              class: "okf-connector",
+              "marker-end": "url(#okf-loop-arrow)",
+            }),
+          );
+        }
+
+        function drawNode(position, data, active) {
+          const group = element("g", {
+            transform: `translate(${position.x} ${position.y})`,
+          });
+          group.appendChild(element("rect", {
+            width: position.width,
+            height: position.height,
+            rx: 6,
+            class: active ? "okf-node-active" : "okf-node-mark",
+          }));
+          const label = element("text", {
+            x: position.width / 2,
+            y: 31,
+            "text-anchor": "middle",
+            class: "okf-node-label",
+          });
+          label.textContent = data.title;
+          group.appendChild(label);
+          data.lines.forEach((line, index) => {
+            const text = element("text", {
+              x: position.width / 2,
+              y: 57 + index * 20,
+              "text-anchor": "middle",
+              class: "okf-node-detail",
+            });
+            text.textContent = line;
+            group.appendChild(text);
+          });
+          diagram.appendChild(group);
+        }
+
+        function draw() {
+          const stage = stages[step];
+          const width = Math.round(root.getBoundingClientRect().width);
+          if (width <= 0) return;
+          const horizontal = width >= 640;
+          const nodeHeight = 100;
+          const padding = stage.layout === "chain" ? 4 : 26;
+          const gap = 34;
+          const nodeWidth = horizontal
+            ? (width - padding * 2 - gap * 2) / 3
+            : Math.min(width - padding * 2, 400);
+          let positions;
+          let height;
+          if (horizontal && stage.layout === "merge") {
+            const mergeWidth = Math.min((width - 56) / 2, 270);
+            positions = [
+              { x: 4, y: 4, width: mergeWidth, height: nodeHeight },
+              { x: 4, y: 138, width: mergeWidth, height: nodeHeight },
+              {
+                x: width - mergeWidth - 4,
+                y: 71,
+                width: mergeWidth,
+                height: nodeHeight,
+              },
+            ];
+            height = 242;
+          } else {
+            positions = stage.nodes.map((node, index) => ({
+              x: horizontal
+                ? padding + index * (nodeWidth + gap)
+                : (width - nodeWidth) / 2,
+              y: horizontal ? 4 : 4 + index * (nodeHeight + gap),
+              width: nodeWidth,
+              height: nodeHeight,
+            }));
+            height = horizontal ? 108 : nodeHeight * 3 + gap * 2 + 8;
+            if (stage.layout === "loop") height += horizontal ? 44 : 0;
+          }
+          svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+          svg.setAttribute("height", String(height));
+          diagram.replaceChildren();
+
+          if (stage.layout === "merge") {
+            for (let index = 0; index < 2; index += 1) {
+              const source = positions[index];
+              const target = positions[2];
+              if (horizontal) {
+                const startX = source.x + source.width + 2;
+                const endX = target.x - 5;
+                const middleX = (startX + endX) / 2;
+                connector(
+                  `M ${startX} ${source.y + 50} C ${middleX} ${
+                    source.y + 50
+                  }, ${middleX} ${target.y + 50}, ${endX} ${target.y + 50}`,
+                );
+              } else if (index === 0) {
+                const outsideX = width - 8;
+                const startX = source.x + source.width;
+                const targetY = target.y + 50;
+                connector(
+                  `M ${startX} ${source.y + 50} L ${outsideX} ${
+                    source.y + 50
+                  } L ${outsideX} ${targetY} L ${startX + 3} ${targetY}`,
+                );
+              } else {
+                connector(
+                  `M ${width / 2} ${source.y + source.height + 2} L ${width / 2} ${
+                    target.y - 5
+                  }`,
+                );
+              }
+            }
+          } else {
+            for (let index = 0; index < 2; index += 1) {
+              const source = positions[index];
+              const target = positions[index + 1];
+              connector(
+                horizontal
+                  ? `M ${source.x + source.width + 2} ${source.y + 50} L ${
+                    target.x - 5
+                  } ${target.y + 50}`
+                  : `M ${width / 2} ${source.y + source.height + 2} L ${width / 2} ${
+                    target.y - 5
+                  }`,
+              );
+            }
+          }
+          if (stage.layout === "loop") {
+            const first = positions[0];
+            const last = positions[2];
+            connector(
+              horizontal
+                ? `M ${last.x + last.width / 2} ${last.y + last.height + 2} L ${
+                  last.x + last.width / 2
+                } ${height - 8} L ${first.x + first.width / 2} ${height - 8} L ${
+                  first.x + first.width / 2
+                } ${first.y + first.height + 5}`
+                : `M ${last.x - 2} ${last.y + 50} L 8 ${last.y + 50} L 8 ${
+                  first.y + 50
+                } L ${first.x - 5} ${first.y + 50}`,
+            );
+          }
+          positions.forEach((position, index) =>
+            drawNode(position, stage.nodes[index], index === stage.active)
+          );
+        }
+
+        function render() {
+          const stage = stages[step];
+          previous.disabled = step === 0;
+          next.disabled = step === stages.length - 1;
+          count.textContent = `${step + 1} / ${stages.length}`;
+          title.textContent = stage.title;
+          summary.textContent = stage.summary;
+          detail.textContent = stage.detail;
+          svgTitle.textContent = stage.title;
+          svgDescription.textContent = stage.summary;
+          draw();
+        }
+
+        function changeStep(delta) {
+          const candidate = Math.max(0, Math.min(stages.length - 1, step + delta));
+          if (candidate === step) return;
+          step = candidate;
+          render();
+          if (typeof window.openai?.setWidgetState === "function") {
+            window.openai.setWidgetState({
+              modelContent: {
+                subject: "OKF Hub product direction",
+                step,
+                stage: stages[step].title,
+              },
+              privateContent: { widget: "okf-artifact-loop", version: 1, step },
+            }).catch(() => {});
+          }
+        }
+
+        step = savedStep(window.openai?.widgetState);
+        previous.addEventListener("click", () => changeStep(-1));
+        next.addEventListener("click", () => changeStep(1));
+        window.addEventListener("openai:set_globals", (event) => {
+          const globals = event.detail?.globals;
+          if (
+            globals && Object.prototype.hasOwnProperty.call(globals, "widgetState")
+          ) {
+            step = savedStep(globals.widgetState);
+            render();
+          }
+        });
+        render();
+        new ResizeObserver(draw).observe(root);
+      })();
+      </script>
+    </main>
+  </body>
+</html>

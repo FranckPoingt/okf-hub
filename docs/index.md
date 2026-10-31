@@ -8,6 +8,8 @@ okf_version: "0.2"
   beta.
 - [Self-hosted SSO](sso.md) - Configure invitation-gated OIDC or SAML
   authentication.
+- [Save a Codex artifact](codex-artifacts.md) - Retain and revise a static
+  creation together with its context.
 
 # Architecture and interoperability
 

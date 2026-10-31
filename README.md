@@ -92,6 +92,7 @@ prerelease suffix are published as prereleases.
 - [Product architecture and plan](PLAN.md)
 - [Self-hosted SSO](docs/sso.md)
 - [Extensibility model](docs/extensibility.md)
+- [Save Codex-created artifacts](docs/codex-artifacts.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)

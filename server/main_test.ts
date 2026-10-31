@@ -6,6 +6,7 @@ import type { AIRequest } from "./ai.ts";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
 import { parseSSOConfig } from "./sso-config.ts";
+import { saveArtifact } from "../scripts/save-artifact.ts";
 
 type Tuple = { user: string; relation: string; object: string };
 
@@ -137,6 +138,208 @@ async function archiveEntries(response: Response) {
   }
   return entries;
 }
+
+Deno.test("saves, revises, discovers, and exports a Codex artifact with its context", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const folder = `${dataDir}/artifact`;
+  await Deno.mkdir(folder);
+  const source = new URL("../examples/sovereign-artifact/", import.meta.url);
+  const originalHTML = await Deno.readTextFile(new URL("index.html", source));
+  const originalContext = await Deno.readTextFile(
+    new URL("context.md", source),
+  );
+  await Deno.writeTextFile(`${folder}/index.html`, originalHTML);
+  await Deno.writeTextFile(`${folder}/context.md`, originalContext);
+  const fga = fakeOpenFga();
+  const objects = new Map<string, string>();
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "artifact-dogfood-test-secret-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    objectStore: {
+      put(key, markdown) {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get(key) {
+        return objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Object not found"));
+      },
+      remove(key) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    automationIntervalMs: 0,
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const viewer = new Client(base);
+  const previousToken = Deno.env.get("OKF_HUB_TOKEN");
+  try {
+    await owner.signUp("Dogfood owner", "artifact-owner@example.com");
+    const setup = await owner.request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Artifact dogfood",
+        tagline: "Knowledge from work",
+      }),
+    });
+    assert.equal(setup.status, 200, await setup.text());
+    const invitation = await owner.request("/api/invitations", {
+      method: "POST",
+      body: JSON.stringify({
+        email: "artifact-reader@example.com",
+        access: "viewer",
+      }),
+    });
+    const invitationId = (await invitation.json()).id;
+    await viewer.signUp(
+      "Dogfood reader",
+      "artifact-reader@example.com",
+      invitationId,
+    );
+    assert.equal(
+      (await viewer.request("/api/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ invitationId }),
+      })).status,
+      200,
+    );
+    const key = await owner.request("/api/developer/keys", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Codex artifact test",
+        scopes: [
+          "spaces.list",
+          "documents.create",
+          "documents.get",
+          "documents.update-draft",
+          "documents.publish",
+          "documents.trace.create",
+          "apps.list",
+          "apps.create",
+          "apps.revise",
+          "apps.activate",
+        ],
+      }),
+    });
+    assert.equal(key.status, 201);
+    Deno.env.set("OKF_HUB_TOKEN", (await key.json()).token);
+    const options = {
+      folder,
+      hubUrl: base,
+      spaceId: "policies",
+      title: "OKF Hub product direction",
+    };
+    const first = await saveArtifact({ ...options, publish: true });
+    assert.equal(first.version, 1);
+    assert.equal(first.published, true);
+    assert.equal(first.documentUrl, `${base}/knowledge/${first.documentId}`);
+    const unchanged = await saveArtifact({ ...options, publish: true });
+    assert.equal(unchanged.documentId, first.documentId);
+    assert.equal(unchanged.appId, first.appId);
+    assert.equal(unchanged.version, 1);
+    const initialDocument =
+      await (await owner.request(`/api/concepts/${first.documentId}`)).json();
+    assert.equal(initialDocument.intent, "working");
+    assert.equal(initialDocument.workTraces.length, 1);
+    assert.equal(initialDocument.revisions.length, 1);
+    const discovered = await (await viewer.request(
+      "/api/search?q=OKF%20Hub%20product%20direction",
+    )).json();
+    assert.ok(
+      discovered.results.some((item: { id: string }) =>
+        item.id === first.documentId
+      ),
+    );
+    const filePath = `/api/apps/${first.appId}/files/index.html`;
+    const liveHTML = await viewer.request(filePath);
+    assert.equal(liveHTML.status, 200);
+    assert.ok((await liveHTML.text()).includes("okf-artifact-loop"));
+
+    const revisedHTML = originalHTML.replace(
+      "</body>",
+      '<span hidden data-dogfood-revision="2"></span></body>',
+    );
+    const revisedContext =
+      `${originalContext.trimEnd()}\n\n## Dogfood revision\n\nThe second version preserves the same shared link.\n`;
+    assert.notEqual(revisedHTML, originalHTML);
+    await Deno.writeTextFile(`${folder}/index.html`, revisedHTML);
+    await Deno.writeTextFile(`${folder}/context.md`, revisedContext);
+    const draft = await saveArtifact(options);
+    assert.equal(draft.appId, first.appId);
+    assert.equal(draft.documentId, first.documentId);
+    assert.equal(draft.version, 2);
+    assert.equal(draft.published, false);
+    assert.ok(
+      !(await (await viewer.request(filePath)).text()).includes(
+        'data-dogfood-revision="2"',
+      ),
+    );
+    const draftDocument =
+      await (await owner.request(`/api/concepts/${first.documentId}`)).json();
+    assert.equal(draftDocument.publishedRevision, 1);
+    assert.equal(draftDocument.workTraces.length, 2);
+    const activated = await saveArtifact({ ...options, publish: true });
+    assert.equal(activated.version, 2);
+    assert.ok(
+      (await (await viewer.request(filePath)).text()).includes(
+        'data-dogfood-revision="2"',
+      ),
+    );
+    const publishedDocument =
+      await (await viewer.request(`/api/concepts/${first.documentId}`)).json();
+    assert.equal(publishedDocument.publishedRevision, 2);
+    assert.ok(
+      publishedDocument.published.includes(
+        "The second version preserves the same shared link.",
+      ),
+    );
+    const appState =
+      await (await owner.request(`/api/apps?conceptId=${first.documentId}`))
+        .json();
+    assert.equal(appState.apps.length, 1);
+    assert.deepEqual(appState.apps[0].grants, []);
+    assert.equal(appState.apps[0].versions.length, 2);
+
+    const archive = await owner.request("/api/exports/spaces/policies");
+    assert.equal(archive.status, 200);
+    const exported = await archiveEntries(archive);
+    const decoder = new TextDecoder();
+    const exportedIndex = [...exported].find(([path]) =>
+      path.startsWith("apps/") && path.endsWith("/index.html")
+    );
+    const exportedContext = [...exported].find(([path]) =>
+      path.startsWith("apps/") && path.endsWith("/context.md")
+    );
+    assert.ok(exportedIndex && exportedContext);
+    assert.equal(decoder.decode(exportedIndex[1]), revisedHTML);
+    assert.equal(decoder.decode(exportedContext[1]), revisedContext);
+    assert.ok(
+      ![...exported.keys()].some((path) => path.includes(".okf-artifact")),
+    );
+    const knowledge = [...exported].find(([path]) =>
+      path.startsWith("okf/") && path.endsWith("/OKF Hub product direction.md")
+    );
+    assert.ok(knowledge);
+    await inspectOkf(knowledge[0], decoder.decode(knowledge[1]));
+    const receipt = await Deno.readTextFile(`${folder}/.okf-artifact.json`);
+    assert.ok(!receipt.includes(Deno.env.get("OKF_HUB_TOKEN")!));
+  } finally {
+    if (previousToken === undefined) Deno.env.delete("OKF_HUB_TOKEN");
+    else Deno.env.set("OKF_HUB_TOKEN", previousToken);
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
 
 Deno.test("migrates repository imports to source-scoped paths", async () => {
   const dataDir = await Deno.makeTempDir();
@@ -1009,6 +1212,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "documents.get",
         "templates.list",
         "documents.trace.create",
+        "documents.publish",
+        "spaces.list",
       ]
         .filter((name) =>
           !actionList.actions.some((action: { name: string }) =>
@@ -1016,6 +1221,36 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
           )
         ),
       [],
+    );
+    const actionSpaces = await owner.request("/api/v1/actions/spaces.list", {
+      method: "POST",
+      body: "{}",
+    });
+    assert.equal(actionSpaces.status, 200);
+    assert.deepEqual(
+      (await actionSpaces.json()).result,
+      await (await owner.request("/api/spaces")).json(),
+    );
+    assert.deepEqual(
+      (await (await outsider.request("/api/v1/actions/spaces.list", {
+        method: "POST",
+        body: "{}",
+      })).json()).result,
+      [],
+    );
+    assert.equal(
+      (await viewer.request("/api/v1/actions/documents.publish", {
+        method: "POST",
+        body: JSON.stringify({ id: "incident-communication" }),
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await outsider.request("/api/v1/actions/documents.publish", {
+        method: "POST",
+        body: JSON.stringify({ id: "incident-communication" }),
+      })).status,
+      404,
     );
     const listedTemplates = await owner.request(
       "/api/v1/actions/templates.list",
@@ -1036,6 +1271,24 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     const apiKey = await keyResponse.json();
     assert.equal(keyResponse.status, 201, JSON.stringify(apiKey));
     assert.match(apiKey.token, /^okf_[a-f0-9]{64}$/);
+    for (
+      const [name, input] of [
+        ["spaces.list", {}],
+        ["documents.publish", { id: "incident-communication" }],
+      ] as const
+    ) {
+      assert.equal(
+        (await fetch(`${base}/api/v1/actions/${name}`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${apiKey.token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(input),
+        })).status,
+        404,
+      );
+    }
     const apiSearch = await fetch(
       `${base}/api/v1/actions/knowledge.search`,
       {

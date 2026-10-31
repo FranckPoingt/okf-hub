@@ -12,3 +12,5 @@
 /backups/
 /config/sso.json
 /config/private/
+.okf-artifact.json
+.okf-artifact.json.tmp

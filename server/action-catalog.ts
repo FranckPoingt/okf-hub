@@ -10,6 +10,7 @@ export type ActionDefinition = {
   tag:
     | "Knowledge"
     | "Documents"
+    | "Spaces"
     | "Templates"
     | "Sources"
     | "Apps"
@@ -148,6 +149,7 @@ export function createActionCatalog(definitions: ActionDefinition[]) {
         tags: [
           { name: "Knowledge", description: "Find accessible knowledge." },
           { name: "Documents", description: "Create and manage documents." },
+          { name: "Spaces", description: "Find accessible knowledge spaces." },
           { name: "Templates", description: "Reuse document structures." },
           { name: "Sources", description: "Inspect connected sources." },
           { name: "Apps", description: "Manage governed document Apps." },

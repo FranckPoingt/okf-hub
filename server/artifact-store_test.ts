@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { runInNewContext } from "node:vm";
 import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
 
 Deno.test("versions reviewed artifacts and enforces the rendering contract", () => {
@@ -126,6 +127,86 @@ Deno.test("versions reviewed artifacts and enforces the rendering contract", () 
       new TextDecoder().decode(store.file(bundle.id, "app.js", false)!.body),
       "document.body.dataset.ready='yes'",
     );
+  } finally {
+    db.close();
+  }
+});
+
+Deno.test("static App bridge reports growing and shrinking content without viewport feedback", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    const store = createArtifactStore(db);
+    const created = store.create({
+      conceptId: "explanation",
+      title: "Interactive explanation",
+      type: "inline_html",
+      content: "<main>First step</main>",
+      grants: [],
+      actorUserId: "editor",
+    })!;
+    const script = created.document!.match(/<script>([\s\S]*?)<\/script>/)![1];
+    const messages: { type: string; height: number }[] = [];
+    const callbacks: (() => void)[] = [];
+    const observers: (() => void)[] = [];
+    let contentBottom = 480;
+    const body = { scrollHeight: 2000 };
+    class Observer {
+      constructor(callback: () => void) {
+        observers.push(callback);
+      }
+      observe(target: unknown) {
+        assert.equal(target, body);
+      }
+    }
+    runInNewContext(script, {
+      document: {
+        readyState: "complete",
+        body,
+        documentElement: { scrollHeight: 2000 },
+        createRange: () => ({
+          selectNodeContents: (target: unknown) => assert.equal(target, body),
+          getBoundingClientRect: () => ({ bottom: contentBottom }),
+        }),
+      },
+      window: { scrollY: 0 },
+      parent: {
+        postMessage: (
+          message: { type: string; height: number },
+          target: string,
+        ) => {
+          assert.equal(target, "*");
+          messages.push(message);
+        },
+      },
+      getComputedStyle: () => ({
+        paddingBottom: "24px",
+        borderBottomWidth: "0px",
+        marginBottom: "0px",
+      }),
+      addEventListener: () => {},
+      requestAnimationFrame: (callback: () => void) => callbacks.push(callback),
+      ResizeObserver: Observer,
+      MutationObserver: Observer,
+    });
+    assert.equal(observers.length, 2);
+    callbacks.shift()!();
+    assert.equal(messages[0].type, "okf:size");
+    assert.equal(messages[0].height, 505);
+
+    contentBottom = 720;
+    observers[0]();
+    observers[1]();
+    assert.equal(callbacks.length, 1);
+    callbacks.shift()!();
+    assert.equal(messages.at(-1)!.height, 745);
+
+    contentBottom = 240;
+    observers[1]();
+    callbacks.shift()!();
+    assert.equal(messages.at(-1)!.height, 265);
+    observers[0]();
+    callbacks.shift()!();
+    assert.equal(messages.length, 3);
   } finally {
     db.close();
   }

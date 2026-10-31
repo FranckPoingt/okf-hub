@@ -1767,6 +1767,8 @@ function CapabilityPicker({
 
 function AppFrame({ artifact }: { artifact: Artifact }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(280);
+  useEffect(() => setHeight(280), [artifact.id, artifact.version]);
   useEffect(() => {
     const receive = async (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return;
@@ -1775,7 +1777,16 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
         id?: unknown;
         name?: unknown;
         input?: unknown;
+        height?: unknown;
       };
+      if (message?.type === "okf:size") {
+        if (
+          artifact.type === "inline_html" &&
+          typeof message.height === "number" &&
+          Number.isFinite(message.height) && message.height > 0
+        ) setHeight(Math.max(280, Math.min(1200, Math.ceil(message.height))));
+        return;
+      }
       if (
         message?.type !== "okf:action" || typeof message.id !== "string" ||
         typeof message.name !== "string"
@@ -1811,11 +1822,13 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
     };
     globalThis.addEventListener("message", receive);
     return () => globalThis.removeEventListener("message", receive);
-  }, [artifact.grants, artifact.id]);
+  }, [artifact.grants, artifact.id, artifact.type]);
   return (
     <iframe
+      key={`${artifact.id}:${artifact.version}`}
       ref={frame}
       className="artifact-frame"
+      style={{ height }}
       title={artifact.title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"

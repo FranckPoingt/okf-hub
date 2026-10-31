@@ -1886,6 +1886,103 @@ export async function createCollabApp({
     return visible;
   }
 
+  async function visibleSpaces(userId: string) {
+    const visible = [];
+    for (const item of spaces()) {
+      if (!await security.checkSpace(userId, "view", item.id)) continue;
+      let count = 0;
+      for (const row of concepts().filter((row) => row.spaceId === item.id)) {
+        if (
+          await security.check(userId, "view", row.id) &&
+          (await security.check(userId, "edit", row.id) ||
+            (row.status === "active" && row.publishedRevision))
+        ) count++;
+      }
+      visible.push({
+        ...item,
+        count,
+        canEdit: await security.checkSpace(userId, "edit", item.id),
+      });
+    }
+    return visible;
+  }
+
+  async function publishConceptForUser(
+    userId: string,
+    conceptId: string,
+    markdown?: string,
+  ) {
+    const row = concept(conceptId);
+    if (!row || !await security.check(userId, "view", conceptId)) {
+      throw new ActionError("Not found", 404);
+    }
+    if (!await security.check(userId, "edit", conceptId)) {
+      throw new ActionError("Edit access required", 403);
+    }
+    if (row.lockedAt) throw new DocumentLocked("Unlock the document first");
+    if (row.status === "archived") {
+      throw new ActionError("Restore the concept before publishing", 409);
+    }
+    const live = await loadDocument(row);
+    await saveDraft(conceptId, markdown ?? live.markdown);
+    const previous = row.publishedRevision
+      ? revisions(conceptId).find((item) =>
+        item.number === row.publishedRevision
+      )
+      : undefined;
+    if (previous) {
+      const published = await store.get(previous.objectKey);
+      const metadata = published.match(
+        /^---\r?\n([\s\S]*?)\r?\n---\r?\n/,
+      )?.[1] ?? "";
+      const sameMetadata =
+        metadata.match(/^type:\s*(.+)$/m)?.[1] === row.type &&
+        metadata.match(/^title:\s*(.+)$/m)?.[1] === JSON.stringify(row.title);
+      if (sameMetadata && bodyOnly(published) === live.markdown) {
+        return await payload(concept(conceptId)!, true, userId);
+      }
+    }
+    // ponytail: one process allocates revision numbers; use a DB sequence if multi-node publishing arrives.
+    const number = Number(
+      (db.prepare(
+        "SELECT COALESCE(MAX(number), 0) + 1 AS number FROM okf_revision WHERE conceptId = ?",
+      ).get(conceptId) as { number: number }).number,
+    );
+    const publishedAt = new Date().toISOString();
+    const objectKey = `${encodeURIComponent(row.spaceId)}/${
+      encodeURIComponent(conceptId)
+    }/revisions/${number}.md`;
+    await store.put(
+      objectKey,
+      publishedMarkdown(
+        live.markdown,
+        userId,
+        publishedAt,
+        row.title,
+        row.type,
+      ),
+    );
+    db.exec("BEGIN");
+    try {
+      db.prepare(
+        "INSERT INTO okf_revision (conceptId, number, objectKey, publishedAt, actorUserId) VALUES (?, ?, ?, ?, ?)",
+      ).run(conceptId, number, objectKey, publishedAt, userId);
+      db.prepare(
+        "UPDATE okf_concept SET publishedRevision = ?, updatedAt = ? WHERE id = ?",
+      ).run(number, publishedAt, conceptId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    security.audit(
+      userId,
+      "concept.published",
+      `concept:${conceptId}:revision:${number}`,
+    );
+    return await payload(concept(conceptId)!, true, userId);
+  }
+
   async function payload(row: ConceptRow, canEdit: boolean, userId: string) {
     const live = await loadDocument(row);
     const history = revisions(row.id);
@@ -2469,6 +2566,17 @@ export async function createCollabApp({
       },
     },
     {
+      name: "spaces.list",
+      tag: "Spaces",
+      title: "List knowledge spaces",
+      description:
+        "Lists accessible spaces and whether the caller can edit them.",
+      mode: "query",
+      approval: "none",
+      inputSchema: { type: "object", additionalProperties: false },
+      run: (context) => visibleSpaces(context.userId),
+    },
+    {
       name: "documents.create",
       tag: "Documents",
       title: "Create document",
@@ -2586,6 +2694,23 @@ export async function createCollabApp({
         );
         return await payload(concept(id)!, true, context.userId);
       },
+    },
+    {
+      name: "documents.publish",
+      tag: "Documents",
+      title: "Publish document",
+      description:
+        "Publishes the current editable draft as a portable OKF revision.",
+      mode: "mutation",
+      approval: "confirm",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      run: (context, input) =>
+        publishConceptForUser(context.userId, String(input.id ?? "")),
     },
     {
       name: "sources.list",
@@ -4622,22 +4747,9 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const visible = [];
-      for (const item of spaces()) {
-        if (!await security.checkSpace(current.user.id, "view", item.id)) {
-          continue;
-        }
-        let count = 0;
-        for (const row of concepts().filter((row) => row.spaceId === item.id)) {
-          if (
-            await security.check(current.user.id, "view", row.id) &&
-            (await security.check(current.user.id, "edit", row.id) ||
-              (row.status === "active" && row.publishedRevision))
-          ) count++;
-        }
-        visible.push({ ...item, count });
-      }
-      return Response.json(visible, { headers: cors(request) });
+      return Response.json(await visibleSpaces(current.user.id), {
+        headers: cors(request),
+      });
     }
     if (url.pathname === "/api/spaces" && request.method === "POST") {
       const current = await security.session(request);
@@ -5601,86 +5713,16 @@ export async function createCollabApp({
           throw new DocumentLocked("Unlock the document first");
         }
         if (action === "publish") {
-          if (row.status === "archived") {
-            return Response.json({
-              error: "Restore the concept before publishing",
-            }, {
-              status: 409,
-              headers: cors(request),
-            });
-          }
           const body = await request.json().catch(() => ({})) as {
             markdown?: unknown;
           };
-          const live = await loadDocument(row);
-          await saveDraft(
-            conceptId,
-            typeof body.markdown === "string" ? body.markdown : live.markdown,
-          );
-          const previous = row.publishedRevision
-            ? revisions(conceptId).find((item) =>
-              item.number === row.publishedRevision
-            )
-            : undefined;
-          if (previous) {
-            const published = await store.get(previous.objectKey);
-            const metadata = published.match(
-              /^---\r?\n([\s\S]*?)\r?\n---\r?\n/,
-            )?.[1] ?? "";
-            const sameMetadata = metadata.match(/^type:\s*(.+)$/m)?.[1] ===
-                row.type &&
-              metadata.match(/^title:\s*(.+)$/m)?.[1] ===
-                JSON.stringify(row.title);
-            if (sameMetadata && bodyOnly(published) === live.markdown) {
-              return Response.json(
-                await payload(concept(conceptId)!, true, current.user.id),
-                { headers: cors(request) },
-              );
-            }
-          }
-          // ponytail: one process allocates revision numbers; use a DB sequence if multi-node publishing arrives.
-          const number = Number(
-            (db.prepare(
-              "SELECT COALESCE(MAX(number), 0) + 1 AS number FROM okf_revision WHERE conceptId = ?",
-            ).get(conceptId) as { number: number }).number,
-          );
-          const publishedAt = new Date().toISOString();
-          const objectKey = `${encodeURIComponent(row.spaceId)}/${
-            encodeURIComponent(conceptId)
-          }/revisions/${number}.md`;
-          await store.put(
-            objectKey,
-            publishedMarkdown(
-              live.markdown,
-              current.user.id,
-              publishedAt,
-              row.title,
-              row.type,
-            ),
-          );
-          db.exec("BEGIN");
-          try {
-            db.prepare(
-              "INSERT INTO okf_revision (conceptId, number, objectKey, publishedAt, actorUserId) VALUES (?, ?, ?, ?, ?)",
-            ).run(conceptId, number, objectKey, publishedAt, current.user.id);
-            db.prepare(
-              "UPDATE okf_concept SET publishedRevision = ?, updatedAt = ? WHERE id = ?",
-            ).run(number, publishedAt, conceptId);
-            db.exec("COMMIT");
-          } catch (error) {
-            db.exec("ROLLBACK");
-            throw error;
-          }
-          security.audit(
-            current.user.id,
-            "concept.published",
-            `concept:${conceptId}:revision:${number}`,
-          );
           return Response.json(
-            await payload(concept(conceptId)!, true, current.user.id),
-            {
-              headers: cors(request),
-            },
+            await publishConceptForUser(
+              current.user.id,
+              conceptId,
+              typeof body.markdown === "string" ? body.markdown : undefined,
+            ),
+            { headers: cors(request) },
           );
         }
         if (action === "archive") {
@@ -5746,7 +5788,9 @@ export async function createCollabApp({
           );
         }
       } catch (error) {
-        const status = error instanceof MarkdownTooLarge
+        const status = error instanceof ActionError
+          ? error.status
+          : error instanceof MarkdownTooLarge
           ? 413
           : error instanceof DocumentLocked
           ? 423
