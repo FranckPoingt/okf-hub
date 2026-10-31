@@ -26,6 +26,7 @@ import {
 } from "../../collab-provider.ts";
 import { api, conceptPath, SERVICE } from "../../lib/api.ts";
 import { embedPreview } from "../../lib/embeds.ts";
+import { insertReference } from "../../lib/insert-reference.ts";
 import { resolvePreviewLinks } from "../../lib/knowledge-preview.ts";
 import type { CommentThread } from "../../lib/models.ts";
 import type { CommentSelection } from "./document-comments.tsx";
@@ -607,14 +608,9 @@ export function DocumentEditor({
               to,
             };
           });
-          onReferenceReady?.((title, href) => {
-            const link = view.state.schema.marks.link?.create({ href });
-            const text = view.state.schema.text(title, link ? [link] : []);
-            view.dispatch(
-              view.state.tr.replaceSelectionWith(text).scrollIntoView(),
-            );
-            view.focus();
-          });
+          onReferenceReady?.((title, href) =>
+            insertReference(view, title, href)
+          );
           setReady(true);
         });
         provider.connect();
