@@ -1,3 +1,4 @@
+import { ArtifactUpload } from "./artifact-upload.tsx";
 import { FileText, Plus } from "lucide-react";
 import type { Concept, Space } from "../lib/models.ts";
 import { Badge } from "./ui/badge.tsx";
@@ -93,10 +94,21 @@ export function SpacePanel({
             </p>
           </div>
           {canEdit && (
-            <Button type="button" onClick={onCreate}>
-              <Plus data-icon="inline-start" />
-              New document
-            </Button>
+            <div className="flex gap-2">
+              <ArtifactUpload
+                key={space.id}
+                spaceId={space.id}
+                onCreated={(id) => {
+                  globalThis.location.href = `/knowledge/${
+                    encodeURIComponent(id)
+                  }`;
+                }}
+              />
+              <Button type="button" onClick={onCreate}>
+                <Plus data-icon="inline-start" />
+                New document
+              </Button>
+            </div>
           )}
         </header>
 

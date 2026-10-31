@@ -3,31 +3,17 @@ import {
   ActionError,
   type createActionCatalog,
 } from "./action-catalog.ts";
+import {
+  bundleContent,
+  type BundleFile,
+  encodeFile,
+  MAX_BYTES,
+  MAX_FILES,
+  MIME,
+  sha256,
+  validateDependencies,
+} from "./artifact-bundle.ts";
 import { extname } from "node:path";
-
-const PREFIX = "okf-bundle-v1:";
-const MAX_BYTES = 8 * 1024 * 1024;
-const MAX_FILES = 200;
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".htm": "text/html",
-  ".css": "text/css",
-  ".js": "text/javascript",
-  ".json": "application/json",
-  ".md": "text/markdown",
-  ".txt": "text/plain",
-  ".csv": "text/csv",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-};
 
 export function excluded(name: string) {
   return name.startsWith(".") || name === "node_modules" ||
@@ -40,12 +26,12 @@ export async function packArtifactFiles(
   entries:
     | AsyncIterable<{ path: string; bytes: Uint8Array }>
     | Iterable<{ path: string; bytes: Uint8Array }>,
+  // Optional CLI step that adds local copies of CDN files before validation.
+  vendor?: (files: BundleFile[]) => Promise<unknown[]>,
 ) {
-  const files: { path: string; type: string; data: string }[] = [];
-  let total = 0;
+  const files: BundleFile[] = [];
   let sourceBytes = 0;
   let markdown = "";
-  const references: { path: string; target: string }[] = [];
   for await (const { path, bytes } of entries) {
     if (path.split("/").some(excluded)) {
       throw new Error(`Excluded artifact file: ${path}`);
@@ -58,75 +44,15 @@ export async function packArtifactFiles(
     ) throw new Error("Artifact contains an unsafe filename");
     const type = MIME[extname(path).toLowerCase()];
     if (!type) throw new Error(`Unsupported static file: ${path}`);
-    if (++total > MAX_FILES) throw new Error("Artifact exceeds 200 files");
-    sourceBytes += bytes.length;
-    if (sourceBytes > MAX_BYTES) throw new Error("Artifact exceeds 8 MiB");
-    if (["text/html", "text/css", "text/javascript"].includes(type)) {
-      const text = new TextDecoder().decode(bytes);
-      if (
-        /\b(?:fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|import\s*\()/m
-          .test(text)
-      ) {
-        throw new Error(
-          `Network APIs and dynamic imports are unsupported in this static artifact: ${path}`,
-        );
-      }
-      if (
-        /\bimport\s+(?:["'{*]|[A-Za-z_$][\w$]*\s*(?:,|\bfrom\b))|\bexport\s+(?:\*|\{)/m
-          .test(text)
-      ) {
-        throw new Error(
-          `ES module imports are unsupported in this static artifact: ${path}`,
-        );
-      }
-      if (type === "text/html") {
-        for (
-          const element of text.matchAll(
-            /<(?:script|link|img|source|audio|video|iframe)\b[^>]*>/gi,
-          )
-        ) {
-          for (
-            const attribute of element[0].matchAll(
-              /\b(src|href|poster|srcset|type)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi,
-            )
-          ) {
-            const name = attribute[1].toLowerCase();
-            const value = attribute[2] ?? attribute[3] ?? attribute[4];
-            if (
-              name === "srcset" ||
-              (name === "type" && value.toLowerCase() === "module")
-            ) {
-              throw new Error(
-                `Module scripts and srcset are unsupported in this static artifact: ${path}`,
-              );
-            }
-            if (name !== "type") references.push({ path, target: value });
-          }
-        }
-      }
-      if (type === "text/css" || type === "text/html") {
-        for (
-          const reference of text.matchAll(
-            /url\(\s*["']?([^\s"')]+)["']?\s*\)/gi,
-          )
-        ) {
-          references.push({ path, target: reference[1] });
-        }
-        if (/@import\b/i.test(text)) {
-          throw new Error(
-            `Bundle stylesheet imports locally before saving: ${path}`,
-          );
-        }
-      }
-    }
-    if (path === "context.md") markdown = new TextDecoder().decode(bytes);
-    let binary = "";
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(
-        ...bytes.subarray(offset, offset + 0x8000),
+    if (files.length >= MAX_FILES) {
+      throw new Error(
+        "Artifact exceeds 200 files",
       );
     }
-    files.push({ path, type, data: `data:${type};base64,${btoa(binary)}` });
+    sourceBytes += bytes.length;
+    if (sourceBytes > MAX_BYTES) throw new Error("Artifact exceeds 8 MiB");
+    if (path === "context.md") markdown = new TextDecoder().decode(bytes);
+    files.push(encodeFile(path, type, bytes));
   }
   if (!files.some((file) => file.path === "index.html")) {
     throw new Error("Artifact folder needs index.html");
@@ -134,36 +60,11 @@ export async function packArtifactFiles(
   if (!markdown.trim()) {
     throw new Error("Artifact folder needs non-empty context.md");
   }
-  const paths = new Set(files.map((file) => file.path));
-  for (const reference of references) {
-    if (
-      reference.target.startsWith("data:") || reference.target.startsWith("#")
-    ) continue;
-    const target = new URL(
-      reference.target,
-      `https://bundle.invalid/${reference.path}`,
-    );
-    if (
-      target.origin !== "https://bundle.invalid" ||
-      !paths.has(decodeURIComponent(target.pathname.slice(1)))
-    ) {
-      throw new Error(
-        `Artifact dependency must be included locally: ${reference.path}`,
-      );
-    }
-  }
-  const content = PREFIX + JSON.stringify({ entry: "index.html", files });
-  if (new TextEncoder().encode(content).length > MAX_BYTES) {
-    throw new Error("Packed artifact exceeds the Hub's 8 MiB limit");
-  }
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(content),
-  );
-  const digest = [...new Uint8Array(hash)].map((byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
-  return { content, markdown, digest };
+  const manifest = vendor ? await vendor(files) : [];
+  validateDependencies(files);
+  const content = bundleContent(files);
+  const digest = await sha256(new TextEncoder().encode(content));
+  return { content, markdown, digest, manifest };
 }
 
 export type Receipt = {
@@ -345,7 +246,11 @@ export async function savePackedArtifact(
         kind: "outcome",
         title: `Saved ${title}`.slice(0, 100),
         summary:
-          `Saved Codex static artifact ${app.id}, version ${app.version}, with OKF context. ${marker}. No Hub capabilities granted.`,
+          `Saved Codex static artifact ${app.id}, version ${app.version}, with OKF context. ${marker}. No Hub capabilities granted. Vendored dependencies: ${
+            packed.manifest.length
+              ? `vendor.json (${packed.manifest.length} entries, covered by bundle SHA-256)`
+              : "none"
+          }.`,
         occurredAt: new Date().toISOString().slice(0, 10),
       });
     }

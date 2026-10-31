@@ -10,6 +10,8 @@ import {
   savePackedArtifact,
 } from "../server/artifact-save.ts";
 
+import { vendorDependencies } from "./vendor-artifact.ts";
+
 const RECEIPT = ".okf-artifact.json";
 export type SaveArtifactOptions = {
   folder: string;
@@ -18,8 +20,13 @@ export type SaveArtifactOptions = {
   spaceId?: string;
   title?: string;
   publish?: boolean;
+  vendor?: boolean;
 };
-export async function packArtifact(folder: string) {
+export async function packArtifact(
+  folder: string,
+  vendor = false,
+  request: typeof fetch = fetch,
+) {
   const root = resolve(folder);
   const info = await Deno.lstat(root);
   if (!info.isDirectory || info.isSymlink) {
@@ -53,7 +60,13 @@ export async function packArtifact(folder: string) {
       yield { path, bytes: await Deno.readFile(diskPath) };
     }
   }
-  return { root, ...await packArtifactFiles(walk(root)) };
+  return {
+    root,
+    ...await packArtifactFiles(
+      walk(root),
+      vendor ? (files) => vendorDependencies(files, request) : undefined,
+    ),
+  };
 }
 
 function hubOrigin(value: string) {
@@ -87,7 +100,7 @@ export async function saveArtifact(
   if (options.space && options.spaceId) {
     throw new Error("Choose --space or --space-id");
   }
-  const packed = await packArtifact(options.folder);
+  const packed = await packArtifact(options.folder, options.vendor);
   const title = options.title ??
     packed.markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? basename(packed.root);
   if (!title || title.length > 100) {
@@ -175,7 +188,8 @@ export function parseArgs(args: string[]): SaveArtifactOptions {
   const options: SaveArtifactOptions = { folder: "" };
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
-    if (argument === "--publish") options.publish = true;
+    if (argument === "--vendor") options.vendor = true;
+    else if (argument === "--publish") options.publish = true;
     else if (["--hub", "--space", "--space-id", "--title"].includes(argument)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) {
@@ -191,7 +205,7 @@ export function parseArgs(args: string[]): SaveArtifactOptions {
   }
   if (!options.folder) {
     throw new Error(
-      "Usage: save-artifact.ts <folder> [--hub URL] [--space NAME | --space-id ID] [--title TITLE] [--publish]",
+      "Usage: save-artifact.ts <folder> [--hub URL] [--space NAME | --space-id ID] [--title TITLE] [--publish] [--vendor]",
     );
   }
   return options;

@@ -26,8 +26,9 @@ intend to share, with:
 
 Use ordinary browser JavaScript and local assets. The Hub sandbox blocks network
 calls, external scripts, nested frames, and form submission. Bundle dependencies
-locally; avoid module imports, CDN dependencies, and browser storage that relies
-on a normal page origin. The saver rejects common unsupported dependencies, but
+locally as classic scripts; ES module scripts and `import` statements cannot
+load in the sandbox yet. Avoid browser storage that relies on a normal page
+origin. Both the server and saver reject common unsupported dependencies, but
 code still needs review and a browser check. The `context.md` heading supplies
 the title unless you pass `--title`.
 
@@ -37,6 +38,55 @@ Review the remaining files before saving: a filename filter cannot detect a
 secret embedded in JavaScript or a dataset. A bundle can contain at most 200
 regular files and its encoded size must fit the Hub's 8 MiB limit. Symlinks are
 rejected.
+
+## Upload from the Hub
+
+In a space where you can create documents, select **Upload artifact**. Choose
+one `.html` file or a `.zip` of static files with `index.html` at its root. A
+single HTML file becomes `index.html`. ZIP uploads can include `context.md`; its
+YAML title or first heading supplies the document title. If it is absent, the
+dialog asks for a title and description and generates minimal OKF context.
+Uploads create a working Artifact document and a draft App with no Hub grants.
+Publish the context and activate the App through the usual review workflow.
+
+Uploads do not fetch dependencies. The server applies the same dependency checks
+as the CLI, before creating the document. CDN dependencies produce an error with
+a CLI hint. ZIPs may use stored or deflated files; encrypted archives, symlinks,
+unsafe or duplicate paths, unsupported file types, and oversized bundles are
+rejected. Put files directly at the ZIP root, without a containing folder.
+
+## Vendor CDN dependencies on your machine
+
+For an artifact with external scripts, styles, or fonts:
+
+```sh
+deno task artifact:save /absolute/path/to/artifact --space "Team knowledge" --vendor
+```
+
+Downloads happen only on the saving machine, never in the Hub or the browser.
+The command accepts HTTPS URLs on `cdn.jsdelivr.net`, `unpkg.com`,
+`cdnjs.cloudflare.com`, `esm.sh`, `fonts.googleapis.com`, and
+`fonts.gstatic.com`. Redirects must stay on that allowlist. It includes
+downloaded files under `vendor/` in the saved bundle, rewrites references
+relative to each file, and adds `vendor.json` with `{url, path, sha256}`
+records. SHA-256 covers the final stored bytes, including rewritten CSS. The
+work trace identifies the manifest and includes it in the bundle hash. The
+source folder stays unchanged.
+
+Reference classic UMD or IIFE builds, for example a library's `*.umd.js` file on
+jsdelivr or unpkg. Vendoring rewrites ESM imports, but the saver then rejects
+them: the sandbox has an opaque origin, and the Hub refuses its cross-origin
+module requests. React 19 ships no UMD build, so use React 18 UMD or compile the
+artifact into a single classic script first. CSS font URLs and stylesheet
+imports are vendored recursively. Network APIs, dynamic imports, and runtime
+downloads remain unsupported. A runtime Tailwind loader may need replacing with
+precompiled CSS. Vendoring does not compile JSX, install npm packages, or
+guarantee an artifact runs correctly; review dependency licenses and test the
+saved App. The sandbox and CSP are unchanged.
+
+The 200-file and 8 MiB encoded bundle limits include downloaded dependencies and
+`vendor.json`. Without `--vendor`, remote dependencies are rejected with a hint
+to use the flag. Export retains the rewritten files and manifest.
 
 ## Connect once
 

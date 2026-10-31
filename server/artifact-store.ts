@@ -1,5 +1,6 @@
 /// <reference lib="deno.ns" />
 
+import { encodeFile, validateDependencies } from "./artifact-bundle.ts";
 import { DatabaseSync } from "node:sqlite";
 
 // ponytail: SQLite-backed bundles cap at 8 MiB; move assets to object storage
@@ -231,7 +232,21 @@ export function createArtifactStore(
       throw new ArtifactInputError("App bundle exceeds 8 MiB");
     }
     if (type === "inline_html") {
-      parseBundle(content);
+      const bundle = parseBundle(content);
+      try {
+        validateDependencies(
+          bundle?.files ??
+            [encodeFile(
+              "index.html",
+              "text/html",
+              new TextEncoder().encode(content),
+            )],
+        );
+      } catch (error) {
+        throw new ArtifactInputError(
+          error instanceof Error ? error.message : "Invalid dependencies",
+        );
+      }
       return content;
     }
     let url: URL;

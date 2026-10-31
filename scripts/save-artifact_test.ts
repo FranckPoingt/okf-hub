@@ -407,7 +407,7 @@ Deno.test("packing enforces self-contained dependencies and Hub resource limits"
       join(folder, "index.html"),
       '<script type=module>import x from "./app.js"</script>',
     );
-    await assert.rejects(() => packArtifact(folder), /module/);
+    await assert.rejects(() => packArtifact(folder), /module/i);
     await Deno.writeTextFile(
       join(folder, "index.html"),
       '<script src="app.js"></script>',
@@ -416,7 +416,7 @@ Deno.test("packing enforces self-contained dependencies and Hub resource limits"
       join(folder, "app.js"),
       'import x from "./external.js";',
     );
-    await assert.rejects(() => packArtifact(folder), /module/);
+    await assert.rejects(() => packArtifact(folder), /module/i);
     await Deno.remove(join(folder, "app.js"));
     await Deno.writeTextFile(
       join(folder, "index.html"),
@@ -519,6 +519,31 @@ Deno.test("missing publication scope fails before creating or changing Hub recor
     await assert.rejects(
       () => Deno.stat(join(folder, ".okf-artifact.json")),
       Deno.errors.NotFound,
+    );
+  });
+});
+
+Deno.test("CLI --vendor packs rewritten dependencies and a deterministic manifest", async () => {
+  assert.equal(parseArgs(["example", "--vendor"]).vendor, true);
+  await fixture(async (folder) => {
+    await Deno.writeTextFile(
+      join(folder, "index.html"),
+      '<script src="https://cdn.jsdelivr.net/npm/chart/dist/chart.umd.js"></script>',
+    );
+    const request: typeof fetch = () =>
+      Promise.resolve(
+        new Response("window.chart = 1;", {
+          headers: { "content-type": "application/javascript" },
+        }),
+      );
+    const first = await packArtifact(folder, true, request);
+    const second = await packArtifact(folder, true, request);
+    assert.equal(first.digest, second.digest);
+    assert.equal(first.manifest.length, 1);
+    assert.match(first.content, /vendor.json/);
+    assert.equal(
+      await Deno.readTextFile(join(folder, "index.html")),
+      '<script src="https://cdn.jsdelivr.net/npm/chart/dist/chart.umd.js"></script>',
     );
   });
 });
