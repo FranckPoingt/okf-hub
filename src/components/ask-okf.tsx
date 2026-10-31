@@ -13,7 +13,18 @@ import {
 } from "./ui/sheet.tsx";
 import { Textarea } from "./ui/textarea.tsx";
 
-type Message = { role: "user" | "assistant"; content: string };
+type Citation = {
+  n: number;
+  documentId: string;
+  title: string;
+  sourceLabel: string;
+  url: string;
+};
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
+};
 type AskTarget =
   | { kind: "concept"; conceptId: string; state: "draft" | "published" }
   | { kind: "imported"; importId: string; state: "source" };
@@ -25,20 +36,27 @@ export function AskOKF({
   documentTitle,
   config,
   onOpenSettings,
+  workspaceOnly = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  target: AskTarget;
-  documentTitle: string;
+  target?: AskTarget;
+  documentTitle?: string;
+  workspaceOnly?: boolean;
   config: AIConfig;
   onOpenSettings: () => void;
 }) {
+  const [scope, setScope] = useState<"document" | "workspace">(
+    workspaceOnly ? "workspace" : "document",
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const request = useRef<AbortController | null>(null);
-  const targetKey = target.kind === "concept"
+  const targetKey = !target
+    ? "workspace"
+    : target.kind === "concept"
     ? `${target.kind}:${target.conceptId}:${target.state}`
     : `${target.kind}:${target.importId}`;
 
@@ -53,7 +71,7 @@ export function AskOKF({
       request.current?.abort();
       request.current = null;
     };
-  }, [targetKey]);
+  }, [targetKey, scope]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -71,7 +89,10 @@ export function AskOKF({
         method: "POST",
         signal: controller.signal,
         body: JSON.stringify({
-          ...(target.kind === "concept"
+          scope,
+          ...(scope === "workspace" || !target
+            ? {}
+            : target.kind === "concept"
             ? { conceptId: target.conceptId, state: target.state }
             : { importId: target.importId }),
           messages: next.slice(-12),
@@ -80,6 +101,7 @@ export function AskOKF({
       const result = await response.json() as {
         message?: string;
         error?: string;
+        citations?: Citation[];
       };
       if (request.current !== controller) return;
       if (!response.ok || !result.message) {
@@ -88,6 +110,7 @@ export function AskOKF({
       setMessages((current) => [...current, {
         role: "assistant",
         content: result.message!,
+        citations: result.citations,
       }]);
     } catch (cause) {
       if (request.current !== controller) return;
@@ -111,10 +134,34 @@ export function AskOKF({
             <Sparkles className="size-4" /> Ask OKF
           </SheetTitle>
           <SheetDescription>
-            Answers from {documentTitle} · {target.state}
+            {scope === "workspace"
+              ? "Answers from accessible workspace knowledge"
+              : `Answers from ${documentTitle} · ${target?.state}`}
           </SheetDescription>
         </SheetHeader>
 
+        {!workspaceOnly && target && (
+          <div className="flex gap-2 border-b p-3" aria-label="Answer scope">
+            <Button
+              type="button"
+              size="sm"
+              variant={scope === "document" ? "default" : "outline"}
+              onClick={() =>
+                setScope("document")}
+            >
+              This document
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={scope === "workspace" ? "default" : "outline"}
+              onClick={() =>
+                setScope("workspace")}
+            >
+              Workspace
+            </Button>
+          </div>
+        )}
         {!config.enabled
           ? (
             <div className="grid flex-1 place-content-center gap-3 p-6 text-center">
@@ -136,8 +183,11 @@ export function AskOKF({
               >
                 {!messages.length && (
                   <li className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    Ask a question about this document. Ask OKF can explain what
-                    is present, but cannot edit or run anything.
+                    Ask a question about{" "}
+                    {scope === "workspace"
+                      ? "your workspace"
+                      : "this document"}. Ask OKF can explain what is present,
+                    but cannot edit or run anything.
                   </li>
                 )}
                 {messages.map((message, index) => (
@@ -151,11 +201,23 @@ export function AskOKF({
                       {message.role === "user" ? "You" : "Ask OKF"}:
                     </span>
                     {message.content}
+                    {!!message.citations?.length && (
+                      <ul className="mt-3 grid gap-1 text-sm">
+                        {message.citations.map((citation) => (
+                          <li key={citation.n}>
+                            <a className="underline" href={citation.url}>
+                              [{citation.n}] {citation.title} ·{" "}
+                              {citation.sourceLabel}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 ))}
                 {busy && (
                   <li className="mr-8 rounded-lg bg-muted p-3 text-muted-foreground">
-                    Reading the document…
+                    Reading knowledge…
                   </li>
                 )}
                 {error && <li className="form-error" role="alert">{error}</li>}
@@ -165,7 +227,9 @@ export function AskOKF({
                   <Textarea
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="Ask about this document"
+                    placeholder={scope === "workspace"
+                      ? "Ask about your workspace"
+                      : "Ask about this document"}
                     maxLength={4_000}
                     rows={3}
                     disabled={busy}

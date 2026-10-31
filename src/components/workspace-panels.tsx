@@ -30,7 +30,8 @@ import { Textarea } from "./ui/textarea.tsx";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 
 export function SearchPanel(
-  { onOpenHub, onOpenImported }: {
+  { onOpenHub, onOpenImported, onAsk }: {
+    onAsk: () => void;
     onOpenHub: (id: string) => void;
     onOpenImported: (
       sourceId: string,
@@ -115,6 +116,7 @@ export function SearchPanel(
         <p className="eyebrow">Permission-aware discovery</p>
         <h1 id="search-heading">Advanced search</h1>
         <p>Search every source you can access, then narrow the results.</p>
+        <Button type="button" onClick={onAsk}>Ask OKF</Button>
       </div>
       <form
         className="my-7 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex"

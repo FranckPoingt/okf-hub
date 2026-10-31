@@ -147,6 +147,7 @@ export default function App() {
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+  const [askWorkspace, setAskWorkspace] = useState(false);
   const [aiConfig, setAIConfig] = useState<AIConfig>({
     enabled: false,
     provider: "",
@@ -1467,7 +1468,10 @@ export default function App() {
                   size="sm"
                   variant="outline"
                   className="h-8 gap-1.5 px-2.5 text-xs"
-                  onClick={() => setAskOpen(true)}
+                  onClick={() => {
+                    setAskWorkspace(false);
+                    setAskOpen(true);
+                  }}
                 >
                   <Sparkles className="size-3.5" /> Ask OKF
                 </Button>
@@ -1493,7 +1497,10 @@ export default function App() {
                   view={view}
                   width={documentWidth}
                   onArchive={() => void lifecycle("archive")}
-                  onAsk={() => setAskOpen(true)}
+                  onAsk={() => {
+                    setAskWorkspace(false);
+                    setAskOpen(true);
+                  }}
                   onComments={() => {
                     const editorAnchor = commentReader.current?.() ?? null;
                     const selection = globalThis.getSelection();
@@ -1631,6 +1638,10 @@ export default function App() {
             : searchOpen
             ? (
               <SearchPanel
+                onAsk={() => {
+                  setAskWorkspace(true);
+                  setAskOpen(true);
+                }}
                 onOpenHub={showHubConcept}
                 onOpenImported={openImported}
               />
@@ -2010,18 +2021,22 @@ export default function App() {
             <MessageSquare /> Comment
           </Button>
         )}
-        {(imported || concept) && (
+        {(askWorkspace || imported || concept) && (
           <AskOKF
+            key={askWorkspace ? "workspace" : "document"}
+            workspaceOnly={askWorkspace}
             open={askOpen}
             onOpenChange={setAskOpen}
-            target={imported
+            target={askWorkspace
+              ? undefined
+              : imported
               ? { kind: "imported", importId: imported.id, state: "source" }
               : {
                 kind: "concept",
                 conceptId: concept!.id,
                 state: bootstrap.canEdit ? view : "published",
               }}
-            documentTitle={(imported ?? concept)!.title}
+            documentTitle={(imported ?? concept)?.title}
             config={aiConfig}
             onOpenSettings={() => {
               setAskOpen(false);

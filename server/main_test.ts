@@ -1085,6 +1085,16 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       404,
     );
+    const restrictedAsk = await outsider.request("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "workspace",
+        messages: [{ role: "user", content: "incident communication" }],
+      }),
+    });
+    assert.equal(restrictedAsk.status, 200);
+    assert.deepEqual((await restrictedAsk.json()).citations, []);
+    assert.ok(!aiRequests.at(-1)?.document.markdown.includes("Still clean"));
     assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
@@ -1134,6 +1144,24 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       aiRequests.at(-1)?.document.markdown,
       "# First published draft\n",
     );
+    const workspaceAsk = await viewer.request("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "workspace",
+        messages: [{ role: "user", content: "incident communication" }],
+      }),
+    });
+    assert.equal(workspaceAsk.status, 200);
+    const workspaceAnswer = await workspaceAsk.json();
+    assert.equal(
+      workspaceAnswer.citations[0].documentId,
+      "incident-communication",
+    );
+    assert.equal(
+      workspaceAnswer.citations[0].url,
+      "/knowledge/incident-communication",
+    );
+    assert.match(aiRequests.at(-1)!.document.markdown, /First published draft/);
     const commentResponse = await viewer.request(
       "/api/concepts/incident-communication/comments",
       {
@@ -2937,6 +2965,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "ai.asked",
         "ai.asked",
         "ai.asked",
+        "ai.asked",
+        "ai.asked",
         "api_key.created",
         "api_key.revoked",
         "app.activated",
@@ -2971,10 +3001,8 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "concept.restored",
         "concept.unlocked",
         "concept.updated",
-        "group.created",
         "invitation.accepted",
         "invitation.accepted",
-        "invitation.created",
         "invitation.created",
         "space.created",
         "space.deleted",

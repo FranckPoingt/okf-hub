@@ -7,6 +7,7 @@ export type AIMessage = {
 
 export type AIRequest = {
   messages: AIMessage[];
+  scope?: "document" | "workspace";
   document: {
     title: string;
     space: string;
@@ -38,15 +39,17 @@ export function createAIResponder({
     apiKey,
     config: { model, maxTokens: 1_500, temperature: 0.2 },
   } as AxAIArgs<string>);
-  return async ({ messages, document }) => {
-    // ponytail: one document and 60k characters cover the first slice; add
-    // retrieval when whole-space questions or larger documents ship.
+  return async ({ messages, document, scope }) => {
     const markdown = document.markdown.slice(0, 60_000);
     const response = await service.chat({
       chatPrompt: [{
         role: "system",
         content:
-          `You are Ask OKF, a read-only knowledge assistant. Answer from the supplied document only. If the answer is not present, say so plainly. Do not claim to edit, publish, approve, or run anything.
+          `You are Ask OKF, a read-only knowledge assistant. Answer from the supplied ${
+            scope === "workspace"
+              ? "numbered sources only and cite source numbers like [1]"
+              : "document only"
+          }. If the answer is not present, say so plainly. Do not claim to edit, publish, approve, or run anything.
 
 Document: ${document.title}
 Space: ${document.space}

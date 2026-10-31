@@ -18,6 +18,7 @@ import {
   type ExportFile,
 } from "./export-archive.ts";
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
+import { retrieveKnowledge } from "./knowledge-retrieval.ts";
 import { createObjectStore } from "./object-store.ts";
 import { type NotionSourceConfig, syncNotionSource } from "./notion-source.ts";
 import {
@@ -3011,11 +3012,19 @@ export async function createCollabApp({
         conceptId?: unknown;
         importId?: unknown;
         state?: unknown;
+        scope?: unknown;
         messages?: unknown;
       };
+      const scope = body.scope ?? "document";
+      if (scope !== "document" && scope !== "workspace") {
+        return Response.json({ error: "Invalid scope" }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
       const conceptId = String(body.conceptId ?? "");
       const importId = String(body.importId ?? "");
-      if (Boolean(conceptId) === Boolean(importId)) {
+      if (scope === "document" && Boolean(conceptId) === Boolean(importId)) {
         return Response.json({ error: "Choose one document" }, {
           status: 400,
           headers: cors(request),
@@ -3049,6 +3058,69 @@ export async function createCollabApp({
           status: 400,
           headers: cors(request),
         });
+      }
+      if (scope === "workspace") {
+        try {
+          const { context, citations } = await retrieveKnowledge(
+            messages.at(-1)!.content,
+            async (query) =>
+              (await searchKnowledge(current.user.id, current.user.name, {
+                query,
+              })).results.map((item) => {
+                const row = item.kind === "hub-native"
+                  ? concept(item.id)
+                  : null;
+                return row
+                  ? {
+                    ...item,
+                    sourceLabel: space(row.spaceId)?.name ?? row.spaceId,
+                  }
+                  : item;
+              }),
+            async (item) => {
+              if (item.kind === "imported") {
+                const row = importedConcepts().find((entry) =>
+                  entry.id === item.id
+                );
+                return row
+                  ? withoutFrontmatter(await store.get(row.objectKey))
+                  : null;
+              }
+              const row = concept(item.id);
+              if (!row) return null;
+              const canEdit = await security.check(
+                current.user.id,
+                "edit",
+                row.id,
+              );
+              const doc = await payload(row, Boolean(canEdit), current.user.id);
+              return canEdit ? doc.draft : doc.published;
+            },
+          );
+          const message = await respondWithAI({
+            messages: messages as {
+              role: "user" | "assistant";
+              content: string;
+            }[],
+            scope: "workspace",
+            document: {
+              title: "Workspace sources",
+              space: "Workspace",
+              state: "source",
+              markdown: context,
+            },
+          });
+          security.audit(current.user.id, "ai.asked", "workspace");
+          return Response.json({ message, citations }, {
+            headers: cors(request),
+          });
+        } catch (error) {
+          console.error("Ask OKF failed", error);
+          return Response.json({ error: "Ask OKF could not answer" }, {
+            status: 503,
+            headers: cors(request),
+          });
+        }
       }
       let document: AIRequest["document"];
       let auditTarget: string;

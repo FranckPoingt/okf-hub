@@ -90,14 +90,19 @@ source issue instead of silently overwriting local knowledge.
 ### Ask OKF
 
 Ask OKF is an optional read-only assistant for hub-native and source-owned
-documents. It answers from the open document only and cannot edit, publish,
+documents. It answers from the open document or, when workspace scope is
+selected, relevant accessible knowledge across sources. It cannot edit, publish,
 approve, or run actions. The same document permission check applies before any
 content is sent to the configured provider; editors may ask about drafts while
 viewers receive published content only.
 
-Asking a question sends the open document content and recent chat messages to
-that provider. Choose and configure a provider that meets your organisation's
-data-handling requirements.
+Open Ask OKF from Search for workspace questions, or switch scope inside a
+document. Workspace answers include links to the retrieved sources. Retrieval
+uses keyword search, so relevant material may be missed; check the sources.
+
+Asking a question sends the selected document or a bounded selection of
+accessible source content and recent chat messages to that provider. Choose and
+configure a provider that meets your organisation's data-handling requirements.
 
 Configure the provider on the server in the ignored `.okf-stack.env` file, then
 restart the app:
