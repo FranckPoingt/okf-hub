@@ -206,6 +206,14 @@ Deno.test("artifact save preserves IDs, revises content, and publishes only on r
       hub.calls.find((call) => call.name === "apps.create")!.input.grants,
       [],
     );
+    // The same save path serves Claude Code and Codex, so it names neither.
+    assert.doesNotMatch(
+      String(
+        hub.calls.find((call) => call.name === "apps.create")!.input
+          .description,
+      ),
+      /Codex|Claude/,
+    );
     assert.equal(
       hub.calls.find((call) => call.name === "documents.create")!.input.intent,
       "working",
