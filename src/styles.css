@@ -2953,6 +2953,29 @@ label {
   margin-inline: 64px;
 }
 
+.canvas-container .knowledge-relationships {
+  margin-inline: 64px;
+}
+
+.relationship-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 12px 10px;
+}
+
+.relationship-details > summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.relationship-details > summary::-webkit-details-marker {
+  display: none;
+}
+
 .canvas-title-input {
   width: 100%;
   border: none !important;
@@ -3171,7 +3194,8 @@ label {
   .canvas-header {
     padding: 36px 22px 8px;
   }
-  .document-governance {
+  .document-governance,
+  .canvas-container .knowledge-relationships {
     margin-inline: 22px;
   }
   .editor-frame {

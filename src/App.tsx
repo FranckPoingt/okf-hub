@@ -2631,14 +2631,6 @@ export default function App() {
                   onOpenChange={setHistoryOpen}
                   onRestore={(number) => void restoreRevision(number)}
                 />
-                {view === "draft" && canEditDocument && (
-                  <KnowledgeDocument
-                    documentId={concept.id}
-                    onOpenHub={showHubConcept}
-                    onOpenImported={openImported}
-                    onOpenSettings={openAISettings}
-                  />
-                )}
                 {actionError && (
                   <p className="action-error" role="alert">{actionError}</p>
                 )}
@@ -2737,6 +2729,12 @@ export default function App() {
                             }}
                           />
                           {documentGovernance}
+                          <KnowledgeDocument
+                            documentId={concept.id}
+                            onOpenHub={showHubConcept}
+                            onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
+                          />
                           <DocumentEditor
                             key={editorVersion}
                             conceptId={concept.id}
