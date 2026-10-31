@@ -1998,6 +1998,20 @@ export function AppPanel(
         )}
       </div>
       {error && <p className="source-error" role="alert">{error}</p>}
+      {state.usage && (
+        <p className="text-sm text-muted-foreground">
+          Reuse: {state.usage.viewers30d} other{" "}
+          {state.usage.viewers30d === 1 ? "person" : "people"} in 30 days (
+          {state.usage.viewersAllTime} all time) · {state.usage.othersSaves}
+          {" "}
+          {state.usage.othersSaves === 1 ? "save" : "saves"} by others ·{" "}
+          {state.usage.lastOpenedAt
+            ? `last opened ${
+              new Date(state.usage.lastOpenedAt).toLocaleDateString()
+            }`
+            : "not opened yet"}
+        </p>
+      )}
       {!apps.length && (
         <Card className="app-empty-state">
           <CardContent>

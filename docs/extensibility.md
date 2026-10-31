@@ -60,8 +60,14 @@ code at runtime.
 ### Apps
 
 Apps replace the former Artifacts product surface while retaining its useful
-implementation: versions, review, owner activation, CSP, iframe isolation,
-OpenFGA checks, and audit history.
+implementation: versions, review, activation by owners and space managers, CSP,
+iframe isolation, OpenFGA checks, and audit history.
+
+Workspace owners and managers of the document's space can activate an App.
+Document editors can draft and revise but cannot activate. Owners assign space
+managers with `PUT` or `DELETE /api/spaces/{spaceId}/managers/{userId}`. A
+manager can also edit documents in that space. Existing stores receive the new
+`manager` relation through a versioned authorization-model migration at startup.
 
 The default no-deploy workflow accepts a folder of static web files with an
 `index.html` entry. The complete folder becomes one reviewed version and is

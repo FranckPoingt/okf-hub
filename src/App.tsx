@@ -1567,6 +1567,7 @@ export default function App() {
                 shared={sharedSource}
                 notion={notionSource}
                 canEdit={Boolean(bootstrap.canEdit)}
+                isOwner={bootstrap.access === "owner"}
                 onOpenConcept={showHubConcept}
                 onOpenImported={openImported}
                 onCreate={() => openNewDocument()}

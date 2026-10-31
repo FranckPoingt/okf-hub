@@ -24,6 +24,9 @@ const SPACE = "policies";
 const IMPORTED_SPACE = "imported";
 export const CONCEPT = "incident-communication";
 
+// Bump when `model` changes; existing stores get a new model version.
+const MODEL_VERSION = 2;
+
 const model = {
   schema_version: "1.1",
   type_definitions: [
@@ -80,11 +83,15 @@ const model = {
       type: "space",
       relations: {
         parent: { this: {} },
+        manager: { this: {} },
         editor: { this: {} },
         viewer: { this: {} },
+        manage: { computedUserset: { relation: "manager" } },
         edit: {
           union: {
-            child: [{ computedUserset: { relation: "editor" } }, {
+            child: [{ computedUserset: { relation: "manager" } }, {
+              computedUserset: { relation: "editor" },
+            }, {
               tupleToUserset: {
                 tupleset: { relation: "parent" },
                 computedUserset: { relation: "edit" },
@@ -94,7 +101,9 @@ const model = {
         },
         view: {
           union: {
-            child: [{ computedUserset: { relation: "editor" } }, {
+            child: [{ computedUserset: { relation: "manager" } }, {
+              computedUserset: { relation: "editor" },
+            }, {
               computedUserset: { relation: "viewer" },
             }, {
               tupleToUserset: {
@@ -108,6 +117,7 @@ const model = {
       metadata: {
         relations: {
           parent: { directly_related_user_types: [{ type: "source" }] },
+          manager: { directly_related_user_types: [{ type: "user" }] },
           editor: {
             directly_related_user_types: [{
               type: "group",
@@ -446,13 +456,14 @@ export async function createSecurity({
       storeId = String(result.id);
       set("openfga_store_id", storeId);
     }
-    if (!modelId) {
+    if (!modelId || Number(get("openfga_model_version") ?? 1) < MODEL_VERSION) {
       const result = await fga(`/stores/${storeId}/authorization-models`, {
         method: "POST",
         body: JSON.stringify(model),
       }) as Row;
       modelId = String(result.authorization_model_id);
       set("openfga_model_id", modelId);
+      set("openfga_model_version", String(MODEL_VERSION));
     }
     return { storeId, modelId };
   }
@@ -472,7 +483,7 @@ export async function createSecurity({
 
   async function checkObject(
     userId: string,
-    relation: "view" | "edit",
+    relation: "view" | "edit" | "manage",
     object: string,
   ) {
     const { storeId, modelId } = await authorization();
@@ -500,7 +511,7 @@ export async function createSecurity({
 
   function checkSpace(
     userId: string,
-    relation: "view" | "edit",
+    relation: "view" | "edit" | "manage",
     spaceId: string,
   ) {
     return checkObject(userId, relation, `space:${spaceId}`);
@@ -669,28 +680,73 @@ export async function createSecurity({
     });
   }
 
+  async function setSpaceManager(
+    spaceId: string,
+    userId: string,
+    enabled: boolean,
+  ) {
+    const key = `space_manager:${spaceId}:${userId}`;
+    const tuple = {
+      user: `user:${userId}`,
+      relation: "manager",
+      object: `space:${spaceId}`,
+    };
+    if (enabled) {
+      await ensureHubSpace(spaceId);
+      await writeTuples([tuple]);
+      set(key, "1");
+    } else {
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          deletes: { tuple_keys: [tuple] },
+          authorization_model_id: modelId,
+        }),
+      });
+      unset(key);
+    }
+  }
+
+  function hasMember(userId: string) {
+    return Boolean(member(userId));
+  }
+
   async function deleteHubSpace(spaceId: string) {
     const viewerTeamId = get("viewer_team_id");
     if (!viewerTeamId) throw new Error("Finish organization setup first");
+    const prefix = `space_manager:${spaceId}:`;
+    const managers = db.prepare(
+      "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ?",
+    ).all(prefix.length, prefix) as Row[];
     const { storeId, modelId } = await authorization();
     await fga(`/stores/${storeId}/write`, {
       method: "POST",
       body: JSON.stringify({
         deletes: {
-          tuple_keys: [{
-            user: `source:${SOURCE}`,
-            relation: "parent",
-            object: `space:${spaceId}`,
-          }, {
-            user: `group:${viewerTeamId}#member`,
-            relation: "viewer",
-            object: `space:${spaceId}`,
-          }],
+          tuple_keys: [
+            {
+              user: `source:${SOURCE}`,
+              relation: "parent",
+              object: `space:${spaceId}`,
+            },
+            {
+              user: `group:${viewerTeamId}#member`,
+              relation: "viewer",
+              object: `space:${spaceId}`,
+            },
+            ...managers.map((row) => ({
+              user: `user:${String(row.key).slice(prefix.length)}`,
+              relation: "manager",
+              object: `space:${spaceId}`,
+            })),
+          ],
         },
         authorization_model_id: modelId,
       }),
     });
     unset(`openfga_hub_space:${spaceId}`);
+    for (const row of managers) unset(String(row.key));
   }
 
   async function ensureImportedConcept(sourceId: string, conceptId: string) {
@@ -1200,6 +1256,8 @@ export async function createSecurity({
     checkSpace,
     handle,
     isOwner,
+    hasMember,
+    setSpaceManager,
     audit,
     activity,
     ensureHubSpace,

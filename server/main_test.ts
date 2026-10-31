@@ -69,8 +69,12 @@ function fakeOpenFga() {
           (tuple.object === viewedSpace || tuple.object === parentSource) &&
           memberOf(tuple.user)
         );
+      const manager = Boolean(viewedSpace) &&
+        has({ user, relation: "manager", object: viewedSpace });
       return Response.json({
-        allowed: owner || editor || (relation === "view" && viewer),
+        allowed: relation === "manage"
+          ? manager
+          : owner || editor || manager || (relation === "view" && viewer),
       });
     }
     return new Response("Not found", { status: 404 });
@@ -3053,6 +3057,207 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       /^attachment; filename="okf-workspace-\d{4}-\d{2}-\d{2}\.zip"$/,
     );
   } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
+Deno.test("lets space managers activate Apps and reports reuse by others", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const folder = `${dataDir}/artifact`;
+  await Deno.mkdir(folder);
+  await Deno.writeTextFile(`${folder}/index.html`, "<p>Reusable</p>");
+  await Deno.writeTextFile(`${folder}/context.md`, "# Reusable\n\nContext.\n");
+  const fga = fakeOpenFga();
+  const objects = new Map<string, string>();
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "artifact-reuse-test-secret-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    objectStore: {
+      put(key, markdown) {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get(key) {
+        return objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Object not found"));
+      },
+      remove(key) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    automationIntervalMs: 0,
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const clients = {
+    editor: new Client(base),
+    manager: new Client(base),
+    otherManager: new Client(base),
+    viewer: new Client(base),
+  };
+  const previousToken = Deno.env.get("OKF_HUB_TOKEN");
+  try {
+    await owner.signUp("Owner", "reuse-owner@example.com");
+    assert.equal(
+      (await owner.request("/api/setup", {
+        method: "POST",
+        body: JSON.stringify({ name: "Reuse", tagline: "Reuse" }),
+      })).status,
+      200,
+    );
+    const userIds: Record<string, string> = {};
+    for (const [name, client] of Object.entries(clients)) {
+      const email = `reuse-${name}@example.com`;
+      const invitation = await owner.request("/api/invitations", {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          access: name === "editor" ? "editor" : "viewer",
+        }),
+      });
+      const invitationId = (await invitation.json()).id;
+      await client.signUp(name, email, invitationId);
+      await client.request("/api/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ invitationId }),
+      });
+      userIds[name] =
+        (await (await client.request("/api/auth/get-session")).json()).user.id;
+    }
+    const createSpace = async (name: string) =>
+      (await (await owner.request("/api/spaces", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      })).json()).id as string;
+    const spaceA = await createSpace("Space A");
+    const spaceB = await createSpace("Space B");
+    const setManager = (space: string, user: string, method = "PUT") =>
+      owner.request(`/api/spaces/${space}/managers/${userIds[user]}`, {
+        method,
+      });
+    assert.equal(
+      (await clients.editor.request(
+        `/api/spaces/${spaceA}/managers/${userIds.manager}`,
+        { method: "PUT" },
+      )).status,
+      403,
+    );
+    assert.equal((await setManager(spaceA, "manager")).status, 204);
+    assert.equal((await setManager(spaceB, "otherManager")).status, 204);
+
+    const document = await (await owner.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({ spaceId: spaceA, title: "Plain", type: "Guide" }),
+    })).json();
+    const created = await clients.editor.request("/api/apps", {
+      method: "POST",
+      body: JSON.stringify({
+        conceptId: document.id,
+        title: "Calculator",
+        type: "inline_html",
+        content: "<p>Hi</p>",
+      }),
+    });
+    assert.equal(created.status, 201);
+    const appId = (await created.json()).id as string;
+    const activate = async (client: Client) =>
+      (await client.request(`/api/apps/${appId}/activate`, { method: "POST" }))
+        .status;
+    const canPublish = async (client: Client) =>
+      (await (await client.request(`/api/apps?conceptId=${document.id}`))
+        .json()).canPublish;
+    assert.equal(await activate(clients.editor), 403);
+    assert.equal(await activate(clients.viewer), 404);
+    assert.equal(await activate(clients.otherManager), 404);
+    assert.equal(await canPublish(clients.editor), false);
+    assert.equal(await canPublish(clients.manager), true);
+    assert.equal(await activate(clients.manager), 200);
+    assert.equal(await activate(owner), 200);
+    assert.equal(await canPublish(owner), true);
+    assert.equal((await setManager(spaceA, "manager", "DELETE")).status, 204);
+    assert.equal(await activate(clients.manager), 404);
+
+    // A manager of the artifact's own space is not enough elsewhere.
+    assert.equal((await setManager(spaceB, "manager")).status, 204);
+    assert.equal(await activate(clients.manager), 404);
+
+    const key = await owner.request("/api/developer/keys", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Reuse test",
+        scopes: [
+          "spaces.list",
+          "documents.create",
+          "documents.get",
+          "documents.update-draft",
+          "documents.publish",
+          "documents.trace.create",
+          "apps.list",
+          "apps.create",
+          "apps.revise",
+          "apps.activate",
+        ],
+      }),
+    });
+    Deno.env.set("OKF_HUB_TOKEN", (await key.json()).token);
+    const saved = await saveArtifact({
+      folder,
+      hubUrl: base,
+      spaceId: spaceA,
+      title: "Reusable artifact",
+      publish: true,
+    });
+    const file = `/api/apps/${saved.appId}/files/index.html`;
+    const usageOf = async (client: Client) =>
+      (await (await client.request(`/api/apps?conceptId=${saved.documentId}`))
+        .json()).usage;
+    assert.equal((await owner.request(file)).status, 200);
+    assert.equal((await usageOf(owner)).viewers30d, 0);
+    assert.equal(
+      (await (await owner.request("/api/artifact-usage")).json()).reused.length,
+      0,
+    );
+    assert.equal((await clients.viewer.request(file)).status, 200);
+    assert.equal((await clients.viewer.request(file)).status, 200);
+    assert.equal((await clients.editor.request(file)).status, 200);
+    const usage = await usageOf(owner);
+    assert.equal(usage.viewers30d, 2);
+    assert.equal(usage.viewersAllTime, 2);
+    assert.ok(usage.lastOpenedAt);
+    assert.equal(JSON.stringify(usage).includes(userIds.viewer), false);
+    assert.equal((await usageOf(clients.editor)).viewers30d, 2);
+    const viewerState = await (await clients.viewer.request(
+      `/api/apps?conceptId=${saved.documentId}`,
+    ))
+      .json();
+    assert.equal(viewerState.usage, undefined);
+    const summary = await (await owner.request("/api/artifact-usage")).json();
+    assert.deepEqual(summary.reused, [{
+      id: saved.documentId,
+      title: "Reusable artifact",
+      viewers: 2,
+    }]);
+    assert.equal(
+      (await clients.editor.request("/api/artifact-usage")).status,
+      403,
+    );
+    assert.equal(
+      (await clients.manager.request("/api/artifact-usage")).status,
+      403,
+    );
+  } finally {
+    if (previousToken === undefined) Deno.env.delete("OKF_HUB_TOKEN");
+    else Deno.env.set("OKF_HUB_TOKEN", previousToken);
     await server.shutdown();
     await app.close();
     await fga.server.shutdown();
