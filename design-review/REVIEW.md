@@ -61,8 +61,8 @@ the legacy CSS.
      "Also defined in" conflict with the hub's _Service level objective_.
    - **Users:** owner (Dana), editor (Marcus) and viewer (Priya).
 2. **Capture.** `design-review/tools/shoot.mjs` uses Playwright/Chromium.
-   - The app has no theme switch, so dark mode is captured by adding `.dark` to
-     `<html>`.
+   - Dark mode is captured by setting the browser color scheme; the app follows
+     `prefers-color-scheme` by default.
    - The first-run setup screen is captured by mocking `/api/bootstrap`, so the
      same script works against a seeded stack.
 3. **Measure.** Ad-hoc Playwright audits (not committed) cover 13 key pages in
@@ -251,13 +251,13 @@ Ranked by impact, with the reason each was left.
    badge in the header, and the "Depends on services/billing-api.md: described
    code changed…" explanation needs a hover or focus. An inline alert would be
    clearer, but it is a new UI element, so it is out of scope for a polish pass.
-4. **Dark mode is not reachable.** Nothing sets `.dark`: there is no toggle and
-   no `prefers-color-scheme`. Dark mode is now ready to switch on, but adding
-   the switch is a feature.
+4. ~~**Dark mode is not reachable.**~~ Fixed: the app follows the system color
+   scheme, with a Light/Dark/System choice in the profile menu.
 5. **The editor normalizes API-created documents.** A leading `# Title` that
    matches the title field is stripped on open and saved as a draft change, so
    documents created through the API or MCP gain unexplained "Draft changes"
-   when someone opens them. This is behavior; reported, not changed.
+   when someone opens them. ~~This is behavior; reported, not changed.~~ Fixed:
+   the editor reports its post-load Markdown as the saved baseline.
 6. **Legacy CSS debt.** `styles.css` still has roughly 30 rules for class names
    no longer used in `src`, plus `!important` overrides that re-assert shadcn
    button variants over legacy page selectors. Deleting rules without per-class

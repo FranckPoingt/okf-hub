@@ -146,14 +146,7 @@ async function context(user, viewport, dark) {
     colorScheme: dark ? "dark" : "light",
     storageState: user ? sessions[user] : undefined,
   });
-  // The app has no theme switch; dark mode is the `.dark` class on <html>.
-  if (dark) {
-    await ctx.addInitScript(() => {
-      document.addEventListener("DOMContentLoaded", () => {
-        document.documentElement.classList.add("dark");
-      });
-    });
-  }
+  // Dark mode follows the browser color scheme set above.
   return ctx;
 }
 
