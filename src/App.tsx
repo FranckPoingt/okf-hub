@@ -52,6 +52,7 @@ import {
   WorkspaceSettings,
 } from "./components/workspace-settings.tsx";
 import { Badge } from "./components/ui/badge.tsx";
+import { TrustBadge } from "./components/trust-badge.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { Label } from "./components/ui/label.tsx";
@@ -1491,6 +1492,8 @@ export default function App() {
                   mode={documentMode}
                   revisionCount={concept.revisions.length}
                   status={concept.status}
+                  trust={concept.trust}
+                  trustReason={concept.trustReason}
                   surface={surface}
                   view={view}
                   width={documentWidth}
@@ -1682,6 +1685,16 @@ export default function App() {
                   <div className="imported-document-primary">
                     <div className="imported-document-location">
                       <Badge variant="outline">{imported.type}</Badge>
+                      <TrustBadge
+                        trust={imported.stale ? "stale" : "current"}
+                        reason={imported.stale
+                          ? `Described code changed in ${
+                            imported.stale.from.slice(0, 7)
+                          }..${imported.stale.to.slice(0, 7)}: ${
+                            imported.stale.paths.join(", ")
+                          }`
+                          : undefined}
+                      />
                       <span>
                         <FolderOpen /> {importedFolder}
                       </span>
@@ -1724,6 +1737,14 @@ export default function App() {
                       <code>{imported.sourceRevision.slice(0, 12)}</code>
                     </span>
                     <span>{imported.revisionCount} imported revisions</span>
+                    {imported.owner && <span>Owner {imported.owner}</span>}
+                    {imported.describedOwners?.length
+                      ? (
+                        <span title={imported.describes?.join(", ")}>
+                          Code owners {imported.describedOwners.join(" ")}
+                        </span>
+                      )
+                      : null}
                     <span>
                       Synced {new Date(imported.importedAt).toLocaleString()}
                     </span>

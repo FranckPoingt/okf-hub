@@ -86,6 +86,8 @@ export type Concept = {
   activity: ActivityEvent[];
   workTraces: WorkTrace[];
   openCommentCount: number;
+  trust?: Trust;
+  trustReason?: string;
 };
 export type CommentMessage = {
   id: string;
@@ -201,17 +203,22 @@ export type ImportedConcept = {
   importedAt: string;
   tags: string[];
   owner: string;
+  describes?: string[];
+  describedOwners?: string[];
+  stale?: { from: string; to: string; paths: string[] } | null;
   markdown?: string;
   revisionCount?: number;
   source?: RepositorySource | SharedSource | NotionSource;
 };
+export type Trust = "current" | "stale" | "sync_failed";
 export type SearchRelationship = {
   id: string;
   kind: "hub-native" | "imported";
   sourceId: string;
   title: string;
   path?: string;
-  trust: "current" | "sync_failed";
+  trust: Trust;
+  trustReason?: string;
   sourceLabel: string;
 };
 export type SearchResult = SearchRelationship & {

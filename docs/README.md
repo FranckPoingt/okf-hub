@@ -108,6 +108,38 @@ permission, and conflict rules in
 Conflicts use a cheap lexical comparison and can miss semantic disagreements or
 flag harmless rewording. A missing or inaccessible link displays only its label.
 
+### Freshness and ownership
+
+A Git-imported concept can declare the code it explains with the `describes:`
+extension field, a list of repository-relative globs:
+
+```yaml
+---
+type: Guide
+title: Billing rules
+describes: [src/billing/**, db/migrations/*billing*.sql]
+---
+```
+
+On every successful sync (webhook, manual, or scheduled), the hub compares the
+previously imported revision with the new one. If a described path changed and
+the concept file did not, the concept is marked **stale**; the badge tooltip
+shows the commit range and up to ten changed paths. Publishing an update to the
+concept file clears it. A failed sync, a first import, or a missing previous
+revision never marks anything stale.
+
+Each sync also reads the repository's `CODEOWNERS` (`.github/`, the root, then
+`docs/`, as GitHub does; the last matching rule wins). A concept without an
+`owner` field takes the owners of its own file, and a concept with `describes:`
+also lists the code owners of the described paths.
+
+Hub documents, especially Artifacts, can list the concepts they were built from
+in `sources:` frontmatter, using a hub document id or `/knowledge/<id>` link, an
+imported concept id, or an imported path such as `billing.md`. When any of them
+is stale, archived, or deleted, the dependent document shows **stale: depends on
+…** in its view and in search. Other `sources:` entries, such as external URLs,
+are kept as citations and are not tracked.
+
 ### Ask OKF
 
 Ask OKF is an optional read-only assistant for hub-native and source-owned

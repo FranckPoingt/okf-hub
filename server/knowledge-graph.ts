@@ -8,7 +8,8 @@ export type GraphDocument = LinkDocument & {
   title: string;
   type: string;
   sourceLabel: string;
-  trust: "current" | "sync_failed";
+  trust: "current" | "stale" | "sync_failed";
+  trustReason?: string;
   stableId?: string;
   body?: string;
   linkHrefs: string[];
@@ -77,6 +78,7 @@ function relationship(item: GraphDocument) {
     title: item.title,
     path: item.path,
     trust: item.trust,
+    trustReason: item.trustReason,
     sourceLabel: item.sourceLabel,
   };
 }
