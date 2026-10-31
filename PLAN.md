@@ -98,6 +98,7 @@ documents inherit that access through the source's imported space.
 | Editor candidate          | Milkdown, with CommonMark + GFM and collaborative CRDT support                                          |
 | Live collaboration        | CRDT document state over WebSockets; Markdown is generated at checkpoint/publish time                   |
 | Search                    | Permission-filtered lexical search first; semantic search later                                         |
+| AI (optional)             | Server-configured Ax provider; Ask OKF, repository OKF drafting, and definition comparison; advisory    |
 | Extensibility             | Typed knowledge actions projected to HTTP/OpenAPI and sandboxed Apps; scoped API keys                   |
 
 ### Storage and source contract
@@ -150,25 +151,39 @@ Arbitrary generated server code remains deferred until it can run in a separate
 resource-limited runtime with capability grants, logs, review, and rollback. See
 [docs/extensibility.md](docs/extensibility.md).
 
-## Explicitly out of scope for the first release
+## Scope
+
+Originally out of scope for the first release and still not built:
 
 - Managed cloud hosting and multi-region operation.
-- Enterprise SSO/SCIM and WorkOS integration.
+- SCIM and WorkOS integration (KH-11).
 - Azure Blob Storage adapter.
-- Semantic/vector search and AI answers.
+- Semantic/vector search.
 - Native desktop packaging and full mobile authoring.
-- Arbitrary HTML embeds, generic iframes, or AI-generated mini-apps.
+- Arbitrary HTML embeds, generic iframes, or generated server-side code.
 - A universal ontology editor or a generic connector marketplace.
 - Multi-instance high availability.
 
+Originally out of scope and since shipped, with limits:
+
+- **Self-hosted SSO:** invitation-gated OIDC and SAML through Better Auth
+  ([docs/sso.md](docs/sso.md)). SSO cannot create the first account.
+- **AI answers:** Ask OKF answers from one document or, in workspace scope, from
+  accessible knowledge across sources. It is optional, needs a server-configured
+  provider, retrieves by keyword (so it can miss material), and is read-only.
+- **AI-generated mini-apps:** agents and people can save static artifacts as
+  reviewed, sandboxed Apps with no Hub grants by default. Nothing runs
+  server-side, and activation needs an owner or space manager.
+
 ## Risks and validation gates
 
-| Risk                                             | Gate                                                                                                          |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Rich editor loses Markdown fidelity              | Prove import, visual edit, collaborative edit, publish, and re-import across the supported profile.           |
-| Real-time collaboration complicates self-hosting | Prove two-user CRDT editing, reconnect, snapshot recovery, and Markdown publication in a single-node install. |
-| Source sync is unreliable                        | Prove webhook, retry, rename, deletion, invalid OKF, and source-unavailable behavior.                         |
-| Permission rules leak restricted knowledge       | Prove denial through direct URL, search, graph, previews, automation, and source sync.                        |
+| Risk                                             | Gate                                                                                                              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| Rich editor loses Markdown fidelity              | Prove import, visual edit, collaborative edit, publish, and re-import across the supported profile.               |
+| Real-time collaboration complicates self-hosting | Prove two-user CRDT editing, reconnect, snapshot recovery, and Markdown publication in a single-node install.     |
+| Source sync is unreliable                        | Prove webhook, retry, rename, deletion, invalid OKF, and source-unavailable behavior.                             |
+| Permission rules leak restricted knowledge       | Prove denial through direct URL, search, graph, previews, automation, and source sync.                            |
+| Teams do not reuse saved artifacts               | Unproven. Second-use metrics (people other than the creator opening or saving) exist to test it with a real team. |
 
 ## Backlog
 
@@ -305,23 +320,27 @@ verification. `AFK` means it can be implemented without a product decision;
 - **Type:** AFK
 - **Blocked by:** KH-06, KH-09
 - **Status:** Source checks, bounded retries, job history, and broken-link
-  proposals delivered; stale-review tasks remain deferred with KH-06.
+  proposals delivered. Staleness from changed code (`describes:`) and
+  dependencies (`sources:`) is now computed on sync (see Later passes);
+  scheduled stale-review tasks remain deferred with KH-06.
 - **What to build:** Scheduled source checks, broken-link detection,
   stale-review tasks, and a review queue.
 - **Acceptance criteria:**
   - [x] A source failure does not mark unrelated sources failed.
   - [x] Automatic work is retry-bounded and observable.
-- [x] Automation proposes actions and never silently rewrites a published
-      concept.
-- [x] Operators can inspect jobs, failures, and retry history.
-- [x] Operators can configure the scheduled cadence independently per source.
+  - [x] Automation proposes actions and never silently rewrites a published
+        concept.
+  - [x] Operators can inspect jobs, failures, and retry history.
+  - [x] Operators can configure the scheduled cadence independently per source.
 
 #### KH-11 — Add an optional enterprise identity connector
 
 - **Type:** HITL
 - **Blocked by:** KH-04
 - **Status:** Deferred by product choice; self-hosted Better Auth is sufficient
-  for now.
+  for now. Self-hosted OIDC and SAML SSO shipped separately
+  ([docs/sso.md](docs/sso.md)); this item is the WorkOS and directory-sync
+  connector.
 - **What to build:** A WorkOS-backed SSO and directory-sync adapter that maps
   identity-provider groups into existing OpenFGA relationships.
 - **Acceptance criteria:**
@@ -334,9 +353,10 @@ verification. `AFK` means it can be implemented without a product decision;
 
 - **Type:** HITL
 - **Blocked by:** KH-06, KH-09
-- **Status:** Delivered foundation: action catalog, OpenAPI, scoped keys,
-  connector registry, reviewed static-file bundles, App grants, isolated data,
-  and owner activation.
+- **Status:** Delivered foundation: action catalog, OpenAPI, MCP, scoped keys,
+  connector registry, reviewed static-file bundles (including ES modules served
+  through capability URLs), App grants, isolated data, and activation by owners
+  and space managers.
 - **What to build:** Typed, reviewed Apps attached to concepts and backed by the
   same permission-filtered operations exposed to integrations.
 - **Acceptance criteria:**
@@ -534,7 +554,9 @@ identity (KH-11) remains deferred until a deployment needs SSO or directory
 sync. The first Prismatic-derived source slice adds read-only Notion pages
 without the Prismatic runtime. A shared connector catalog now drives enablement,
 setup fields, and import/embed capabilities; arbitrary runtime plugins, OAuth,
-and additional workspaces remain deferred until needed.
+and additional workspaces remain deferred until needed. Later passes (artifacts,
+MCP, cross-source knowledge, freshness, source access, and operator recovery)
+are summarized at the end of this document.
 
 ## Product UX improvement pass
 
@@ -574,9 +596,9 @@ separate reader browser session was not validated. Browser AI responses were
 simulated; no live provider or production deployment was validated.
 
 The ownership and freshness pass below extends KH-06 with document
-responsibility and revision reviews. Approval gates and wider agent retrieval
-should follow a concrete team workflow; the current Ask surface answers from one
-document.
+responsibility and revision reviews. Approval gates should follow a concrete
+team workflow. Ask OKF at this point answered from one document; later passes
+added workspace-wide retrieval (see Later passes).
 
 ## Ownership and freshness pass
 
@@ -606,3 +628,41 @@ history annotations, metadata save failure/retry and navigation protection,
 delayed title responses preserving newer ownership, discovery filters, and the
 390px layout. Reader privacy is covered by permission regression tests; a
 separate reader browser session and production deployment were not validated.
+
+## Later passes
+
+Implemented for review after v0.1.0 (see the [changelog](CHANGELOG.md)). These
+are built and covered by automated tests; none has been validated with a team in
+production.
+
+- **Artifact loop.** Static artifacts with a required `context.md` save from the
+  CLI, MCP (`artifact.save`), or a space upload, with optional CDN vendoring on
+  the saving machine. An artifact-first view and a permission-filtered gallery
+  open the creation directly. Second-use metrics count people other than the
+  creator. Whether teams actually reuse artifacts, and whether reuse improves
+  later work, is still a hypothesis these metrics exist to test.
+- **MCP and agent instructions.** Scoped Developer API keys read accessible
+  knowledge and save artifacts over stateless Streamable HTTP at `/api/mcp`. A
+  Claude Code skill and a Codex `AGENTS.md` snippet in `integrations/` teach
+  agents when and how to save.
+- **Knowledge across sources.** `okf://` links, shared `id`s, and type and title
+  matching connect definitions across sources; a lexical heuristic flags
+  possible conflicts, and an optional AI comparison explains them. Nothing is
+  merged automatically.
+- **Knowledge freshness.** `describes:` globs and `CODEOWNERS` mark imported Git
+  concepts stale when described code changes; `sources:` dependencies make hub
+  documents, especially Artifacts, stale when what they depend on changes. Home
+  Needs attention lists stale documents with their reason.
+- **Changes back to sources.** Editors can suggest a change to an imported Git
+  concept (draft pull request or patch) and can draft an OKF bundle for a
+  repository without one (AI-assisted, reviewed, never merged by the Hub). The
+  GitHub App needs `contents:write`, `pull_requests:write`, and the
+  `pull_request` webhook event.
+- **Access and recovery.** Owners can restrict a source to selected members and
+  groups; space managers can activate Apps; the first account requires a
+  one-time setup link; `deno task admin` and `OKF_BOOTSTRAP_OWNER_EMAIL` let the
+  host operator recover owner access.
+
+Not done: publication approval gates (KH-06), WorkOS and directory sync (KH-11),
+semantic search, executable server-side extensions, and any evidence that teams
+reuse and improve artifacts.

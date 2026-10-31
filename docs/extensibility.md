@@ -33,10 +33,10 @@ regardless of caller.
 
 ### Developer authentication
 
-Users create scoped API keys from **Developer API** in the profile menu. Keys
-use 256-bit random values, are stored only as SHA-256 hashes, are shown once,
-and may be revoked. A key scope is an action name or wildcard such as
-`knowledge.*`.
+Every member creates scoped API keys from **Developer API** in the profile menu;
+a key never exceeds its user's access. Keys use 256-bit random values, are
+stored only as SHA-256 hashes, are shown once, and may be revoked. A key scope
+is an action name or wildcard such as `knowledge.*`.
 
 ```sh
 curl -X POST https://hub.example/api/v1/actions/knowledge.search \
@@ -62,7 +62,10 @@ code at runtime.
 
 Apps replace the former Artifacts product surface while retaining its useful
 implementation: versions, review, activation by owners and space managers, CSP,
-iframe isolation, OpenFGA checks, and audit history.
+iframe isolation, OpenFGA checks, and audit history. "Artifact" now names a
+document of type `Artifact` that carries a static App and its `context.md`; the
+Hub opens it App-first and lists permitted ones in the **Artifacts** gallery
+(see [Save a Codex artifact](codex-artifacts.md)).
 
 Workspace owners and managers of the document's space can activate an App.
 Document editors can draft and revise but cannot activate. Owners assign space

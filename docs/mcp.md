@@ -44,8 +44,9 @@ apps.revise
 ```
 
 Retain the read scopes above. Add `documents.publish` and `apps.activate` only
-if publication is wanted; App activation still requires workspace owner access.
-Other catalog tools are exposed only when their scopes permit them.
+if publication is wanted; App activation still requires the key's user to be a
+workspace owner or a manager of the document's space. Other catalog tools are
+exposed only when their scopes permit them.
 
 ## Claude Code
 
@@ -91,7 +92,7 @@ Call `artifact.save` with arguments like:
   "spaceId": "policies",
   "files": {
     "index.html": "<!doctype html><h1>Team dashboard</h1>",
-    "context.md": "# Team dashboard\n\nOwner: Operations.\nSources: Hub policy IDs.\nAssumptions, inputs, outputs, limitations, and update triggers."
+    "context.md": "# Team dashboard\n\nOwner: <named person or team>.\nSources: <Hub concept IDs, or none>.\nAssumptions, inputs, outputs, limitations, and update triggers."
   }
 }
 ```

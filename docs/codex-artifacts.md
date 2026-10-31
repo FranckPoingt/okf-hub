@@ -164,8 +164,10 @@ You can use `--space-id` instead of an exact space name, and `--hub` instead of
 The command creates a working `Artifact` knowledge document, saves `context.md`
 as its draft, attaches the static App with no granted Hub capabilities, and
 records an immutable outcome trace with the bundle hash. It prints the knowledge
-document's URL. Open that URL and select **Apps** to use the artifact; the
-context document is also available through ordinary Hub search.
+document's URL. Open that URL: as an editor you see the draft App full-bleed,
+with **View context** for the document and **Open as document** to edit it.
+Readers see the App once it is activated, and the context document is also
+available through ordinary Hub search and the **Artifacts** gallery.
 
 Saving defaults to a draft. To publish the context and activate the App:
 
@@ -226,9 +228,9 @@ The explanation also runs inside the Hub's actual static App sandbox.
 This demonstrates the retention workflow with disposable test users and storage.
 It does not establish that a team will reuse the artifact or that reuse will
 improve its work. The next product experiment should test that second use. The
-current Hub still opens the document first and places the creation behind
-**Apps**; an artifact-oriented experience should let people open the useful
-creation directly and consult its context when needed.
+Hub now opens an `Artifact` document's App directly (see the **Artifacts**
+gallery and **View context**), but that view has not been tested with a real
+team.
 
 ## Measure second use
 

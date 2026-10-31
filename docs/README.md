@@ -37,8 +37,9 @@ product overview and roadmap live in [README.md](../README.md) and
    Notion.
 9. Open **Workspace settings** to manage workspace identity, members, templates,
    connectors, and developer access.
-10. If an AI provider is configured, use **Ask OKF** on any document to ask
-    questions grounded in that document.
+10. If an AI provider is configured, use **Ask OKF** to ask questions grounded
+    in the open document or, from Search, in accessible knowledge across
+    sources.
 
 ## Navigation
 
@@ -260,7 +261,8 @@ Provider credentials are never sent to the browser.
 ### Apps
 
 Apps are separate from the document body. They are sandboxed, versioned tools
-attached to a concept and activated only after review.
+attached to a concept and activated only after review by a workspace owner or a
+manager of the document's space (see [Space managers](#space-managers)).
 
 Apps can call only the actions they are explicitly granted. Their data stays
 isolated from the parent document and from other Apps.

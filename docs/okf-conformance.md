@@ -83,9 +83,9 @@ for concept documents.
 # Current boundary
 
 OKF Hub preserves unknown v0.2 fields and types in imported source-owned
-documents. Version 0.1.0 does not execute or attest `Attested Computation`
-concepts; they remain readable concepts until a reviewed executor and attester
-runtime is added.
+documents. OKF Hub does not execute or attest `Attested Computation` concepts;
+they remain readable concepts until a reviewed executor and attester runtime is
+added.
 
 [^okf-v0-2]: Open Knowledge Format specification v0.2.
 
