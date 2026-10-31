@@ -110,6 +110,12 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(developerPanel, /agent: \{ disabled: true \}/);
   assert.match(developerPanel, /mcp: \{ disabled: true \}/);
   assert.match(developerPanel, /hideSearch: true/);
+  // Viewers manage their own keys from the developer page, not editor-only settings.
+  assert.match(developerPanel, /managingKeys \? <DeveloperSettings \/>/);
+  assert.doesNotMatch(
+    await Deno.readTextFile("src/App.tsx"),
+    /kind === "developer"\) \{\s*if \(!bootstrap\.canEdit\)/,
+  );
   assert.match(bundle, /Workspace identity/);
   assert.match(bundle, /New subdocument/);
   assert.match(bundle, /Document locked/);

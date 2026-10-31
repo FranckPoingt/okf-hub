@@ -136,6 +136,9 @@ function ApiDocumentation() {
 }
 
 export function DeveloperApiDocumentation() {
+  // Keys belong to the signed-in user and never exceed their access, so every
+  // member manages them here rather than in editor-only workspace settings.
+  const [managingKeys, setManagingKeys] = useState(false);
   return (
     <section
       className="developer-api-page"
@@ -144,17 +147,24 @@ export function DeveloperApiDocumentation() {
       <header className="developer-api-heading">
         <div>
           <p className="eyebrow">Developer</p>
-          <h1 id="developer-api-title">API documentation</h1>
-          <p>Explore and test the permission-filtered OKF Hub API.</p>
+          <h1 id="developer-api-title">
+            {managingKeys ? "API keys" : "API documentation"}
+          </h1>
+          <p>
+            {managingKeys
+              ? "Keys act with your own access and can be limited to specific actions."
+              : "Explore and test the permission-filtered OKF Hub API."}
+          </p>
         </div>
-        <a
-          href="/settings/developer"
-          className={buttonVariants({ variant: "outline" })}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setManagingKeys(!managingKeys)}
         >
-          <KeyRound /> Manage API keys
-        </a>
+          <KeyRound /> {managingKeys ? "API documentation" : "Manage API keys"}
+        </Button>
       </header>
-      <ApiDocumentation />
+      {managingKeys ? <DeveloperSettings /> : <ApiDocumentation />}
     </section>
   );
 }

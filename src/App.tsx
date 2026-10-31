@@ -1660,10 +1660,8 @@ export default function App() {
         }
         if (route.kind === "search") return showSearch(false);
         if (route.kind === "sources") return showSources(false);
-        if (route.kind === "developer") {
-          if (!bootstrap.canEdit) return unavailable();
-          return showDeveloper(false);
-        }
+        // API keys are per-user and bounded by the user's own permissions.
+        if (route.kind === "developer") return showDeveloper(false);
         if (route.kind === "space") {
           if (!spaceRouteVersion.split("\0").includes(route.id)) {
             return unavailable();
