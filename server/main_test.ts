@@ -10,7 +10,7 @@ import { saveArtifact } from "../scripts/save-artifact.ts";
 
 type Tuple = { user: string; relation: string; object: string };
 
-function fakeOpenFga() {
+function fakeOpenFga(deny = (_tuple: Tuple) => false) {
   const tuples: Tuple[] = [];
   let receivedModel = false;
   const fetch = async (request: Request) => {
@@ -70,7 +70,8 @@ function fakeOpenFga() {
           memberOf(tuple.user)
         );
       return Response.json({
-        allowed: owner || editor || (relation === "view" && viewer),
+        allowed: !deny({ user, relation, object }) &&
+          (owner || editor || (relation === "view" && viewer)),
       });
     }
     return new Response("Not found", { status: 404 });
@@ -1197,7 +1198,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(firstPublish.status, 200, await firstPublish.text());
     assert.match(
       objects.get("policies/incident-communication/revisions/1.md") ?? "",
-      /^---\ntype: Policy\ntitle: "Incident communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
+      /^---\ntype: Policy\ntitle: "Incident communication"\nid: "incident-communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
     );
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
@@ -3207,6 +3208,209 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       workspaceExport.headers.get("content-disposition") ?? "",
       /^attachment; filename="okf-workspace-\d{4}-\d{2}-\d{2}\.zip"$/,
     );
+  } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
+Deno.test("builds a permission-filtered company graph across published hub, Git, and shared definitions", async () => {
+  const dataDir = await Deno.makeTempDir();
+  let viewerId = "";
+  let includeSecret = false;
+  const fga = fakeOpenFga((tuple) =>
+    tuple.user === `user:${viewerId}` &&
+    tuple.object === "concept:repository/secret"
+  );
+  const objects = new Map<string, string>();
+  const definition =
+    "An active customer placed an order in the last thirty days.";
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "company-graph-test-secret-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    automationIntervalMs: 0,
+    objectStore: {
+      put(key, markdown) {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get(key) {
+        return objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Not found"));
+      },
+      remove(key) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    repositorySync: async () => ({
+      revision: includeSecret ? "two" : "one",
+      files: await Promise.all([
+        inspectOkf(
+          "customer.md",
+          `---\ntype: Glossary\ntitle: Purchasing account\nid: active-customer\n---\n\n${definition}\n\nSee [shared definition](okf://shared/customer.md).`,
+        ),
+        ...(includeSecret
+          ? [
+            inspectOkf(
+              "secret.md",
+              "---\ntype: Metric\ntitle: Hidden definition\nid: active-customer\n---\n\nNever signed in. See [policy](okf://hub/active-customer).",
+            ),
+          ]
+          : []),
+      ]),
+      issues: [],
+    }),
+    sharedSourceSync: async () => ({
+      revision: "shared-one",
+      files: [
+        await inspectOkf(
+          "customer.md",
+          "---\ntype: Glossary\ntitle: Active customer\n---\n\nEvery registered account, even without purchases. See [policy](okf://hub/active-customer).",
+        ),
+      ],
+      issues: [],
+    }),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const viewer = new Client(base);
+  const json = async (
+    client: Client,
+    path: string,
+    body?: unknown,
+    method = "POST",
+  ) => {
+    const response = await client.request(
+      path,
+      body === undefined ? {} : { method, body: JSON.stringify(body) },
+    );
+    assert.ok(response.ok, await response.clone().text());
+    return await response.json();
+  };
+  try {
+    await owner.signUp("Graph owner", "graph-owner@example.com");
+    await json(owner, "/api/setup", {
+      name: "Company graph",
+      tagline: "Shared definitions",
+    });
+    const invitation = await json(owner, "/api/invitations", {
+      email: "graph-reader@example.com",
+      access: "viewer",
+    });
+    await viewer.signUp(
+      "Graph reader",
+      "graph-reader@example.com",
+      invitation.id,
+    );
+    await json(viewer, "/api/invitations/accept", {
+      invitationId: invitation.id,
+    });
+    viewerId = (await json(viewer, "/api/auth/get-session")).user.id;
+    await json(owner, "/api/concepts", {
+      title: "Active customer",
+      type: "Glossary",
+      spaceId: "policies",
+      markdown: definition,
+    });
+    await json(owner, "/api/concepts/active-customer/publish", {
+      markdown:
+        `${definition}\n\nSee [repository definition](okf://repository/customer.md), [hidden definition](okf://repository/secret.md), and [missing](okf://repository/missing.md).`,
+    });
+    await json(owner, "/api/sources/repositories", {
+      repositoryUrl: "https://example.com/company/graph.git",
+      folder: "okf",
+    });
+    await json(owner, "/api/sources/shared", {
+      endpoint: "http://localhost:9000",
+      bucket: "knowledge",
+      path: "okf",
+      region: "us-east-1",
+      accessKey: "test-access",
+      secretKey: "test-secret",
+    });
+    const before = await json(viewer, "/api/search");
+    includeSecret = true;
+    await json(owner, "/api/sources/repositories/repository/refresh", {});
+    const visible = await json(viewer, "/api/search");
+    // A refresh advances visible source provenance; graph/discovery signals
+    // must otherwise be indistinguishable when only hidden content was added.
+    for (const item of before.results) {
+      if (item.sourceId === "repository") item.sourceRevision = "two";
+    }
+    assert.deepEqual(
+      visible,
+      before,
+      "hidden definitions must not affect any discovery signal",
+    );
+    const hub = visible.results.find((item: { id: string }) =>
+      item.id === "active-customer"
+    );
+    assert.deepEqual(hub.links.map((item: { id: string }) => item.id), [
+      "repository/customer",
+    ]);
+    assert.deepEqual(hub.backlinks.map((item: { id: string }) => item.id), [
+      "shared/customer",
+    ]);
+    assert.deepEqual(
+      hub.alsoDefinedIn.map((item: { id: string }) => item.id).sort(),
+      [
+        "repository/customer",
+        "shared/customer",
+      ],
+    );
+    assert.equal(
+      hub.linkTargets["okf://repository/customer.md"],
+      "/imports/repository/customer.md",
+    );
+    assert.equal(hub.linkTargets["okf://repository/secret.md"], undefined);
+    assert.equal(hub.linkTargets["okf://repository/missing.md"], undefined);
+    assert.ok(
+      hub.conflicts.some((item: { id: string }) =>
+        item.id === "shared/customer"
+      ),
+    );
+    assert.equal(hub.canReviewConflicts, false);
+    assert.equal(JSON.stringify(visible).includes("Hidden definition"), false);
+    assert.equal(JSON.stringify(visible).includes('"body"'), false);
+    assert.equal(JSON.stringify(visible).includes('"stableId"'), false);
+    const editorView = await json(owner, "/api/search");
+    const editorHub = editorView.results.find((item: { id: string }) =>
+      item.id === "active-customer"
+    );
+    assert.equal(editorHub.canReviewConflicts, true);
+    assert.ok(
+      editorHub.backlinks.some((item: { id: string }) =>
+        item.id === "repository/secret"
+      ),
+    );
+    assert.ok(
+      editorHub.conflicts.some((item: { id: string }) =>
+        item.id === "repository/secret"
+      ),
+    );
+    const hidden = await viewer.request(
+      "/api/imported?source=repository&path=secret.md",
+    );
+    const missing = await viewer.request(
+      "/api/imported?source=repository&path=missing.md",
+    );
+    assert.equal(hidden.status, 404);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await hidden.json(), await missing.json());
+    const exported = await owner.request(
+      "/api/concepts/active-customer/export",
+    );
+    assert.equal(exported.status, 200);
+    assert.match(await exported.text(), /\nid: "active-customer"\n/);
   } finally {
     await server.shutdown();
     await app.close();
