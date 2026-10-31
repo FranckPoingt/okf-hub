@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
 
@@ -43,7 +44,8 @@ Deno.test("draft routes enforce edit checks, review identity, ZIP approval and s
       },
       audit: (_id: string, event: string) => events.push(event),
     } as unknown as Parameters<typeof createOkfDraftRoutes>[0]["security"];
-    const routes = createOkfDraftRoutes({
+    let db = new DatabaseSync(`${dataDir}/hub.db`);
+    const options = {
       dataDir,
       security,
       repositorySource: () => ({
@@ -69,7 +71,8 @@ Deno.test("draft routes enforce edit checks, review identity, ZIP approval and s
           }),
         );
       },
-    });
+    };
+    let routes = createOkfDraftRoutes({ ...options, db });
     const request = (approve = false, draftId = "") =>
       routes.handle(
         new Request("http://localhost/api/draft", {
@@ -93,6 +96,9 @@ Deno.test("draft routes enforce edit checks, review identity, ZIP approval and s
     allowed = false;
     assert.equal((await request(true, draft.draftId)).status, 403);
     allowed = true;
+    db.close();
+    db = new DatabaseSync(`${dataDir}/hub.db`);
+    routes = createOkfDraftRoutes({ ...options, db });
     const zip = await request(true, draft.draftId);
     assert.equal(zip.status, 200);
     assert.equal(zip.headers.get("content-type"), "application/zip");
@@ -100,6 +106,29 @@ Deno.test("draft routes enforce edit checks, review identity, ZIP approval and s
     assert.equal((await request(true, draft.draftId)).status, 400);
     assert(events.includes("source.okf-drafted"));
     assert(events.includes("source.okf-draft-exported"));
+    const pending = await (await request()).json();
+    db.prepare("UPDATE okf_pending_draft SET createdAt = ? WHERE id = ?")
+      .run(Date.now() - 31 * 60_000, pending.draftId);
+    assert.equal((await request(true, pending.draftId)).status, 400);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM okf_pending_draft").get()!.n,
+      0,
+    );
+    for (let index = 0; index < 32; index++) {
+      db.prepare("INSERT INTO okf_pending_draft VALUES (?, ?, ?, ?, ?, ?)")
+        .run(
+          `cap-${index}`,
+          "editor",
+          "identity",
+          "revision",
+          "{}",
+          Date.now(),
+        );
+    }
+    const beforeCap = aiCalls;
+    assert.equal((await request()).status, 400);
+    assert.equal(aiCalls, beforeCap);
+    db.close();
     configured = false;
     assert.equal((await request()).status, 409);
   } finally {
