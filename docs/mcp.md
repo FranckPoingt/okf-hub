@@ -48,6 +48,38 @@ if publication is wanted; App activation still requires the key's user to be a
 workspace owner or a manager of the document's space. Other catalog tools are
 exposed only when their scopes permit them.
 
+## Tools
+
+Each tool requires its named scope; component scopes and user permissions still
+apply. The same actions are available through HTTP and OpenAPI.
+
+| Tool                      | Purpose                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `knowledge.search`        | Permission-filtered full-text search                                         |
+| `knowledge.ask`           | Workspace answer and numbered citations; listed only with an AI provider     |
+| `knowledge.relationships` | Visible links, backlinks, shared definitions, conflicts, trust and freshness |
+| `documents.get`           | Read permitted context, drafts for editors and published content for readers |
+| `documents.create`        | Create a document                                                            |
+| `documents.update-draft`  | Update an editable draft                                                     |
+| `documents.publish`       | Publish document context                                                     |
+| `documents.trace.create`  | Record an immutable work trace                                               |
+| `artifact.get`            | Pull visible context and App files; also requires `documents.get`            |
+| `artifact.save`           | Save or revise an artifact with context and a trace                          |
+| `apps.list`               | List visible Apps                                                            |
+| `apps.create`             | Create a draft App                                                           |
+| `apps.revise`             | Revise an editable App                                                       |
+| `apps.activate`           | Activate an App as an owner or space manager                                 |
+| `sources.list`            | Inspect accessible sources                                                   |
+| `sources.suggest-change`  | Suggest an imported Git edit via PR, or return a manual-source patch         |
+| `spaces.list`             | List accessible spaces                                                       |
+| `templates.list`          | List reusable templates for editors                                          |
+
+`knowledge.ask` accepts `question` and returns `{answer, citations}` using the
+same workspace retrieval and responder as Ask OKF. `knowledge.relationships`
+accepts a concept `id`. `sources.suggest-change` accepts `sourceId`, `path`,
+`baseRevision`, edited Markdown `body` and `rationale`, with the same validation
+and source editor requirement as the UI. Its result contains `url` or `patch`.
+
 ## Claude Code
 
 Read the key into your shell without putting its value into history (zsh):
@@ -116,9 +148,33 @@ Errors after partial work include a recovery receipt. Retain it and follow its
 pending-stage guidance; document creation with an unknown outcome requires
 recovering the document ID before retrying. A lost MCP response can also lose
 the receipt: find the created document/App in Hub before retrying. Calls without
-a receipt start a new artifact; they are not globally idempotent. Publication
-and activation remain separate operations. See the
+a receipt or explicit target start a new artifact; they are not globally
+idempotent. Publication and activation remain separate operations. See the
 [artifact guide](codex-artifacts.md) for sandbox and portability limits.
+
+## Pull an existing artifact
+
+On a fresh machine, use `artifact.get` with `documentId` (and `appId` when
+multiple Apps exist). It returns `context` using the `documents.get` visibility
+rule, `files` mapping paths to `{type, data}` base64 data URLs, `version`,
+`appId` and `digest` (bundle SHA-256). Editors receive the latest draft files;
+readers receive only activated files. The same 200-file / 8 MiB bundle limit
+applies.
+
+To revise via MCP, pass `documentId` and `appId` together to `artifact.save`
+instead of a receipt; the returned `files` map can be passed directly. The App
+must belong to that editable document. CLI users can pull into a new directory
+and retain the generated receipt:
+
+```sh
+deno task artifact:pull https://hub.example/knowledge/DOCUMENT_ID ./artifact
+deno task artifact:save ./artifact
+```
+
+Use `OKF_HUB_URL` when passing an ID instead of a URL, and `OKF_HUB_TOKEN` with
+`artifact.get` and `documents.get` scopes for pulling. Saving still needs the
+scopes listed above. Pull refuses an existing destination to avoid stale files
+and symlink overwrites. Unchanged pulled bundles reuse the same version.
 
 ## Transport limits
 
@@ -130,3 +186,8 @@ are no sessions, SSE streams, resources, prompts, or server-initiated requests.
 POST requests must accept both `application/json` and `text/event-stream`.
 Request bodies are capped at 9 MiB. Browser Origin headers must match the
 endpoint origin.
+
+Tool results include JSON `structuredContent` as well as legacy text content.
+Stable object results declare `outputSchema`; both advertised protocol versions
+support these fields. Array results are wrapped as `{result: [...]}` in
+structured content while text retains the original JSON.

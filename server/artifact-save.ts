@@ -304,10 +304,29 @@ export function artifactSaveAction(
     tag: "Apps",
     title: "Save static artifact with context",
     description:
-      "Save or revise a static App and its working OKF context. Retain the returned receipt for revisions. Requires artifact.save and the component action scopes. Draft by default; publication requires documents.publish and apps.activate plus owner or space manager access.",
+      "Save or revise a static App and its working OKF context. Retain the returned receipt for revisions, or target an existing documentId and appId. Requires artifact.save and the component action scopes. Draft by default; publication requires documents.publish and apps.activate plus owner or space manager access.",
     mode: "mutation",
     approval: "confirm",
     requiredScopes: ARTIFACT_SAVE_SCOPES,
+    outputSchema: {
+      type: "object",
+      required: [
+        "documentId",
+        "appId",
+        "version",
+        "documentUrl",
+        "published",
+        "receipt",
+      ],
+      properties: {
+        documentId: { type: "string" },
+        appId: { type: "string" },
+        version: { type: "number" },
+        documentUrl: { type: "string" },
+        published: { type: "boolean" },
+        receipt: { type: "object" },
+      },
+    },
     inputSchema: {
       type: "object",
       required: ["files"],
@@ -316,8 +335,10 @@ export function artifactSaveAction(
         files: {
           type: "object",
           description:
-            "Map of relative paths to UTF-8 text or base64 data URLs; must include index.html and non-empty context.md.",
+            "Map of relative paths to UTF-8 text, base64 data URLs, or {type, data} files from artifact.get; must include index.html and non-empty context.md.",
         },
+        documentId: { type: "string" },
+        appId: { type: "string" },
         title: { type: "string", maxLength: 100 },
         space: { type: "string" },
         spaceId: { type: "string" },
@@ -347,12 +368,40 @@ export function artifactSaveAction(
         if (receipt && receipt.hubUrl !== "") {
           throw new Error("Use the receipt returned by this Hub MCP action");
         }
+        if (input.documentId || input.appId) {
+          if (receipt || !input.documentId || !input.appId) {
+            throw new Error("Choose a receipt or both documentId and appId");
+          }
+          const document = await catalog().invoke("documents.get", context, {
+            id: input.documentId,
+          }, context.scopes) as { spaceId: string };
+          const state = await catalog().invoke("apps.list", context, {
+            documentId: input.documentId,
+          }, context.scopes) as { canEdit: boolean; apps: { id: string }[] };
+          if (!state.canEdit) {
+            throw new ActionError("Edit access required", 403);
+          }
+          if (
+            !state.apps.some((app: { id: string }) => app.id === input.appId)
+          ) throw new Error("App does not belong to document");
+          receipt = {
+            version: 1,
+            hubUrl: "",
+            spaceId: document.spaceId,
+            documentId: String(input.documentId),
+            appId: String(input.appId),
+          };
+        }
         const files = input.files as Record<string, unknown>;
         const packed = await packArtifactFiles((function* () {
           for (
             const path of Object.keys(files).sort((a, b) => a.localeCompare(b))
           ) {
-            const value = files[path];
+            const file = files[path];
+            const value =
+              file && typeof file === "object" && !Array.isArray(file)
+                ? (file as Record<string, unknown>).data
+                : file;
             if (typeof value !== "string") {
               throw new Error("File contents must be strings");
             }
@@ -404,6 +453,9 @@ export function artifactSaveAction(
               ? `; retain this receipt to retry: ${JSON.stringify(receipt)}`
               : ""
           }`,
+          error instanceof ActionError || error instanceof HubError
+            ? error.status
+            : 400,
         );
       }
     },

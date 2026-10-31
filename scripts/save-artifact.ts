@@ -69,7 +69,7 @@ export async function packArtifact(
   };
 }
 
-function hubOrigin(value: string) {
+export function hubOrigin(value: string) {
   const url = new URL(value);
   if (
     !["http:", "https:"].includes(url.protocol) || url.username ||

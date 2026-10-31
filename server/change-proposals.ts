@@ -1,3 +1,4 @@
+import { type ActionContext, ActionError } from "./action-catalog.ts";
 /// <reference lib="deno.ns" />
 import type { DatabaseSync } from "node:sqlite";
 import type { GitHubAppClient } from "./github-app.ts";
@@ -222,8 +223,30 @@ export function createChangeProposalRoutes(
         sourceId,
       );
     },
-    async handle(request: Request, sourceId: string) {
-      const current = await security.session(request);
+    async suggest(context: ActionContext, input: Record<string, unknown>) {
+      const response = await this.handle(
+        new Request(baseUrl ?? "http://localhost", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        }),
+        String(input.sourceId ?? ""),
+        { user: { id: context.userId, name: context.userName } },
+      );
+      if (!response.ok) {
+        const body = await response.json();
+        throw new ActionError(body.error, response.status);
+      }
+      return response.headers.get("content-type")?.startsWith("text/x-diff")
+        ? { patch: await response.text() }
+        : await response.json();
+    },
+    async handle(
+      request: Request,
+      sourceId: string,
+      actor?: { user: { id: string; name: string } },
+    ) {
+      const current = actor ?? await security.session(request);
       if (!current) return fail("Sign in required", 401);
       const source = repositorySource(sourceId);
       if (!source) return fail("Repository not found", 404);

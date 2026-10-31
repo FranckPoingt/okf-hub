@@ -135,6 +135,9 @@ export function createMcpHandler(
             title: action.title,
             description: action.description,
             inputSchema: action.inputSchema,
+            ...(action.outputSchema
+              ? { outputSchema: action.outputSchema }
+              : {}),
             annotations: {
               readOnlyHint: action.mode === "query",
               openWorldHint: false,
@@ -161,6 +164,9 @@ export function createMcpHandler(
           );
           return reply(id, {
             content: [{ type: "text", text: JSON.stringify(result) ?? "null" }],
+            structuredContent: record(result)
+              ? result
+              : { result: result ?? null },
           });
         } catch (error) {
           const token = authHeaders.get("authorization")!.slice(7);
@@ -168,6 +174,7 @@ export function createMcpHandler(
             .split(token).join("[redacted]");
           return reply(id, {
             isError: true,
+            structuredContent: { error: text },
             content: [{ type: "text", text }],
           });
         }

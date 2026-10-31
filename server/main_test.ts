@@ -13,6 +13,7 @@ import {
 } from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
 import { parseSSOConfig } from "./sso-config.ts";
+import { pullArtifact } from "../scripts/pull-artifact.ts";
 import { saveArtifact } from "../scripts/save-artifact.ts";
 
 type Tuple = { user: string; relation: string; object: string };
@@ -3569,6 +3570,7 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
   );
   await Deno.writeTextFile(`${folder}/lib.js`, 'export const ready = "yes";');
   await Deno.writeTextFile(`${folder}/context.md`, "# Reusable\n\nContext.\n");
+  await Deno.writeFile(`${folder}/data.png`, new Uint8Array([0, 255, 128, 1]));
   let revokedUserId = "";
   const fga = fakeOpenFga((tuple) => tuple.user === `user:${revokedUserId}`);
   const objects = new Map<string, string>();
@@ -3750,6 +3752,8 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
       body: JSON.stringify({
         name: "Reuse test",
         scopes: [
+          "artifact.get",
+          "artifact.save",
           "spaces.list",
           "documents.create",
           "documents.get",
@@ -3771,6 +3775,107 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
       title: "Reusable artifact",
       publish: true,
     });
+
+    const action = async (
+      client: Client,
+      name: string,
+      input: Record<string, unknown>,
+    ) => {
+      const response = await client.request(`/api/v1/actions/${name}`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      const body = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(body));
+      return body.result;
+    };
+    const initial = await action(clients.viewer, "artifact.get", {
+      documentId: saved.documentId,
+    });
+    assert.equal(initial.version, 1);
+    assert.equal(initial.context.kind, "hub-native");
+    const pulled = `${dataDir}/pulled`;
+    await pullArtifact(`${base}/knowledge/${saved.documentId}`, pulled);
+    assert.deepEqual(
+      await Deno.readFile(`${pulled}/data.png`),
+      new Uint8Array([0, 255, 128, 1]),
+    );
+    const roundTrip = await saveArtifact({ folder: pulled, hubUrl: base });
+    assert.equal(roundTrip.appId, saved.appId);
+    assert.equal(roundTrip.documentId, saved.documentId);
+    assert.equal(roundTrip.version, 1);
+    const changedFiles: Record<string, unknown> = { ...initial.files };
+    const revisionTarget = await action(owner, "artifact.save", {
+      spaceId: spaceA,
+      title: "Revision test",
+      files: changedFiles,
+      publish: true,
+    });
+    changedFiles["index.html"] = "<p>Draft revision</p>";
+    const revised = await action(clients.editor, "artifact.save", {
+      documentId: revisionTarget.documentId,
+      appId: revisionTarget.appId,
+      files: changedFiles,
+    });
+    assert.equal(revised.version, 2);
+    const draft = await action(clients.editor, "artifact.get", {
+      documentId: revisionTarget.documentId,
+    });
+    assert.equal(draft.version, 2);
+    assert.notEqual(draft.digest, initial.digest);
+    const live = await action(clients.viewer, "artifact.get", {
+      documentId: revisionTarget.documentId,
+    });
+    assert.equal(live.version, 1);
+    assert.deepEqual(live.files, initial.files);
+    const deniedSave = await clients.viewer.request(
+      "/api/v1/actions/artifact.save",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          documentId: revisionTarget.documentId,
+          appId: revisionTarget.appId,
+          files: changedFiles,
+        }),
+      },
+    );
+    assert.equal(deniedSave.status, 403);
+    const hiddenArtifact = await action(clients.editor, "artifact.save", {
+      spaceId: spaceA,
+      files: {
+        "index.html": "<p>Hidden</p>",
+        "context.md": "# Hidden artifact",
+      },
+    });
+    assert.equal(
+      (await clients.viewer.request("/api/v1/actions/artifact.get", {
+        method: "POST",
+        body: JSON.stringify({ documentId: hiddenArtifact.documentId }),
+      })).status,
+      404,
+    );
+    const relationships = await action(
+      clients.viewer,
+      "knowledge.relationships",
+      { id: saved.documentId },
+    );
+    assert.ok(Array.isArray(relationships.links));
+    assert.ok(
+      !JSON.stringify(relationships).includes(hiddenArtifact.documentId),
+    );
+    assert.equal(
+      (await clients.viewer.request("/api/v1/actions/knowledge.relationships", {
+        method: "POST",
+        body: JSON.stringify({ id: hiddenArtifact.documentId }),
+      })).status,
+      404,
+    );
+    const listedActions = await (await owner.request("/api/v1/actions")).json();
+    assert.ok(
+      !listedActions.actions.some((action: { name: string }) =>
+        action.name === "knowledge.ask"
+      ),
+    );
     const file = `/api/apps/${saved.appId}/files/index.html`;
     const usageOf = async (client: Client) =>
       (await (await client.request(`/api/apps?conceptId=${saved.documentId}`))
@@ -4068,6 +4173,19 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
         item.id === "repository/secret"
       ),
     );
+    const graphResponse = await viewer.request(
+      "/api/v1/actions/knowledge.relationships",
+      {
+        method: "POST",
+        body: JSON.stringify({ id: "active-customer" }),
+      },
+    );
+    assert.equal(graphResponse.status, 200);
+    const graphResult = (await graphResponse.json()).result;
+    assert.ok(!JSON.stringify(graphResult).includes("repository/secret"));
+    for (const field of ["links", "backlinks", "alsoDefinedIn", "conflicts"]) {
+      assert.deepEqual(graphResult[field], hub[field]);
+    }
     const hidden = await viewer.request(
       "/api/imported?source=repository&path=secret.md",
     );
@@ -4939,6 +5057,17 @@ Deno.test("hybrid Ask OKF uses published evidence for viewers and excludes hidde
       scope: "workspace",
       messages: [{ role: "user", content: "How do I recover access?" }],
     };
+    const asked = await json(viewer, "/api/v1/actions/knowledge.ask", {
+      question: "How do I recover access?",
+    });
+    assert.equal(typeof asked.result.answer, "string");
+    assert.deepEqual(
+      asked.result.citations.map((item: { documentId: string }) =>
+        item.documentId
+      ),
+      [guide.id],
+    );
+    assert.ok(!requests.at(-1)!.document.markdown.includes("SECRET"));
     const answer = await json(viewer, "/api/ai/chat", ask);
     assert.deepEqual(
       answer.citations.map((item: { documentId: string }) => item.documentId),

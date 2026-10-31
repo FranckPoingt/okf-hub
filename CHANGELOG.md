@@ -20,6 +20,14 @@
 
 ### Behavior changes
 
+- Agents can pull artifact context and visible files with `artifact.get` or
+  `deno task artifact:pull`, then revise using a receipt or document/App IDs.
+  Added workspace `knowledge.ask`, permission-filtered
+  `knowledge.relationships`, and `sources.suggest-change` through the shared
+  action catalog. MCP now returns structured JSON alongside legacy text and
+  declares output schemas for stable new results.
+- Added root agent development instructions and a CLAUDE.md pointer.
+
 - **Search ranks by relevance and understands word forms.** Search, Ask OKF and
   MCP `knowledge.search` now use a private SQLite FTS5 index with BM25 ranking
   and stemming ("paying" finds "payment"), with the same permission filtering

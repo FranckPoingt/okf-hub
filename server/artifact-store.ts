@@ -322,6 +322,9 @@ export function createArtifactStore(
   }
 
   return {
+    bundleContent(appId: string, number: number) {
+      return version(appId, number)?.content;
+    },
     allowedHosts,
     list(conceptId: string, canEdit: boolean) {
       return (db.prepare(

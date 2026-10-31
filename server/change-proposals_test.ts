@@ -225,3 +225,31 @@ Deno.test("patches build with write access limited to the data directory", async
     await Deno.remove(data, { recursive: true });
   }
 });
+
+Deno.test("catalog suggestion adapter shares validation, permission checks and patch fallback", async () => {
+  const { routes, db, state } = setup(false);
+  const context = { userId: "u1", userName: "Ada" };
+  const input = {
+    sourceId: "repository",
+    path: "billing.md",
+    baseRevision: "rev1",
+    body: "# Billing\n\nNew.",
+    rationale: "Update",
+  };
+  try {
+    const result = await routes.suggest(context, input);
+    assert.match(result.patch, /diff --git/);
+    await assert.rejects(
+      () => routes.suggest(context, { ...input, baseRevision: "old" }),
+      /source changed/,
+    );
+    await assert.rejects(
+      () => routes.suggest(context, { ...input, rationale: "" }),
+      /rationale/,
+    );
+    state.allowed = false;
+    await assert.rejects(() => routes.suggest(context, input), /editor access/);
+  } finally {
+    db.close();
+  }
+});

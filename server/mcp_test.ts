@@ -83,6 +83,7 @@ Deno.test("MCP negotiates, lists scoped catalog tools and preserves action denia
   const denied = await (await request(
     rpc("tools/call", { name: "knowledge.search", arguments: {} }),
   )).json();
+  assert.deepEqual(denied.result.structuredContent, { error: "Access denied" });
   assert.equal(denied.result.isError, true);
   assert.equal(denied.result.content[0].text, "Access denied");
   assert.equal(
@@ -246,4 +247,49 @@ Deno.test("MCP hides mutation tools from keys whose user can edit nowhere", asyn
     "knowledge.query",
     "knowledge.mutation",
   ]);
+});
+
+Deno.test("MCP returns structured objects and declares stable output schemas in both supported versions", async () => {
+  const schema = { type: "object", properties: { answer: { type: "string" } } };
+  const catalog = createActionCatalog([{
+    name: "knowledge.ask",
+    tag: "Knowledge",
+    title: "Ask",
+    description: "Ask",
+    mode: "query",
+    approval: "none",
+    inputSchema: { type: "object" },
+    outputSchema: schema,
+    run: () => ({ answer: "Answer [1]" }),
+  }]);
+  const handler = createMcpHandler(
+    catalog,
+    () => Promise.resolve(actor),
+    () => Promise.resolve(false),
+  );
+  for (const version of ["2025-06-18", "2025-11-25"]) {
+    const call = async (method: string, params = {}) =>
+      (await handler(
+        new Request("http://localhost/api/mcp", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer okf_test",
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "mcp-protocol-version": version,
+          },
+          body: JSON.stringify(rpc(method, params)),
+        }),
+      )).json();
+    assert.deepEqual(
+      (await call("tools/list")).result.tools[0].outputSchema,
+      schema,
+    );
+    const result = (await call("tools/call", { name: "knowledge.ask" })).result;
+    assert.deepEqual(result.structuredContent, { answer: "Answer [1]" });
+    assert.deepEqual(
+      JSON.parse(result.content[0].text),
+      result.structuredContent,
+    );
+  }
 });

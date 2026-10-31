@@ -1,4 +1,5 @@
 /// <reference lib="deno.ns" />
+import { agentActions } from "./agent-actions.ts";
 
 import { parse as parseYaml } from "@std/yaml";
 
@@ -64,7 +65,7 @@ import {
   type ExportFile,
 } from "./export-archive.ts";
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
-import { retrieveKnowledge, searchTerms } from "./knowledge-retrieval.ts";
+import { createWorkspaceAsk } from "./workspace-ask.ts";
 import { buildKnowledgeGraph, definitionContent } from "./knowledge-graph.ts";
 import { createDefinitionComparison } from "./compare-definitions.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
@@ -3383,8 +3384,41 @@ export async function createCollabApp({
     ) artifactUsage.record(conceptId, userId);
   }
 
+  const askWorkspace = createWorkspaceAsk({
+    respondWithAI,
+    visibleSearchDocuments,
+    searchKnowledge,
+    concept,
+    space,
+    importedConcepts,
+    security,
+    store,
+    withoutFrontmatter,
+    payload,
+    semanticIndex,
+  });
+
   const actionCatalog = createActionCatalog([
     artifactSaveAction(() => actionCatalog),
+    ...agentActions({
+      catalog: () => actionCatalog,
+      appState,
+      readBundle: (appId, version) =>
+        artifactStore.bundleContent(appId, version),
+      relationships: async (userId, id) => {
+        const { documents } = await visibleSearchDocuments(userId, false);
+        const item = documents.find((item) => item.id === id);
+        if (!item) throw new ActionError("Not found", 404);
+        return {
+          ...buildKnowledgeGraph(documents).get(id),
+          trust: item.trust,
+          trustReason: item.trustReason,
+          freshness: item.freshness,
+        };
+      },
+      ask: respondWithAI ? askWorkspace : undefined,
+      suggest: (context, input) => changeProposals.suggest(context, input),
+    }),
     {
       name: "knowledge.search",
       tag: "Knowledge",
@@ -3985,84 +4019,10 @@ export async function createCollabApp({
       }
       if (scope === "workspace") {
         try {
-          const visible = await visibleSearchDocuments(current.user.id, false);
-          const { context, citations } = await retrieveKnowledge(
-            messages.at(-1)!.content,
-            async (query) =>
-              (await searchKnowledge(current.user.id, { query }, visible))
-                .results.map((item) => {
-                  const row = item.kind === "hub-native"
-                    ? concept(item.id)
-                    : null;
-                  return row
-                    ? {
-                      ...item,
-                      sourceLabel: space(row.spaceId)?.name ?? row.spaceId,
-                    }
-                    : item;
-                }),
-            async (item) => {
-              if (!await security.check(current.user.id, "view", item.id)) {
-                return null;
-              }
-              if (item.kind === "imported") {
-                const row = importedConcepts().find((entry) =>
-                  entry.id === item.id
-                );
-                return row
-                  ? withoutFrontmatter(await store.get(row.objectKey))
-                  : null;
-              }
-              const row = concept(item.id);
-              if (!row) return null;
-              const canEdit = await security.check(
-                current.user.id,
-                "edit",
-                row.id,
-              );
-              if (
-                row.status !== "active" || (!canEdit && !row.publishedRevision)
-              ) return null;
-              const doc = await payload(row, Boolean(canEdit), current.user.id);
-              return canEdit ? doc.draft : doc.published;
-            },
-            24_000,
-            semanticIndex
-              ? async (question) => {
-                const visibleById = new Map(
-                  visible.documents.map((item) => [item.id, item]),
-                );
-                return await semanticIndex.search(question, ({ id, state }) => {
-                  const item = visibleById.get(id);
-                  if (!item || state !== searchState(item)) {
-                    return Promise.resolve(null);
-                  }
-                  const row = item.kind === "hub-native" ? concept(id) : null;
-                  return Promise.resolve({
-                    ...item,
-                    sourceLabel: row
-                      ? space(row.spaceId)?.name ?? row.spaceId
-                      : item.sourceLabel,
-                  });
-                });
-              }
-              : undefined,
-            () => searchTerms(respondWithAI, messages as AIMessage[]),
+          const { answer: message, citations } = await askWorkspace(
+            current.user.id,
+            messages as AIMessage[],
           );
-          const message = await respondWithAI({
-            messages: messages as {
-              role: "user" | "assistant";
-              content: string;
-            }[],
-            scope: "workspace",
-            document: {
-              title: "Workspace sources",
-              space: "Workspace",
-              state: "source",
-              markdown: context,
-            },
-          });
-          security.audit(current.user.id, "ai.asked", "workspace");
           return Response.json({ message, citations }, {
             headers: cors(request),
           });

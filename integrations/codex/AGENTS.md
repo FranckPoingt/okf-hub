@@ -51,7 +51,12 @@ anything the user has not asked to keep; saving creates a draft in the Hub.
    again. CLI: the `.okf-artifact.json` receipt in the folder links the save to
    the same document; keep it, and never delete it to dodge an error. MCP: keep
    the `receipt` from the result and pass it back with `files` (it must come
-   from an MCP save, not the CLI). Without a receipt a new artifact is created.
+   from an MCP save, not the CLI). On a fresh machine, call `artifact.get` with
+   `documentId` to fetch context and the visible App files, then save with
+   `documentId` + `appId` instead of a receipt. CLI:
+   `deno task artifact:pull <documentUrl-or-id> <new-dir>`, then edit and run
+   `deno task artifact:save <new-dir>`; pull writes the receipt for you. Without
+   a receipt or explicit target a new artifact is created.
 5. **Report** the Hub URL (CLI prints it; MCP returns a relative `documentUrl`,
    so prefix the origin of the MCP server URL, e.g. from `claude mcp get`).
    State that it is saved as a draft with no Hub capabilities until someone
