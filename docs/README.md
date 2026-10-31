@@ -185,8 +185,8 @@ The Hub never rewrites or merges definitions.
 
 Use `[label](okf://<source-slug>/<concept-path>)` to reference another source,
 or give related concepts the same frontmatter `id` to group them. Matching types
-and normalized titles also group automatically. Read the exact link, ID,
-and permission rules in
+and normalized titles also group automatically. Read the exact link, ID, and
+permission rules in
 [OKF conformance](okf-conformance.md#cross-source-references-and-shared-entities).
 A missing or inaccessible link displays only its label.
 
@@ -541,10 +541,10 @@ The owner-only `GET /api/spaces/:id/managers` endpoint returns
 ## Compare definitions
 
 With an AI provider configured, editors can choose **Compare definitions** in
-the **Also defined in** group or References sheet. Both definitions must still be visible
-to the requesting editor and belong to the same cross-source group. The
-read-only comparison sends up to 12,000 characters per definition (plus bounded
-labels) to the configured provider as untrusted evidence, and returns a short
-explanation of material agreement or disagreement. Shortened input is marked.
-Review the originals: AI output is advisory, never changes a source, and is
-recorded as `knowledge.definitions-compared` in the audit trail.
+the **Also defined in** group or References sheet. Both definitions must still
+be visible to the requesting editor and belong to the same cross-source group.
+The read-only comparison sends up to 12,000 characters per definition (plus
+bounded labels) to the configured provider as untrusted evidence, and returns a
+short explanation of material agreement or disagreement. Shortened input is
+marked. Review the originals: AI output is advisory, never changes a source, and
+is recorded as `knowledge.definitions-compared` in the audit trail.
