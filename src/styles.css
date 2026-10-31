@@ -4525,6 +4525,23 @@ button.artifact-source-link {
   line-height: 1.65;
 }
 
+/* The panel is narrow: headings stay close to body size. */
+.artifact-context-markdown .milkdown .ProseMirror h1,
+.artifact-context-markdown .milkdown .ProseMirror h2 {
+  margin: 1.25rem 0 .5rem;
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.artifact-context-markdown .milkdown .ProseMirror h3,
+.artifact-context-markdown .milkdown .ProseMirror h4,
+.artifact-context-markdown .milkdown .ProseMirror h5,
+.artifact-context-markdown .milkdown .ProseMirror h6 {
+  margin: 1rem 0 .375rem;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
 .artifact-context-empty {
   margin: 0;
   padding: 14px;

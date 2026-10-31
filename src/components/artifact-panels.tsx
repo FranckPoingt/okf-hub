@@ -143,6 +143,12 @@ const sandboxLabel = (grants: number) =>
     ? "Sandboxed · No Hub access"
     : `Sandboxed · ${grants} ${grants === 1 ? "capability" : "capabilities"}`;
 
+/** A description that only repeats the title tells the reader nothing. */
+const distinctDescription = (description: string, title: string) =>
+  description.trim().toLocaleLowerCase() === title.trim().toLocaleLowerCase()
+    ? ""
+    : description;
+
 function ContextPanelBody({
   concept,
   activeApp,
@@ -179,7 +185,9 @@ function ContextPanelBody({
 
   return (
     <div className="artifact-context-body">
-      {description && <p className="artifact-context-summary">{description}</p>}
+      {distinctDescription(description, concept.title) && (
+        <p className="artifact-context-summary">{description}</p>
+      )}
 
       <dl className="artifact-context-dl">
         <div>
