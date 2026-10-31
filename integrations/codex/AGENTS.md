@@ -35,10 +35,13 @@ anything the user has not asked to keep; saving creates a draft in the Hub.
      unverified. Do not invent authority, metrics, or citations; separate
      accepted decisions from hypotheses.
 3. **Save.**
-   - If the `okf-hub` MCP server is connected, call `artifact.save` with
-     `spaceId` (find it with `spaces.list`) and `files` mapping relative paths
-     to UTF-8 text (or base64 data URLs for binaries). If CDN assets are used,
-     the MCP route cannot vendor them: inline or fetch them locally first.
+   - If the Hub MCP server is connected (`okf-hub` in Claude Code, `okf_hub` in
+     Codex), call `artifact.save` with `spaceId` (find it with `spaces.list`; it
+     must be editable, and may be omitted only when you can edit exactly one
+     space) and `files` mapping relative paths to UTF-8 text (or base64 data
+     URLs for binaries). `files` must include `index.html` and a non-empty
+     `context.md`. If CDN assets are used, the MCP route cannot vendor them:
+     inline or fetch them locally first.
    - Otherwise, from the okf-hub repository with `OKF_HUB_TOKEN` and
      `OKF_HUB_URL` set:
      `deno task artifact:save /abs/path/to/folder --space "Space name" --vendor`
@@ -46,14 +49,14 @@ anything the user has not asked to keep; saving creates a draft in the Hub.
    - Never ask the user to paste the API key into chat.
 4. **Revise, don't duplicate.** On later edits, change the same folder and save
    again. CLI: the `.okf-artifact.json` receipt in the folder links the save to
-   the same document; keep it, and never delete it to dodge an error. MCP: pass
-   the `receipt` from the previous result back with `files`. Without a receipt a
-   new artifact is created.
+   the same document; keep it, and never delete it to dodge an error. MCP: keep
+   the `receipt` from the result and pass it back with `files` (it must come
+   from an MCP save, not the CLI). Without a receipt a new artifact is created.
 5. **Report** the Hub URL (CLI prints it; MCP returns a relative `documentUrl`,
-   so prefix the Hub origin). State that it is saved as a draft with no Hub
-   capabilities until someone publishes and activates it in the Hub, unless the
-   user asked for `--publish` / `publish: true` (this needs extra scopes and
-   owner/manager access).
+   so prefix the origin of the MCP server URL, e.g. from `claude mcp get`).
+   State that it is saved as a draft with no Hub capabilities until someone
+   publishes and activates it in the Hub, unless the user asked for `--publish`
+   / `publish: true` (this needs extra scopes and owner/manager access).
 
 ## Checklist
 
@@ -75,10 +78,13 @@ anything the user has not asked to keep; saving creates a draft in the Hub.
 | `Excluded artifact file` / `unsafe filename`                | Remove dotfiles, `node_modules`, credential or key files; rename unsafe paths.                                                                         |
 | `Unsupported static file`                                   | Keep to web assets (html, css, js, json, images, fonts, text).                                                                                         |
 | `Artifact exceeds 8 MiB` / `exceeds 200 files`              | Drop unused files, shrink or compress data and images.                                                                                                 |
-| Remote dependency rejected                                  | CLI: rerun with `--vendor`. MCP: bundle the file locally. Hosts outside the allow-list must be downloaded by hand.                                     |
-| Bare or root module specifier                               | Use relative `./file.js` imports and bundle the dependency.                                                                                            |
-| `Artifact title must be 1–100 characters`                   | Fix the `# heading` in `context.md` or pass `--title`.                                                                                                 |
-| `Choose space or spaceId`                                   | Give a space name or id; list with `spaces.list`.                                                                                                      |
+| `Artifact dependency must be included locally`              | CLI: rerun with `--vendor`. MCP: bundle the file locally. Hosts outside the allow-list must be downloaded by hand.                                     |
+| `ES module dependency must be included locally`             | Bare (`react`) or root (`/app.js`) module specifier: use relative `./file.js` imports and bundle the dependency.                                       |
+| `references must be relative (./file), not root paths`      | Change `src="/app.js"`, `href="/app.css"` or `url(/x.png)` to `./app.js` style paths.                                                                  |
+| `Artifact title must be 1–100 characters`                   | Fix the `# heading` in `context.md`, or pass `--title` (CLI) or `title` (MCP). No heading: the document is named `Artifact`.                           |
+| `Choose space or spaceId`                                   | You passed both `space` and `spaceId`; pass one.                                                                                                       |
+| `Choose exactly one editable space`                         | Pass the `spaceId` of an editable space from `spaces.list`.                                                                                            |
+| `Use the receipt returned by this Hub MCP action`           | The receipt came from the CLI; save without it, or use the receipt of an MCP save.                                                                     |
 | 401/403 or missing `artifact.save` tool                     | The key lacks scopes; see docs/mcp.md. All save scopes are required.                                                                                   |
 | Save failed midway                                          | Rerun the same command; the receipt resumes completed steps. If the document id was lost, find it in the Hub and put it in the receipt's `documentId`. |
 

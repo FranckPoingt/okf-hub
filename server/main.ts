@@ -472,7 +472,7 @@ function markdownHrefs(markdown: string) {
   );
 }
 
-function searchSnippet(
+export function searchSnippet(
   text: string,
   query: string,
   title: string,
@@ -482,8 +482,9 @@ function searchSnippet(
   for (const value of [title, ...metadata].filter(Boolean)) {
     if (body.startsWith(`${value}\n`)) body = body.slice(value.length + 1);
   }
-  let plain = body.replace(/[`*_>#|[\]()~-]/g, " ").replace(/\s+/g, " ")
-    .trim();
+  // Keep link labels only; targets can name documents the reader cannot open.
+  let plain = body.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_>#|[\]()~-]/g, " ").replace(/\s+/g, " ").trim();
   if (plain.toLocaleLowerCase().startsWith(title.toLocaleLowerCase())) {
     plain = plain.slice(title.length).replace(/^[:\s-]+/, "");
   }
@@ -3461,7 +3462,14 @@ export async function createCollabApp({
         if (row.status !== "active") {
           throw new ActionError("Restore the concept first", 409);
         }
-        await saveDraft(id, String(input.markdown ?? ""));
+        const markdown = String(input.markdown ?? "");
+        const previous = (await loadDocument(row)).markdown;
+        await saveDraft(id, markdown);
+        // An editor keeps its own Yjs copy; without a reset it would keep
+        // showing, and later overwrite, the text this call just replaced.
+        if (previous !== documents.get(id)!.markdown) {
+          await resetCollaboration(id, markdown);
+        }
         security.audit(
           context.userId,
           "concept.draft.updated",

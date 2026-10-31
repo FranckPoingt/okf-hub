@@ -117,6 +117,12 @@ export function validateDependencies(files: BundleFile[]) {
       if (ref.target.startsWith("data:") || ref.target.startsWith("#")) {
         continue;
       }
+      // Root paths pass the bundle lookup below but 404 inside the sandbox.
+      if (/^\/(?!\/)/.test(ref.target)) {
+        throw new Error(
+          `Artifact references must be relative (./file), not root paths: ${file.path} (${ref.target})`,
+        );
+      }
       const url = new URL(ref.target, `https://bundle.invalid/${file.path}`);
       if (
         url.origin !== "https://bundle.invalid" ||

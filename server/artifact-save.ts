@@ -220,7 +220,7 @@ export async function savePackedArtifact(
       type: "inline_html",
       content: packed.content,
       description:
-        "Created with Codex; purpose and sources are in the linked knowledge context.",
+        "Saved by an agent; purpose and sources are in the linked knowledge context.",
       grants: [],
     }) as App;
   } else if (app.content !== packed.content) {

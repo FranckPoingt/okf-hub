@@ -21,3 +21,12 @@ Deno.test("save-to-okf-hub skill has frontmatter and existing doc paths", async 
     ]
   ) await Deno.stat(new URL(path, root));
 });
+
+Deno.test("Codex AGENTS.md repeats the Claude Code skill instructions", async () => {
+  const body = async (path: string) =>
+    (await Deno.readTextFile(new URL(path, root))).split("## When to use")[1];
+  assert.equal(
+    await body("integrations/codex/AGENTS.md"),
+    await body("integrations/claude-code/skills/save-to-okf-hub/SKILL.md"),
+  );
+});

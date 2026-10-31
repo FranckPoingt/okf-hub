@@ -209,6 +209,27 @@ Deno.test("App store rejects CDN dependencies on create and revise, including in
         })
       );
     }
+    for (
+      const rooted of [
+        '<script src="/app.js"></script>',
+        '<link rel="stylesheet" href="/app.css">',
+        "<style>p{background:url(/app.png)}</style>",
+      ]
+    ) {
+      assert.throws(
+        () =>
+          store.create({
+            ...base,
+            content: bundleContent([
+              text("index.html", "text/html", rooted),
+              text("app.js", "text/javascript", ""),
+              text("app.css", "text/css", ""),
+              text("app.png", "image/png", ""),
+            ]),
+          }),
+        /relative \(\.\/file\), not root paths/,
+      );
+    }
     const bundled = store.create({
       ...base,
       content: bundleContent([text("index.html", "text/html", "<p>Hi</p>")]),
