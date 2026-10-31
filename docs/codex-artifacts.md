@@ -14,6 +14,9 @@ understand and maintain it. This first workflow supports self-contained static
 web files. It preserves the files you created and uses the existing App review
 and version lifecycle.
 
+Install the [agent instructions](../integrations/README.md) so Claude Code or
+Codex builds the folder and `context.md` and saves it in one step.
+
 ## Prepare the artifact
 
 Ask Codex to create a dedicated artifact folder containing only the files you

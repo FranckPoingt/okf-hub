@@ -79,6 +79,9 @@ See [Codex MCP configuration](https://developers.openai.com/codex/mcp/). Other
 MCP clients can use the same URL with a Bearer header. Clients must support
 custom headers; OAuth-only remote connector setup is not supported.
 
+To have Claude Code or Codex save artifacts without prompting, install the
+[agent instructions](../integrations/README.md).
+
 ## Save and revise an artifact
 
 Call `artifact.save` with arguments like:

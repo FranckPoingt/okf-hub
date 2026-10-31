@@ -95,6 +95,7 @@ prerelease suffix are published as prereleases.
 - [Extensibility model](docs/extensibility.md)
 - [Connect agents with MCP](docs/mcp.md)
 - [Save Codex-created artifacts](docs/codex-artifacts.md)
+- [Agent instructions for saving artifacts](integrations/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
