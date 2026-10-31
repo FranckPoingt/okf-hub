@@ -23,6 +23,7 @@ input and projects actions into:
 - `GET /api/v1/actions` for discovery;
 - `POST /api/v1/actions/:name` for invocation;
 - `GET /api/openapi.json` for OpenAPI 3.1 clients;
+- [MCP Streamable HTTP](mcp.md) at `/api/mcp` for agents;
 - sandboxed Apps through the parent-frame bridge.
 
 The first actions cover knowledge search, template discovery, concept creation,
