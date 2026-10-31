@@ -196,3 +196,38 @@ SSO secrets in `config/private/`, `config/sso.json`, GitHub App keys, and
 - A generic connector marketplace.
 - Arbitrary server-side plugins.
 - Native desktop packaging.
+
+## Draft knowledge for a repository
+
+When a connected repository's selected OKF folder is missing or empty, source
+editors and owners can choose **Draft an OKF bundle** in Sources. Configure the
+server AI provider first; the action is hidden without one. When connecting a
+GitHub repository without an OKF folder, choose `okf` to propose a new folder.
+
+Drafting sends a bounded selection of README files, documentation, ADRs,
+CODEOWNERS, package manifests, and top-level names to that provider. Hidden,
+secret/key/credential paths, symlinks, oversized files, and arbitrary source
+files are excluded. Documentation can still contain sensitive text: review your
+repository documentation and provider data-handling policy before drafting. The
+selection is limited to 32 files, 12 KB per file, 48 KB total, five directory
+levels and 1,000 visited entries. This selection may omit relevant evidence.
+
+Review the file list, rendered Markdown, provenance, and any dropped invalid
+concepts in the Hub. Generated concepts remain drafts and cite the repository
+paths used. Nothing is imported or published by drafting. Drafts expire after 30
+minutes or server restart. Approval applies to the exact reviewed draft.
+
+For GitHub App sources, approval creates a new branch and a **draft pull
+request**. The default branch is never written to. If the base revision has
+changed, regenerate and review the proposal. The App needs repository
+**Contents: Read and write** (`contents:write`) and **Pull requests: Read and
+write** (`pull_requests:write`), in addition to metadata read access and
+existing push webhook subscriptions. Update existing App registrations and
+approve the new permissions on installations. `stack:github` configures
+credentials; it does not modify the GitHub App's permission settings.
+
+For manual HTTPS Git sources, approval downloads a ZIP rooted at the configured
+OKF folder. Submit it through your repository's normal review process. Drafting,
+proposal creation, downloads and failures are recorded in the audit trail.
+GitHub failures after branch creation may leave an unused proposal branch;
+inspect GitHub before retrying. The Hub never merges the proposal.

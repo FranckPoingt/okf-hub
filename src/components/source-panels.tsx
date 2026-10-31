@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { OkfDraftPanel } from "./okf-draft-panel.tsx";
 import { api, SERVICE } from "../lib/api.ts";
 import type {
   Artifact,
@@ -286,8 +287,8 @@ function GitHubConnectPanel({
     const result = await response.json();
     setLoading(false);
     if (!response.ok) return setError(result.error ?? "Folders unavailable");
-    setFolders(result.folders);
-    setFolder(result.folders.includes("okf") ? "okf" : result.folders[0] ?? "");
+    setFolders(Array.from(new Set(["okf", ...result.folders])));
+    setFolder("okf");
   };
 
   if (!config && !error) {
@@ -649,6 +650,10 @@ export function RepositoryPanel(
               onOpen={onOpen}
             />
             <SyncHistory source={source} />
+            <OkfDraftPanel
+              sourceId={source.id}
+              github={source.kind === "github"}
+            />
             {canManage && (
               <details className="source-settings">
                 <summary>

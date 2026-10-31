@@ -22,6 +22,7 @@ import {
 } from "./export-archive.ts";
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
 import { retrieveKnowledge } from "./knowledge-retrieval.ts";
+import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
 import { createObjectStore } from "./object-store.ts";
 import { type NotionSourceConfig, syncNotionSource } from "./notion-source.ts";
 import {
@@ -594,6 +595,16 @@ export async function createCollabApp({
         model: aiModel,
         apiURL: aiURL,
         apiKey: aiAPIKey,
+      })
+      : null);
+  const respondWithDraftAI = aiResponder ??
+    (aiProvider && aiModel
+      ? createAIResponder({
+        provider: aiProvider,
+        model: aiModel,
+        apiURL: aiURL,
+        apiKey: aiAPIKey,
+        maxTokens: 6_000,
       })
       : null);
   const defaultAutomationIntervalMinutes = automationIntervalMs > 0
@@ -1392,11 +1403,24 @@ export async function createCollabApp({
     }
   }
 
+  const okfDraftRoutes = createOkfDraftRoutes({
+    dataDir,
+    security,
+    repositorySource,
+    refreshing: (id) => repositoryRefreshes.has(id),
+    connectorEnabled: () => connectorEnabled("git"),
+    responder: respondWithDraftAI,
+    model: aiModel ?? "configured-model",
+    app: githubApp,
+  });
   const repositoryRefreshes = new Map<string, Promise<void>>();
   function refreshRepository(
     sourceId: string,
     trigger: SourceSyncRow["trigger"] = "manual",
   ) {
+    if (okfDraftRoutes.busy(sourceId)) {
+      return Promise.reject(new Error("Wait for OKF drafting to finish"));
+    }
     const active = repositoryRefreshes.get(sourceId);
     if (active) return active;
     const refresh = syncRepositorySource(sourceId, trigger).finally(() => {
@@ -2489,6 +2513,7 @@ export async function createCollabApp({
     }
     const repositories = [];
     for (const source of repositorySources()) {
+      await security.ensureImportedSource(source.id);
       if (await canViewSource(userId, source.id)) {
         repositories.push(sourcePayload(source.id));
       }
@@ -3670,7 +3695,7 @@ export async function createCollabApp({
           throw new Error("Repository is not available to this installation");
         }
         const folders = await githubApp.folders(installationId, repository);
-        if (!folders.includes(folder)) {
+        if (!folders.includes(folder) && folder !== "okf") {
           throw new Error("Choose a folder from the repository");
         }
         const sourceId = repositorySources().length
@@ -3740,7 +3765,7 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      if (repositoryRefreshes.has(sourceId)) {
+      if (repositoryRefreshes.has(sourceId) || okfDraftRoutes.busy(sourceId)) {
         return Response.json(
           { error: "Wait for repository refresh to finish" },
           {
@@ -3772,6 +3797,12 @@ export async function createCollabApp({
       if (repositoryPath[1] && !existing) {
         return Response.json({ error: "Repository not found" }, {
           status: 404,
+          headers: cors(request),
+        });
+      }
+      if (existing && okfDraftRoutes.busy(existing.id)) {
+        return Response.json({ error: "Wait for OKF drafting to finish" }, {
+          status: 409,
           headers: cors(request),
         });
       }
@@ -3879,6 +3910,19 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+    }
+    const draftPath = url.pathname.match(
+      /^\/api\/sources\/repositories\/([a-z0-9-]+)\/okf-draft(?:\/(approve))?$/,
+    );
+    if (draftPath && ["GET", "POST"].includes(request.method)) {
+      return withCors(
+        await okfDraftRoutes.handle(
+          request,
+          draftPath[1],
+          Boolean(draftPath[2]),
+        ),
+        request,
+      );
     }
     const repositoryRefreshPath = url.pathname.match(
       /^\/api\/sources\/repositories\/([a-z0-9-]+)\/refresh$/,

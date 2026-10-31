@@ -1099,6 +1099,18 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       })).status,
       200,
     );
+    for (
+      const path of [
+        "/api/sources/repositories/repository/okf-draft",
+        "/api/sources/repositories/repository/okf-draft/approve",
+      ]
+    ) {
+      // Existing connected source IDs are checked below after connection; the
+      // unauthenticated boundary applies regardless of source existence.
+      const response = await fetch(`${base}${path}`, { method: "POST" });
+      assert.equal(response.status, 401);
+      await response.body?.cancel();
+    }
     assert.equal(
       (await (await viewer.request("/api/bootstrap")).json()).access,
       "viewer",
@@ -1779,6 +1791,14 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     });
     if (!connected.ok) assert.fail(await connected.text());
     const firstSource = await connected.json();
+    for (const suffix of ["", "/approve"]) {
+      const denied = await viewer.request(
+        `/api/sources/repositories/repository/okf-draft${suffix}`,
+        { method: "POST", body: "{}" },
+      );
+      assert.equal(denied.status, 403);
+      await denied.body?.cancel();
+    }
     assert.equal(firstSource.status, "current");
     assert.equal(firstSource.revision, "commit-one");
     assert.equal(firstSource.conceptCount, 3);
