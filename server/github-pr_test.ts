@@ -145,9 +145,7 @@ Deno.test("failed PR deletes only its created proposal branch and keeps original
       )!.body.ref;
       assert.equal(
         deleted[0].path,
-        `/repos/org/repo/git/refs/heads/${
-          encodeURIComponent(created.replace("refs/heads/", ""))
-        }`,
+        `/repos/org/repo/git/refs/heads/${created.replace("refs/heads/", "")}`,
       );
       assert(!deleted[0].path.endsWith("/main"));
     }

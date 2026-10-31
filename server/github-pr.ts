@@ -98,8 +98,9 @@ export async function openRepositoryPR({
     // Only this call's successfully created proposal ref is eligible for cleanup.
     try {
       await fetcher(
+        // GitHub expects the ref's slashes as path separators, not %2F.
         `https://api.github.com/repos/${repo.fullName}/git/refs/heads/${
-          encodeURIComponent(branch)
+          branch.split("/").map(encodeURIComponent).join("/")
         }`,
         {
           method: "DELETE",
