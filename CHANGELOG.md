@@ -20,6 +20,11 @@
 
 ### Behavior changes
 
+- **Ask OKF can retrieve paraphrases.** Optional `OKF_AI_EMBED_MODEL` enables
+  permission-filtered hybrid workspace retrieval through the operator's existing
+  AI provider. A private SQLite chunk/vector index updates in the background
+  with a persistent retry queue and separate draft/publication versions.
+  Unconfigured or unsupported embeddings retain keyword-only behavior.
 - **The first account needs the setup link.** While no workspace exists, account
   creation requires the one-time link that `deno task stack` and the server log
   print (or `deno task admin setup-url`). Sign-up on a fresh install is no

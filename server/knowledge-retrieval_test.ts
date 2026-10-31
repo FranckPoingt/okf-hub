@@ -32,3 +32,61 @@ Deno.test("retrieval ranks accessible results, maps citations and respects budge
   assert.ok(!result.context.includes("I".repeat(4001)));
   assert.match(result.context, /\[2\] Alpha/);
 });
+
+Deno.test("disabled, empty or failing semantic retrieval keeps lexical results identical", async () => {
+  const item = {
+    id: "guide",
+    kind: "hub-native" as const,
+    sourceId: "hub",
+    sourceLabel: "Team",
+    title: "Password",
+  };
+  const search = () => Promise.resolve([item]);
+  const load = () => Promise.resolve("Reset your password");
+  const baseline = await retrieveKnowledge("reset password", search, load);
+  assert.deepEqual(
+    await retrieveKnowledge("reset password", search, load, 24_000, undefined),
+    baseline,
+  );
+  assert.deepEqual(
+    await retrieveKnowledge(
+      "reset password",
+      search,
+      load,
+      24_000,
+      () => Promise.resolve([]),
+    ),
+    baseline,
+  );
+  assert.deepEqual(
+    await retrieveKnowledge(
+      "reset password",
+      search,
+      load,
+      24_000,
+      () => Promise.reject(new Error("offline")),
+    ),
+    baseline,
+  );
+});
+
+Deno.test("reciprocal rank fusion favors shared matches and verifies excerpts against current permitted content", async () => {
+  const a = {
+    id: "a",
+    kind: "hub-native" as const,
+    sourceId: "hub",
+    sourceLabel: "Team",
+    title: "Alpha",
+  };
+  const b = { ...a, id: "b", title: "Beta" };
+  const result = await retrieveKnowledge(
+    "test",
+    () => Promise.resolve([a, b]),
+    () => Promise.resolve("Current public content"),
+    24_000,
+    () => Promise.resolve([{ item: b, excerpt: "Stale secret draft" }]),
+  );
+  assert.equal(result.citations[0].documentId, "b");
+  assert.ok(!result.context.includes("secret"));
+  assert.match(result.context, /Current public content/);
+});

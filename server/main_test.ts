@@ -4757,6 +4757,168 @@ Deno.test("revision restore resets stale collaboration state and rejects old epo
   }
 });
 
+Deno.test("hybrid Ask OKF uses published evidence for viewers and excludes hidden best matches", async () => {
+  const dataDir = await Deno.makeTempDir();
+  let viewerId = "";
+  const fga = fakeOpenFga((tuple) =>
+    tuple.user === `user:${viewerId}` &&
+    tuple.object === "concept:repository/secret"
+  );
+  const requests: AIRequest[] = [];
+  const objects = new Map<string, string>();
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "hybrid-test-secret-at-least-32-characters",
+    objectStore: {
+      put: (key, markdown) => {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get: (key) =>
+        objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Not found")),
+      remove: (key) => {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    automationIntervalMs: 0,
+    aiEmbedModel: "deterministic",
+    aiEmbedder: (texts) =>
+      Promise.resolve(
+        texts.map((text) =>
+          /SECRET|recover access/.test(text)
+            ? [1, 0]
+            : /password/.test(text)
+            ? [0.9, 0.1]
+            : [0, 1]
+        ),
+      ),
+    aiResponder: (request) => {
+      requests.push(request);
+      return Promise.resolve("Grounded answer [1]");
+    },
+    repositorySync: async () => ({
+      revision: "one",
+      files: [
+        await inspectOkf(
+          "secret.md",
+          "---\ntype: Guide\ntitle: Classified reference\n---\n\nSECRET restricted evidence",
+        ),
+      ],
+      issues: [],
+    }),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const viewer = new Client(base);
+  const json = async (
+    client: Client,
+    path: string,
+    body?: Record<string, unknown>,
+  ) => {
+    const response = await client.request(
+      path,
+      body ? { method: "POST", body: JSON.stringify(body) } : {},
+    );
+    assert.ok(response.ok, await response.clone().text());
+    return await response.json();
+  };
+  const db = new DatabaseSync(`${dataDir}/hub.db`);
+  db.exec("PRAGMA foreign_keys=ON");
+  try {
+    await owner.signUp("Owner", "hybrid-owner@example.com");
+    await json(owner, "/api/setup", { name: "Hybrid test" });
+    const invitation = await json(owner, "/api/invitations", {
+      email: "hybrid-viewer@example.com",
+      access: "viewer",
+    });
+    await viewer.signUp("Viewer", "hybrid-viewer@example.com", invitation.id);
+    await json(viewer, "/api/invitations/accept", {
+      invitationId: invitation.id,
+    });
+    viewerId = (await json(viewer, "/api/auth/get-session")).user.id;
+    const guide = await json(owner, "/api/concepts", {
+      title: "Credential playbook",
+      type: "Guide",
+      spaceId: "policies",
+      markdown: "Reset your password using the service desk.",
+    });
+    await json(owner, `/api/concepts/${guide.id}/publish`, {
+      markdown: "Reset your password using the service desk.",
+    });
+    const updated = await owner.request(`/api/concepts/${guide.id}`, {
+      method: "PUT",
+      body: "SECRET unpublished password procedure",
+    });
+    assert.equal(updated.status, 204, await updated.text());
+    const hidden = await json(owner, "/api/concepts", {
+      title: "Unreleased material",
+      type: "Guide",
+      spaceId: "policies",
+      markdown: "SECRET never published evidence",
+    });
+    const hiddenWrite = await owner.request(`/api/concepts/${hidden.id}`, {
+      method: "PUT",
+      body: "SECRET never published evidence",
+    });
+    assert.equal(hiddenWrite.status, 204, await hiddenWrite.text());
+    await json(owner, "/api/sources/repositories", {
+      repositoryUrl: "https://example.com/company/semantic.git",
+      folder: "okf",
+    });
+    // Let the real background worker complete; no external provider or index API.
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      const pending = db.prepare(
+        "SELECT COUNT(*) AS n FROM okf_semantic_document WHERE indexedVersion IS NULL OR indexedVersion != version",
+      ).get() as { n: number };
+      if (!pending.n) break;
+      assert.ok(Date.now() < deadline, "Background indexing did not finish");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const ask = {
+      scope: "workspace",
+      messages: [{ role: "user", content: "How do I recover access?" }],
+    };
+    const answer = await json(viewer, "/api/ai/chat", ask);
+    assert.deepEqual(
+      answer.citations.map((item: { documentId: string }) => item.documentId),
+      [guide.id],
+    );
+    assert.match(requests.at(-1)!.document.markdown, /Reset your password/);
+    assert.ok(!requests.at(-1)!.document.markdown.includes("SECRET"));
+    assert.ok(!JSON.stringify(answer).includes("vector"));
+    // Editors can retrieve the separate draft, while restrictions take effect without reindexing.
+    await json(owner, "/api/ai/chat", ask);
+    assert.match(
+      requests.at(-1)!.document.markdown,
+      /SECRET unpublished password procedure/,
+    );
+    db.prepare(
+      "UPDATE okf_imported_concept SET status = 'deleted' WHERE id = 'repository/secret'",
+    ).run();
+    assert.equal(
+      (db.prepare(
+        "SELECT COUNT(*) AS n FROM okf_semantic_chunk WHERE id = 'repository/secret'",
+      ).get() as { n: number }).n,
+      0,
+    );
+  } finally {
+    db.close();
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("archive names stay unique when generated ids share a long prefix", () => {
   const names = uniqueArchiveNames([
     { id: "mcp-saved-artifact", label: "MCP saved artifact" },

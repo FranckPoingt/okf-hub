@@ -24,7 +24,14 @@ import {
 } from "../src/lib/governance.ts";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
-import { type AIRequest, type AIResponder, createAIResponder } from "./ai.ts";
+import {
+  type AIRequest,
+  type AIResponder,
+  createAIEmbedder,
+  createAIResponder,
+  type Embedder,
+} from "./ai.ts";
+import { createSemanticIndex } from "./semantic-index.ts";
 import {
   actionAllowed,
   ActionError,
@@ -212,6 +219,8 @@ type AppOptions = {
   aiURL?: string;
   aiAPIKey?: string;
   aiResponder?: AIResponder;
+  aiEmbedModel?: string;
+  aiEmbedder?: Embedder;
 };
 
 type ConceptRow = {
@@ -628,6 +637,8 @@ export async function createCollabApp({
   aiURL,
   aiAPIKey,
   aiResponder,
+  aiEmbedModel,
+  aiEmbedder,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
   const security = await createSecurity({
@@ -2028,6 +2039,46 @@ export async function createCollabApp({
   for (const row of concepts()) {
     await loadDocument(row, row.id === CONCEPT ? DEFAULT_MARKDOWN : undefined);
   }
+
+  const embed = aiEmbedder ?? createAIEmbedder({
+    provider: aiProvider,
+    model: aiEmbedModel,
+    apiURL: aiURL,
+    apiKey: aiAPIKey,
+  });
+  const semanticIndex = embed && aiEmbedModel
+    ? createSemanticIndex({
+      db,
+      embed,
+      modelKey: JSON.stringify([aiProvider, aiURL ?? "", aiEmbedModel]),
+      load: async ({ id, state }) => {
+        if (state === "source") {
+          const row = importedConcepts().find((row) => row.id === id);
+          return row
+            ? {
+              title: row.title,
+              markdown: withoutFrontmatter(await store.get(row.objectKey)),
+            }
+            : null;
+        }
+        const row = concept(id);
+        if (!row) return null;
+        if (state === "draft") {
+          return {
+            title: row.title,
+            markdown: (await loadDocument(row)).markdown,
+          };
+        }
+        const publication = await currentPublication(row);
+        return publication
+          ? {
+            title: publication.metadata.title,
+            markdown: bodyOnly(publication.markdown),
+          }
+          : null;
+      },
+    })
+    : null;
 
   async function saveDraft(
     conceptId: string,
@@ -3887,6 +3938,9 @@ export async function createCollabApp({
                   : item;
               }),
             async (item) => {
+              if (!await security.check(current.user.id, "view", item.id)) {
+                return null;
+              }
               if (item.kind === "imported") {
                 const row = importedConcepts().find((entry) =>
                   entry.id === item.id
@@ -3902,9 +3956,37 @@ export async function createCollabApp({
                 "edit",
                 row.id,
               );
+              if (
+                row.status !== "active" || (!canEdit && !row.publishedRevision)
+              ) return null;
               const doc = await payload(row, Boolean(canEdit), current.user.id);
               return canEdit ? doc.draft : doc.published;
             },
+            24_000,
+            semanticIndex
+              ? async (question) => {
+                const visible = new Map(
+                  (await visibleSearchDocuments(current.user.id, false))
+                    .documents.map((item) => [item.id, item]),
+                );
+                return await semanticIndex.search(question, ({ id, state }) => {
+                  const item = visible.get(id);
+                  const expected = item?.kind === "imported"
+                    ? "source"
+                    : item?.canReviewConflicts
+                    ? "draft"
+                    : "published";
+                  if (!item || state !== expected) return Promise.resolve(null);
+                  const row = item.kind === "hub-native" ? concept(id) : null;
+                  return Promise.resolve({
+                    ...item,
+                    sourceLabel: row
+                      ? space(row.spaceId)?.name ?? row.spaceId
+                      : item.sourceLabel,
+                  });
+                });
+              }
+              : undefined,
           );
           const message = await respondWithAI({
             messages: messages as {
@@ -7235,6 +7317,7 @@ ${extensionYaml(extension)}---
     close: async () => {
       if (automationTimer !== undefined) clearInterval(automationTimer);
       await activeAutomation;
+      await semanticIndex?.close();
       for (const live of documents.values()) {
         live.clients.forEach((client) => client.close());
         await Promise.all([
@@ -7301,6 +7384,7 @@ if (import.meta.main) {
     ssoProviders: ssoConfig ? await parseSSOConfig(ssoConfig, baseURL) : [],
     aiProvider: Deno.env.get("OKF_AI_PROVIDER")?.trim(),
     aiModel: Deno.env.get("OKF_AI_MODEL")?.trim(),
+    aiEmbedModel: Deno.env.get("OKF_AI_EMBED_MODEL")?.trim(),
     aiURL: Deno.env.get("OKF_AI_URL")?.trim(),
     aiAPIKey: Deno.env.get("OKF_AI_API_KEY")?.trim() ||
       Deno.env.get("OLLAMA_API_KEY")?.trim(),

@@ -233,7 +233,11 @@ viewers receive published content only.
 
 Open Ask OKF from Search for workspace questions, or switch scope inside a
 document. Workspace answers include links to the retrieved sources. Retrieval
-uses keyword search, so relevant material may be missed; check the sources.
+uses keyword search by default. Optional hybrid retrieval also finds paraphrases
+using embeddings, combines the keyword and semantic rankings with reciprocal
+rank fusion, and keeps the same context budget and source citations. Retrieval
+can miss relevant material; check the sources. The Search panel remains keyword
+based.
 
 Asking a question sends the selected document or a bounded selection of
 accessible source content and recent chat messages to that provider. Choose and
@@ -248,6 +252,8 @@ OKF_AI_MODEL=<provider-model-id>
 OKF_AI_API_KEY=<provider-api-key>
 # Optional for compatible or self-hosted endpoints:
 OKF_AI_URL=<provider-api-url>
+# Optional: enable hybrid retrieval with an embedding model on this provider:
+OKF_AI_EMBED_MODEL=<provider-embedding-model-id>
 ```
 
 Ax provider IDs include `openai`, `anthropic`, `google-gemini`, `openrouter`,
@@ -257,6 +263,41 @@ Ax provider IDs include `openai`, `anthropic`, `google-gemini`, `openrouter`,
 
 Open **Workspace settings → AI** to confirm the server configuration is ready.
 Provider credentials are never sent to the browser.
+
+`OKF_AI_EMBED_MODEL` reuses `OKF_AI_PROVIDER`, `OKF_AI_URL` and
+`OKF_AI_API_KEY`; OKF never selects another provider for embeddings. The
+installed Ax adapter must declare embedding support. Among the providers listed
+above, `openai` and `google-gemini` currently support it (for example,
+`text-embedding-3-small` with `openai`). Other Ax profiles, including
+`anthropic` and `ollama`, currently stay keyword-only, even if an upstream
+service has its own embedding API. An unset model or unsupported adapter
+preserves keyword retrieval without errors. Compatible self-hosted endpoints can
+use the `openai` adapter with the operator's explicit `OKF_AI_URL`.
+
+Enabling embeddings sends **all indexed knowledge** to the configured provider
+in the background, including hub drafts, published revisions, and current
+imports, even when some members cannot view them. Requests contain document
+titles and chunks of roughly 1–2k characters; workspace questions are also sent
+for embedding. Choose this setting only when that provider may process this
+content. Answers still send only the questioner's accessible content: viewers
+match publications, editors match drafts they can already edit, and restricted
+sources are filtered using the same view permission checks as keyword search.
+
+Vectors, chunk text, content hashes, and a resumable work queue are stored in
+the app's SQLite `hub.db` (`okf_semantic_document` and `okf_semantic_chunk`),
+inside `OKF_DATA_DIR` or the Docker app-data volume. They are private server
+data, included in normal data backups; no API exposes vectors or hidden chunks.
+Publishing and source sync invalidate changed versions immediately, draft saves
+are debounced, and deleted concepts or imports lose their index rows. Access
+restrictions take effect at retrieval time without waiting for reindexing.
+
+Indexing starts after startup, processes at most two documents concurrently in
+batches of eight chunks, and retries failures with backoff (up to five minutes).
+Pending work survives restart. Until indexing catches up, keyword results remain
+available; query embedding failures fall back to keyword retrieval. Changing the
+embedding model or endpoint rebuilds vectors in the background. Removing
+`OKF_AI_EMBED_MODEL` stops embedding requests and restores keyword-only
+retrieval; existing private index data remains in SQLite.
 
 ### Apps
 

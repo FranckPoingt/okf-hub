@@ -19,6 +19,38 @@ export type AIRequest = {
 
 export type AIResponder = (request: AIRequest) => Promise<string>;
 
+export type Embedder = (
+  texts: string[],
+) => Promise<readonly (readonly number[])[]>;
+
+// Ax profiles declare embedding support; never select a second provider implicitly.
+export function createAIEmbedder({ provider, model, apiURL, apiKey }: {
+  provider: string;
+  model?: string;
+  apiURL?: string;
+  apiKey?: string;
+}): Embedder | null {
+  if (!provider || !model) return null;
+  try {
+    const profile = axGetAIProfile(provider);
+    if (!("embed" in profile.operations)) return null;
+    const service = ai({
+      name: profile.id,
+      ...(apiURL ? { apiURL } : {}),
+      apiKey,
+      config: { embedModel: model },
+    } as AxAIArgs<string>);
+    return async (texts) => {
+      const response = await service.embed({ texts, embedModel: model }, {
+        abortSignal: AbortSignal.timeout(30_000),
+      });
+      return response.embeddings;
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function createAIResponder({
   provider,
   model,
