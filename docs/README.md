@@ -141,6 +141,32 @@ updated** shows when imported content changed; **Source checked** shows the last
 successful source check. A successful source check is separate from a human
 review.
 
+#### Source access
+
+Workspace owners choose who can see each source under **Sources → Connected →
+Access**:
+
+- **Everyone in the workspace** (the default for every source, including ones
+  connected before this setting existed): every member can read the source;
+  workspace editors can suggest changes and draft OKF.
+- **Selected members and groups**: only workspace owners and the members or
+  groups you add can find, read, or ask about the source. **Viewers** read it.
+  **Editors** can also suggest changes and draft OKF. Workspace editors who are
+  not listed lose access too, so a private repository stays private.
+
+Access is enforced by the authorization service on the source's imported space,
+which every imported document inherits. Search, the company graph, link
+previews, Ask OKF, MCP and API actions, artifact staleness reasons, and the
+artifact gallery all hide a restricted source from people outside it, without
+revealing that it exists. Switching back to **Everyone in the workspace**
+restores member access and clears the list. Each change is recorded in the audit
+log as `source.access_restricted`, `source.access_opened`,
+`source.access_granted`, or `source.access_revoked`.
+
+The owner-only `GET /api/sources/:id/access` endpoint returns
+`{ mode: "workspace" | "restricted", grants: [{ type: "user" | "group", id, role: "viewer" | "editor" }] }`.
+Replace it with `PUT` and the same shape. Repeating a `PUT` changes nothing.
+
 ### Company relationships and disagreements
 
 Open a native or imported concept to see **References and backlinks**, **Also

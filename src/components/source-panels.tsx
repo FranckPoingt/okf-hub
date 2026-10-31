@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useRef,
@@ -24,11 +25,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import { OkfDraftPanel } from "./okf-draft-panel.tsx";
+import { SourceAccess } from "./source-access.tsx";
 import { api, SERVICE } from "../lib/api.ts";
 import type {
   Artifact,
   ArtifactState,
   AutomationState,
+  Bootstrap,
   ImportedConcept,
   NotionSource,
   RepositorySource,
@@ -477,6 +480,7 @@ export function RepositoryPanel(
     onDisconnect,
     onOpen,
     onSchedule,
+    access,
   }: {
     source: RepositorySource | null;
     imports: ImportedConcept[];
@@ -498,6 +502,7 @@ export function RepositoryPanel(
       path: string,
     ) => Promise<unknown>;
     onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+    access?: ReactNode;
   },
 ) {
   const headingId = source
@@ -654,6 +659,7 @@ export function RepositoryPanel(
               sourceId={source.id}
               github={source.kind === "github"}
             />
+            {access}
             {canManage && (
               <details className="source-settings">
                 <summary>
@@ -724,6 +730,7 @@ export function SharedStorePanel(
     onRefresh,
     onOpen,
     onSchedule,
+    access,
   }: {
     source: SharedSource | null;
     imports: ImportedConcept[];
@@ -738,6 +745,7 @@ export function SharedStorePanel(
       path: string,
     ) => Promise<unknown>;
     onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+    access?: ReactNode;
   },
 ) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
@@ -897,6 +905,7 @@ export function SharedStorePanel(
       {source && (
         <ImportList sourceId="shared" imports={imports} onOpen={onOpen} />
       )}
+      {source && access}
     </section>
   );
 }
@@ -912,6 +921,7 @@ function NotionPanel({
   onRefresh,
   onOpen,
   onSchedule,
+  access,
 }: {
   source: NotionSource | null;
   imports: ImportedConcept[];
@@ -923,6 +933,7 @@ function NotionPanel({
   onRefresh: () => Promise<void>;
   onOpen: (sourceId: string, path: string) => Promise<unknown>;
   onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+  access?: ReactNode;
 }) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1027,6 +1038,7 @@ function NotionPanel({
       {source && (
         <ImportList sourceId="notion" imports={imports} onOpen={onOpen} />
       )}
+      {source && access}
     </section>
   );
 }
@@ -1442,6 +1454,8 @@ export function SourceWorkspace(
     onSetConnectorEnabled,
     onUpdateSchedule,
     onOpen,
+    members,
+    groups,
   }: {
     repositories: RepositorySource[];
     sharedSource: SharedSource | null;
@@ -1484,8 +1498,14 @@ export function SourceWorkspace(
       intervalMinutes: number,
     ) => Promise<void>;
     onOpen: (sourceId: string, path: string) => Promise<unknown>;
+    members: NonNullable<Bootstrap["members"]>;
+    groups: NonNullable<Bootstrap["groups"]>;
   },
 ) {
+  const access = (sourceId: string) =>
+    canManage && (
+      <SourceAccess sourceId={sourceId} members={members} groups={groups} />
+    );
   const connectedCount = repositories.length + Number(Boolean(sharedSource)) +
     Number(Boolean(notionSource));
   const healthyCount =
@@ -1589,6 +1609,7 @@ export function SourceWorkspace(
                     onDisconnect={onDisconnectRepository}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access(source.id)}
                   />
                 ))}
                 {sharedSource && (
@@ -1603,6 +1624,7 @@ export function SourceWorkspace(
                     onRefresh={onRefreshShared}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access("shared")}
                   />
                 )}
                 {notionSource && (
@@ -1617,6 +1639,7 @@ export function SourceWorkspace(
                     onRefresh={onRefreshNotion}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access("notion")}
                   />
                 )}
               </div>
