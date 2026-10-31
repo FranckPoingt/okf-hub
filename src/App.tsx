@@ -1,3 +1,4 @@
+import { SuggestChange } from "./components/suggest-change.tsx";
 import { MilkdownProvider } from "@milkdown/react";
 import {
   FolderOpen,
@@ -1688,6 +1689,16 @@ export default function App() {
                       </span>
                     </div>
                     <div className="imported-document-actions">
+                      {imported.source && "repositoryUrl" in imported.source &&
+                        (
+                          <SuggestChange
+                            key={imported.id}
+                            sourceId={imported.sourceId}
+                            path={imported.path}
+                            markdown={imported.markdown}
+                            revision={imported.sourceRevision}
+                          />
+                        )}
                       <Button
                         type="button"
                         size="sm"

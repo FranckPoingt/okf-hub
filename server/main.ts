@@ -23,6 +23,7 @@ import {
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
 import { retrieveKnowledge } from "./knowledge-retrieval.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
+import { createChangeProposalRoutes } from "./change-proposals.ts";
 import { createObjectStore } from "./object-store.ts";
 import { type NotionSourceConfig, syncNotionSource } from "./notion-source.ts";
 import {
@@ -1391,6 +1392,7 @@ export async function createCollabApp({
       db.prepare(
         "UPDATE okf_source_sync SET status = 'succeeded', revision = ?, finishedAt = ? WHERE id = ?",
       ).run(snapshot.revision, new Date().toISOString(), syncId);
+      await changeProposals.refresh(sourceId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sync failed";
       db.prepare(
@@ -1412,6 +1414,14 @@ export async function createCollabApp({
     responder: respondWithDraftAI,
     model: aiModel ?? "configured-model",
     app: githubApp,
+  });
+  const changeProposals = createChangeProposalRoutes({
+    db,
+    security,
+    repositorySource,
+    read: (key) => store.get(key),
+    app: githubApp,
+    baseUrl: baseURL,
   });
   const repositoryRefreshes = new Map<string, Promise<void>>();
   function refreshRepository(
@@ -1458,6 +1468,7 @@ export async function createCollabApp({
       db.prepare("DELETE FROM okf_repository_source WHERE id = ?").run(
         sourceId,
       );
+      changeProposals.forget(sourceId);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -3921,6 +3932,15 @@ export async function createCollabApp({
           draftPath[1],
           Boolean(draftPath[2]),
         ),
+        request,
+      );
+    }
+    const changeProposalPath = url.pathname.match(
+      /^\/api\/sources\/repositories\/([a-z0-9-]+)\/change-proposals$/,
+    );
+    if (changeProposalPath && ["GET", "POST"].includes(request.method)) {
+      return withCors(
+        await changeProposals.handle(request, changeProposalPath[1]),
         request,
       );
     }

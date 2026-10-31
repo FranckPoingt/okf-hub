@@ -231,3 +231,33 @@ OKF folder. Submit it through your repository's normal review process. Drafting,
 proposal creation, downloads and failures are recorded in the audit trail.
 GitHub failures after branch creation may leave an unused proposal branch;
 inspect GitHub before retrying. The Hub never merges the proposal.
+
+## Suggest a change to imported knowledge
+
+Imported concepts are read-only mirrors: the repository stays authoritative.
+Editors of the imported source's space (and owners) see **Suggest a change** on
+a concept from a connected Git repository. No Git knowledge is needed: edit the
+Markdown body in the Hub editor, review the diff, add a short reason and submit.
+Frontmatter is preserved and cannot be edited here.
+
+For GitHub App sources, submitting creates a new branch and a **draft pull
+request** that changes only that concept file. The pull request describes your
+reason, your Hub display name, and links back to the concept; `@mentions` in
+your text are neutralized so nobody is notified unexpectedly. The Hub copy does
+not change until the pull request is merged and the source next syncs (push
+webhook, schedule or manual refresh). The concept shows "1 open suggestion" with
+a link; the status is refreshed after each sync, so merged or closed suggestions
+drop off.
+
+The suggestion must be based on the revision you edited. If the concept was
+re-synced meanwhile, or the repository default branch has moved since the last
+sync, the Hub refuses and asks you to refresh and apply the edit again; it never
+rebases for you. The concept path must lie inside the source's OKF folder. The
+default branch is never written to. This uses the same App permissions as
+drafting (`contents:write`, `pull_requests:write`).
+
+For manual HTTPS Git sources there is no write access, so the Hub downloads a
+`git format-patch`-style patch instead; apply it with `git am` (or `git apply`)
+and submit it through your normal review process. Suggestions are recorded in
+the audit trail as `source.change-proposed` (pull request) or
+`source.change-patch-exported` (patch).
