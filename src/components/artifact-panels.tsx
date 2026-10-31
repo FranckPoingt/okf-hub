@@ -890,10 +890,11 @@ export function ArtifactGallery({
                       <h2 className="artifact-gallery-card-title">
                         {item.title}
                       </h2>
-                      <p className="artifact-gallery-card-description">
-                        {item.description ||
-                          "Context-backed interactive artifact in OKF Hub."}
-                      </p>
+                      {distinctDescription(item.description, item.title) && (
+                        <p className="artifact-gallery-card-description">
+                          {item.description}
+                        </p>
+                      )}
                     </div>
 
                     <div className="artifact-gallery-card-footer">
