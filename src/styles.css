@@ -855,13 +855,6 @@ details[open] > summary .source-details-chevron {
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
-.source-page-heading h1 {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: 42px;
-  font-weight: 400;
-  letter-spacing: -.04em;
-}
 .source-page-heading > p:last-child {
   color: var(--muted-foreground);
 }
@@ -2194,14 +2187,17 @@ label {
 .empty-state h1,
 .lifecycle-empty h1,
 .service-error h1,
-.auth-card h1 {
+.auth-card h1,
+.settings-page-header > div h1,
+.developer-api-heading h1 {
+  /* Same page title as Tailwind pages: text-3xl font-semibold tracking-tight. */
   margin: 6px 0 10px;
   color: var(--foreground);
   font-family: inherit;
-  font-size: clamp(1.75rem, 3vw, 2.25rem);
-  font-weight: 680;
-  letter-spacing: -.035em;
-  line-height: 1.15;
+  font-size: 1.875rem;
+  font-weight: 600;
+  letter-spacing: -.025em;
+  line-height: 1.2;
 }
 
 .source-page-heading > p:last-child,
@@ -2211,6 +2207,10 @@ label {
 .work-trace-panel > header > p:last-child {
   color: var(--muted-foreground);
   font-size: .9375rem;
+}
+
+.source-page-heading > p + [data-slot="button"] {
+  margin-top: 12px;
 }
 
 .source-card,
@@ -3363,8 +3363,6 @@ label {
 }
 .settings-page-header > div h1 {
   margin: 4px 0 6px;
-  font-size: clamp(1.75rem, 3vw, 2.25rem);
-  letter-spacing: -.04em;
 }
 .settings-page-header > div > p:last-child,
 .settings-section-heading > div > p:last-child {
@@ -4005,8 +4003,6 @@ label {
 }
 .developer-api-heading h1 {
   margin: 4px 0 6px;
-  font-size: 1.75rem;
-  letter-spacing: -.04em;
 }
 .developer-api-heading p:last-child {
   margin: 0;

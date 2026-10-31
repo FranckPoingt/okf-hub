@@ -182,6 +182,7 @@ export function AuthScreen(
         </form>
         {canSignUp && (
           <Button
+            variant="link"
             className="text-button"
             type="button"
             onClick={() => setMode(mode === "sign-up" ? "sign-in" : "sign-up")}
