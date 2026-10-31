@@ -693,7 +693,7 @@ export async function createSecurity({
     unset(`openfga_hub_space:${spaceId}`);
   }
 
-  async function ensureImportedConcept(sourceId: string, conceptId: string) {
+  async function ensureImportedSource(sourceId: string) {
     const viewerTeamId = get("viewer_team_id");
     const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
     const spaceKey = `openfga_imported_space:${sourceId}`;
@@ -710,6 +710,11 @@ export async function createSecurity({
       }]);
       set(spaceKey, "1");
     }
+  }
+
+  async function ensureImportedConcept(sourceId: string, conceptId: string) {
+    await ensureImportedSource(sourceId);
+    const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
     const key = `openfga_imported_concept_v2:${conceptId}`;
     if (get(key)) return;
     const tuple = {
@@ -1207,6 +1212,7 @@ export async function createSecurity({
     moveHubConcept,
     deleteHubSpace,
     ensureImportedConcept,
+    ensureImportedSource,
     deleteImportedSource,
     close: () => db.close(),
   };
