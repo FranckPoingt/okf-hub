@@ -174,6 +174,7 @@ export function DeveloperSettings(
   { embedded = false }: { embedded?: boolean },
 ) {
   const [actions, setActions] = useState<Action[]>([]);
+  const [canEdit, setCanEdit] = useState(true);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -196,6 +197,7 @@ export function DeveloperSettings(
       );
     }
     setActions(actionBody.actions);
+    setCanEdit(actionBody.canEdit !== false);
     setKeys(keyBody.keys);
   }, []);
   useEffect(() => {
@@ -420,6 +422,12 @@ export function DeveloperSettings(
                     Select the smallest useful set. Access is still limited by
                     your OKF permissions.
                   </p>
+                  {!canEdit && (
+                    <p>
+                      You have view access only, so write operations won't be
+                      usable with this key.
+                    </p>
+                  )}
                   <div className="developer-scope-grid">
                     {actions.map((action) => (
                       <Label className="developer-scope" key={action.name}>

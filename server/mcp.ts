@@ -10,6 +10,7 @@ const record = (value: unknown): value is Record<string, unknown> =>
 export function createMcpHandler(
   catalog: ReturnType<typeof createActionCatalog>,
   authenticate: (request: Request) => Promise<AuthActor | null>,
+  canEditAnywhere: (userId: string) => Promise<boolean>,
 ) {
   return async (request: Request): Promise<Response> => {
     const headers = { "Cache-Control": "no-store" };
@@ -123,9 +124,13 @@ export function createMcpHandler(
         });
       case "ping":
         return reply(id, {});
-      case "tools/list":
+      case "tools/list": {
+        // Presentation only: tools/call still enforces permissions per action.
+        const editor = await canEditAnywhere(actor.user.id);
         return reply(id, {
-          tools: catalog.list(actor.scopes).map((action) => ({
+          tools: catalog.list(actor.scopes).filter((action) =>
+            editor || action.mode === "query"
+          ).map((action) => ({
             name: action.name,
             title: action.title,
             description: action.description,
@@ -136,6 +141,7 @@ export function createMcpHandler(
             },
           })),
         });
+      }
       case "tools/call": {
         if (
           typeof params.name !== "string" ||

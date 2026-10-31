@@ -573,6 +573,22 @@ export async function createSecurity({
     return checkObject(userId, relation, `space:${spaceId}`);
   }
 
+  // True when the user can edit the workspace or any hub space or imported source.
+  async function canEditAnywhere(userId: string) {
+    if (await check(userId, "edit")) return true;
+    const rows = db.prepare(
+      "SELECT key FROM okf_config WHERE key LIKE 'openfga_hub_space:%' OR key LIKE 'openfga_imported_space:%'",
+    ).all() as Row[];
+    for (const { key } of rows) {
+      const [kind, id] = String(key).split(/:(.*)/s);
+      const spaceId = kind === "openfga_hub_space"
+        ? id
+        : `${IMPORTED_SPACE}-${id}`;
+      if (await checkSpace(userId, "edit", spaceId)) return true;
+    }
+    return false;
+  }
+
   function member(userId: string) {
     return db.prepare(
       "SELECT id, organizationId, role FROM member WHERE userId = ? ORDER BY createdAt LIMIT 1",
@@ -1696,6 +1712,7 @@ export async function createSecurity({
     authenticate,
     check,
     checkSpace,
+    canEditAnywhere,
     handle,
     isOwner,
     hasMember,

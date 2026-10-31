@@ -3739,7 +3739,11 @@ export async function createCollabApp({
     return grants;
   }
 
-  const mcp = createMcpHandler(actionCatalog, security.authenticate);
+  const mcp = createMcpHandler(
+    actionCatalog,
+    security.authenticate,
+    security.canEditAnywhere,
+  );
 
   const fetch = async (request: Request): Promise<Response> => {
     // Cookie-free capability route for opaque-origin App sandboxes; see docs/extensibility.md.
@@ -4195,9 +4199,10 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      return Response.json({ actions: actionCatalog.list(actor.scopes) }, {
-        headers: cors(request),
-      });
+      return Response.json({
+        actions: actionCatalog.list(actor.scopes),
+        canEdit: await security.canEditAnywhere(actor.user.id),
+      }, { headers: cors(request) });
     }
     const actionRoute = url.pathname.match(/^\/api\/v1\/actions\/([^/]+)$/);
     if (actionRoute && request.method === "POST") {
