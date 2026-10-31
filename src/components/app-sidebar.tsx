@@ -794,10 +794,12 @@ export function AppSidebar({
                 </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-64">
-                <DropdownMenuItem onClick={onCreate}>
-                  <Settings />
-                  Workspace settings
-                </DropdownMenuItem>
+                {canEdit && (
+                  <DropdownMenuItem onClick={onCreate}>
+                    <Settings />
+                    Workspace settings
+                  </DropdownMenuItem>
+                )}
                 {access === "owner" && (
                   <DropdownMenuItem onClick={onManageAccess}>
                     <Settings />
