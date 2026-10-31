@@ -22,6 +22,19 @@ export function excluded(name: string) {
     /\.(?:pem|key|p12|pfx|keystore)$/i.test(name);
 }
 
+// First `# Title` heading, else the first frontmatter `title:`; never a silent default.
+function markdownTitle(markdown: string) {
+  const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ??
+    markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1]
+      .match(/^title:\s*(.+)$/m)?.[1].trim().replace(/^(["'])(.*)\1$/, "$2");
+  if (!title) {
+    throw new Error(
+      "Add a # Title heading to context.md or pass a title argument",
+    );
+  }
+  return title;
+}
+
 export async function packArtifactFiles(
   entries:
     | AsyncIterable<{ path: string; bytes: Uint8Array }>
@@ -359,8 +372,7 @@ export function artifactSaveAction(
         const result = await savePackedArtifact({
           options: input,
           packed,
-          title: input.title as string ??
-            packed.markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "Artifact",
+          title: input.title as string ?? markdownTitle(packed.markdown),
           hubUrl: "",
           initialReceipt: receipt,
           checkpoint: (next) => {

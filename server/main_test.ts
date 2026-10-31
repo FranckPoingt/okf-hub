@@ -547,6 +547,27 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     assert.equal(saved.result.isError, undefined, JSON.stringify(saved));
     const savedArtifact = JSON.parse(saved.result.content[0].text);
     assert.equal(savedArtifact.published, false);
+    const untitled = await mcp("artifact.save", {
+      spaceId: "policies",
+      files: { ...files, "context.md": "Sources and assumptions." },
+    });
+    assert.equal(untitled.result.isError, true);
+    assert.match(untitled.result.content[0].text, /# Title/);
+    const fromFrontmatter = await mcp("artifact.save", {
+      spaceId: "policies",
+      files: {
+        ...files,
+        "context.md": '---\ntitle: "Frontmatter name"\n---\nSources.',
+      },
+    });
+    assert.equal(
+      JSON.parse(
+        (await mcp("documents.get", {
+          id: JSON.parse(fromFrontmatter.result.content[0].text).documentId,
+        })).result.content[0].text,
+      ).title,
+      "Frontmatter name",
+    );
     const same = await mcp("artifact.save", {
       files,
       receipt: savedArtifact.receipt,
