@@ -1,5 +1,6 @@
 import { ArtifactUpload } from "./artifact-upload.tsx";
 import { Blocks, FileText, Plus } from "lucide-react";
+import { EmptyState } from "./empty-state.tsx";
 import type { Concept, Space } from "../lib/models.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -70,15 +71,18 @@ export function SpacePanel({
         </Button>
       ))}
       {!items.length && (
-        <div className="px-4 py-12 text-center">
-          <p className="text-sm font-medium">No documents in this space</p>
+        <EmptyState
+          icon={<FileText />}
+          title="No documents in this space"
+          description="Documents created in or moved to this space appear here."
+        >
           {canEdit && (
-            <Button className="mt-3" type="button" onClick={onCreate}>
+            <Button type="button" onClick={onCreate}>
               <Plus data-icon="inline-start" />
               New document
             </Button>
           )}
-        </div>
+        </EmptyState>
       )}
     </div>
   );

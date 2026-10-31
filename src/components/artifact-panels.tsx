@@ -28,6 +28,7 @@ import type {
 import { DocumentPreview } from "./editor/document-editor.tsx";
 import { AppFrame } from "./source-panels.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
+import { EmptyState } from "./empty-state.tsx";
 import { StatusBadge } from "./status-badge.tsx";
 import { TrustBadge } from "./trust-badge.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -910,29 +911,22 @@ export function ArtifactGallery({
             </div>
           )
           : (
-            <div className="mt-6 rounded-xl border bg-card px-6 py-14 text-center">
-              <span className="mx-auto flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                {query.trim()
-                  ? <Blocks className="size-5" />
-                  : <Sparkles className="size-5" />}
-              </span>
-              <h2 className="mt-3 text-base font-semibold">
-                {query.trim()
-                  ? "No matching artifacts"
-                  : space
-                  ? `No artifacts in ${space.name} yet`
-                  : "No artifacts in this workspace yet"}
-              </h2>
-              <p className="mx-auto mt-1.5 max-w-md text-sm text-muted-foreground">
-                {query.trim()
-                  ? "Try clearing the filter or browsing all spaces."
-                  : canEdit
-                  ? "Create an Artifact document with context.md frontmatter and attach a static App bundle."
-                  : "Activated artifacts you have permission to view will appear here."}
-              </p>
+            <EmptyState
+              className="mt-6 rounded-xl border bg-card"
+              icon={query.trim() ? <Blocks /> : <Sparkles />}
+              title={query.trim()
+                ? "No matching artifacts"
+                : space
+                ? `No artifacts in ${space.name} yet`
+                : "No artifacts in this workspace yet"}
+              description={query.trim()
+                ? "Try clearing the filter or browsing all spaces."
+                : canEdit
+                ? "Create an Artifact document with context.md frontmatter and attach a static App bundle."
+                : "Live artifacts you have permission to view will appear here."}
+            >
               {canEdit && !query.trim() && (
                 <Button
-                  className="mt-4"
                   type="button"
                   onClick={() => onCreateArtifact(space?.id)}
                 >
@@ -940,7 +934,7 @@ export function ArtifactGallery({
                   New artifact
                 </Button>
               )}
-            </div>
+            </EmptyState>
           )}
       </div>
     </section>

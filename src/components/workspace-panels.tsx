@@ -33,7 +33,8 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { Textarea } from "./ui/textarea.tsx";
-import { Search, SlidersHorizontal, X } from "lucide-react";
+import { Search, SearchX, SlidersHorizontal, X } from "lucide-react";
+import { EmptyState } from "./empty-state.tsx";
 
 const attentionFilterLabels: Record<string, string> = {
   "": "Any ownership or review status",
@@ -424,9 +425,11 @@ export function SearchPanel(
           );
         })}
         {!busy && result && displayedResults.length === 0 && (
-          <p className="p-10 text-center text-sm text-muted-foreground">
-            No accessible knowledge matches these filters.
-          </p>
+          <EmptyState
+            icon={<SearchX />}
+            title="No results"
+            description="No accessible knowledge matches these filters. Try fewer words or clear the filters."
+          />
         )}
       </div>
     </section>
