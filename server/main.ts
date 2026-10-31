@@ -1,5 +1,8 @@
 /// <reference lib="deno.ns" />
 
+import { artifactSaveAction } from "./artifact-save.ts";
+import { createMcpHandler } from "./mcp.ts";
+
 import * as Y from "yjs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
@@ -2530,6 +2533,7 @@ export async function createCollabApp({
   }
 
   const actionCatalog = createActionCatalog([
+    artifactSaveAction(() => actionCatalog),
     {
       name: "knowledge.search",
       tag: "Knowledge",
@@ -2638,7 +2642,8 @@ export async function createCollabApp({
       name: "documents.get",
       tag: "Documents",
       title: "Get document",
-      description: "Returns a permission-filtered hub-native OKF document.",
+      description:
+        "Returns an accessible hub-native or imported OKF concept with source provenance, owner, and trust.",
       mode: "query",
       approval: "none",
       inputSchema: {
@@ -2652,6 +2657,17 @@ export async function createCollabApp({
         if (!id || !await security.check(context.userId, "view", id)) {
           throw new ActionError("Not found", 404);
         }
+        const imported = importedConcepts().find((item) => item.id === id);
+        if (imported) {
+          const source = sourcePayload(imported.sourceId);
+          return {
+            ...importedPayload(imported),
+            kind: "imported",
+            source,
+            trust: source?.status === "sync_failed" ? "sync_failed" : "current",
+            markdown: withoutFrontmatter(await store.get(imported.objectKey)),
+          };
+        }
         const row = concept(id);
         const canEdit = await security.check(context.userId, "edit", id);
         if (
@@ -2660,7 +2676,16 @@ export async function createCollabApp({
         ) {
           throw new ActionError("Not found", 404);
         }
-        return await payload(row, canEdit, context.userId);
+        return {
+          ...await payload(row, canEdit, context.userId),
+          kind: "hub-native",
+          sourceId: "hub",
+          source: { label: "OKF Hub" },
+          owner: canEdit && !row.publishedRevision
+            ? context.userName
+            : "OKF Hub authors",
+          trust: "current",
+        };
       },
     },
     {
@@ -2955,11 +2980,14 @@ export async function createCollabApp({
     return grants;
   }
 
+  const mcp = createMcpHandler(actionCatalog, security.authenticate);
+
   const fetch = async (request: Request): Promise<Response> => {
     if (!allowedOrigin(request)) {
       return new Response("Origin not allowed", { status: 403 });
     }
     const url = new URL(request.url);
+    if (url.pathname === "/api/mcp") return await mcp(request);
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors(request) });
     }

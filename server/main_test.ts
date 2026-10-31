@@ -216,6 +216,7 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
       body: JSON.stringify({
         name: "Codex artifact test",
         scopes: [
+          "artifact.save",
           "spaces.list",
           "documents.create",
           "documents.get",
@@ -331,6 +332,73 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     await inspectOkf(knowledge[0], decoder.decode(knowledge[1]));
     const receipt = await Deno.readTextFile(`${folder}/.okf-artifact.json`);
     assert.ok(!receipt.includes(Deno.env.get("OKF_HUB_TOKEN")!));
+    const mcp = async (
+      name: string,
+      args: Record<string, unknown>,
+      token = Deno.env.get("OKF_HUB_TOKEN")!,
+    ) => {
+      const response = await fetch(`${base}/api/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      });
+      assert.equal(response.status, 200);
+      return await response.json();
+    };
+    const files = {
+      "index.html": "<h1>MCP artifact</h1>",
+      "context.md": "# MCP artifact\n\nSources and assumptions.",
+    };
+    const saved = await mcp("artifact.save", { spaceId: "policies", files });
+    assert.equal(saved.result.isError, undefined, JSON.stringify(saved));
+    const savedArtifact = JSON.parse(saved.result.content[0].text);
+    assert.equal(savedArtifact.published, false);
+    const same = await mcp("artifact.save", {
+      files,
+      receipt: savedArtifact.receipt,
+    });
+    assert.equal(
+      JSON.parse(same.result.content[0].text).appId,
+      savedArtifact.appId,
+    );
+    assert.equal(JSON.parse(same.result.content[0].text).version, 1);
+    const revised = await mcp("artifact.save", {
+      files: { ...files, "index.html": "<h1>Revised</h1>" },
+      receipt: savedArtifact.receipt,
+    });
+    assert.equal(JSON.parse(revised.result.content[0].text).version, 2);
+    const read = await mcp("documents.get", { id: savedArtifact.documentId });
+    const concept = JSON.parse(read.result.content[0].text);
+    assert.equal(concept.trust, "current");
+    assert.equal(concept.sourceId, "hub");
+    assert.equal(concept.owner, "Dogfood owner");
+    assert.equal(concept.workTraces.length, 2);
+    const readerKeyResponse = await viewer.request("/api/developer/keys", {
+      method: "POST",
+      body: JSON.stringify({ name: "MCP reader", scopes: ["*"] }),
+    });
+    const readerKey = await readerKeyResponse.json();
+    assert.equal(readerKeyResponse.status, 201);
+    const hidden = await mcp(
+      "documents.get",
+      { id: savedArtifact.documentId },
+      readerKey.token,
+    );
+    assert.equal(hidden.result.isError, true);
+    const forbiddenSave = await mcp("artifact.save", {
+      spaceId: "policies",
+      files,
+    }, readerKey.token);
+    assert.equal(forbiddenSave.result.isError, true);
   } finally {
     if (previousToken === undefined) Deno.env.delete("OKF_HUB_TOKEN");
     else Deno.env.set("OKF_HUB_TOKEN", previousToken);
@@ -1780,6 +1848,45 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       (await outsider.request("/api/imported?path=operations.md")).status,
       404,
     );
+    const importedKeyResponse = await viewer.request("/api/developer/keys", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Read imported with MCP",
+        scopes: ["documents.get"],
+      }),
+    });
+    const importedKey = await importedKeyResponse.json();
+    assert.equal(importedKeyResponse.status, 201);
+    const importedViaMcp = await fetch(`${base}/api/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${importedKey.token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "import",
+        method: "tools/call",
+        params: {
+          name: "documents.get",
+          arguments: { id: "repository/operations" },
+        },
+      }),
+    });
+    const importedRpc = await importedViaMcp.json();
+    assert.equal(
+      importedRpc.result.isError,
+      undefined,
+      JSON.stringify(importedRpc),
+    );
+    const importedRead = JSON.parse(importedRpc.result.content[0].text);
+    assert.equal(importedRead.owner, "Platform");
+    assert.equal(importedRead.sourceRevision, "commit-one");
+    assert.equal(importedRead.trust, "current");
+    assert.equal(importedRead.markdown, "# Operations v1\n");
+    assert.equal(importedRead.source.id, "repository");
+
     const askImported = await viewer.request("/api/ai/chat", {
       method: "POST",
       body: JSON.stringify({
@@ -2938,6 +3045,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "ai.asked",
         "ai.asked",
         "api_key.created",
+        "api_key.created",
         "api_key.revoked",
         "app.activated",
         "app.created",
@@ -2971,7 +3079,6 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
         "concept.restored",
         "concept.unlocked",
         "concept.updated",
-        "group.created",
         "invitation.accepted",
         "invitation.accepted",
         "invitation.created",

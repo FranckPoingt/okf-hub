@@ -8,6 +8,8 @@ okf_version: "0.2"
   beta.
 - [Self-hosted SSO](sso.md) - Configure invitation-gated OIDC or SAML
   authentication.
+- [Connect agents with MCP](mcp.md) - Read permitted knowledge and save
+  artifacts through scoped Developer API keys.
 - [Save a Codex artifact](codex-artifacts.md) - Retain and revise a static
   creation together with its context.
 
