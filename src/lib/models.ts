@@ -225,6 +225,10 @@ export type SearchResult = SearchRelationship & {
   snippet: string;
   links: SearchRelationship[];
   backlinks: SearchRelationship[];
+  linkTargets: Record<string, string>;
+  alsoDefinedIn: SearchRelationship[];
+  conflicts: (SearchRelationship & { difference: number })[];
+  canReviewConflicts: boolean;
 };
 export type SearchResponse = {
   query: string;

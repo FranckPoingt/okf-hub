@@ -24,10 +24,7 @@ import {
   AuthScreen,
   WorkspaceOnboarding,
 } from "./components/auth-panels.tsx";
-import {
-  DocumentEditor,
-  DocumentPreview,
-} from "./components/editor/document-editor.tsx";
+import { DocumentEditor } from "./components/editor/document-editor.tsx";
 import {
   type CommentAnchor,
   type CommentSelection,
@@ -35,6 +32,7 @@ import {
 } from "./components/editor/document-comments.tsx";
 import { DocumentProperties } from "./components/editor/document-properties.tsx";
 import { DocumentReferences } from "./components/editor/document-references.tsx";
+import { KnowledgeDocument } from "./components/editor/knowledge-document.tsx";
 import { PresentationMode } from "./components/editor/presentation-mode.tsx";
 import { RevisionHistory } from "./components/editor/revision-history.tsx";
 import {
@@ -87,7 +85,6 @@ import type {
 import {
   type AppRoute,
   parseAppRoute,
-  resolveImportedLink,
   routePath,
   type SettingsSection,
 } from "./routes.ts";
@@ -1733,19 +1730,12 @@ export default function App() {
                   </div>
                 </section>
                 <div className="editor-frame read-only imported-editor">
-                  <DocumentPreview
+                  <KnowledgeDocument
+                    documentId={imported.id}
                     markdown={imported.markdown}
-                    onLinkOpen={(href) => {
-                      const path = resolveImportedLink(imported.path, href);
-                      if (!path) return false;
-                      const target = imports.find((item) =>
-                        item.sourceId === imported.sourceId &&
-                        (item.path === path || item.path === `${path}.md`)
-                      );
-                      if (!target) return false;
-                      void openImported(target.sourceId, target.path);
-                      return true;
-                    }}
+                    imported
+                    onOpenHub={showHubConcept}
+                    onOpenImported={openImported}
                   />
                 </div>
               </MilkdownProvider>
@@ -1872,6 +1862,7 @@ export default function App() {
                   onInsert={insertReference}
                   onOpenChange={setReferencesOpen}
                   onOpenConcept={showHubConcept}
+                  onOpenImported={openImported}
                 />
 
                 <RevisionHistory
@@ -1884,6 +1875,13 @@ export default function App() {
                   onOpenChange={setHistoryOpen}
                   onRestore={(number) => void restoreRevision(number)}
                 />
+                {view === "draft" && canEditDocument && (
+                  <KnowledgeDocument
+                    documentId={concept.id}
+                    onOpenHub={showHubConcept}
+                    onOpenImported={openImported}
+                  />
+                )}
                 {actionError && (
                   <p className="action-error" role="alert">{actionError}</p>
                 )}
@@ -1975,7 +1973,10 @@ export default function App() {
                             canEdit={false}
                             onConceptUpdate={() => {}}
                           />
-                          <DocumentPreview
+                          <KnowledgeDocument
+                            documentId={concept.id}
+                            onOpenHub={showHubConcept}
+                            onOpenImported={openImported}
                             key={`${concept.publishedRevision}-${view}`}
                             conceptId={concept.id}
                             markdown={view === "draft"

@@ -25,6 +25,7 @@ import {
 } from "../../collab-provider.ts";
 import { api, conceptPath, SERVICE } from "../../lib/api.ts";
 import { embedPreview } from "../../lib/embeds.ts";
+import { resolvePreviewLinks } from "../../lib/knowledge-preview.ts";
 import type { CommentThread } from "../../lib/models.ts";
 import type { CommentSelection } from "./document-comments.tsx";
 
@@ -312,12 +313,16 @@ export function DocumentPreview({
   conceptId,
   onCommentOpen,
   onLinkOpen,
+  linkTargets,
+  imported = false,
 }: {
   markdown: string;
   hidePageTitle?: boolean;
   conceptId?: string;
   onCommentOpen?: (threadId: string) => void;
   onLinkOpen?: (href: string) => boolean;
+  linkTargets?: Record<string, string>;
+  imported?: boolean;
 }) {
   const linkOpen = useRef(onLinkOpen);
   linkOpen.current = onLinkOpen;
@@ -357,6 +362,10 @@ export function DocumentPreview({
     });
     crepe.on((listener) =>
       listener.mounted((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        view.dispatch(
+          resolvePreviewLinks(view.state.tr, linkTargets ?? {}, imported),
+        );
         if (conceptId) {
           stopCommentHighlights = attachCommentHighlights(
             ctx.get(editorViewCtx),
@@ -371,7 +380,14 @@ export function DocumentPreview({
       return await destroy();
     };
     return crepe;
-  }, [conceptId, hidePageTitle, markdown, onCommentOpen]);
+  }, [
+    conceptId,
+    hidePageTitle,
+    imported,
+    linkTargets,
+    markdown,
+    onCommentOpen,
+  ]);
   return <Milkdown />;
 }
 

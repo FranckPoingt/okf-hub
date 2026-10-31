@@ -44,6 +44,7 @@ export function SearchPanel(
   const [tag, setTag] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [conflictsOnly, setConflictsOnly] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -76,6 +77,10 @@ export function SearchPanel(
     event.preventDefault();
     runSearch();
   };
+  const displayedResults =
+    result?.results.filter((item) =>
+      !conflictsOnly || (item.canReviewConflicts && item.conflicts.length > 0)
+    ) ?? [];
   const activeFilters = Number(Boolean(type)) + Number(Boolean(tag)) +
     Number(includeArchived);
   const open = (item: SearchRelationship) => {
@@ -118,6 +123,16 @@ export function SearchPanel(
         <p>Search every source you can access, then narrow the results.</p>
         <Button type="button" onClick={onAsk}>Ask OKF</Button>
       </div>
+      {result?.results.some((item) => item.canReviewConflicts) && (
+        <label className="my-4 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={conflictsOnly}
+            onChange={(event) => setConflictsOnly(event.target.checked)}
+          />
+          Potential conflicts across the workspace
+        </label>
+      )}
       <form
         className="my-7 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex"
         role="search"
@@ -243,12 +258,13 @@ export function SearchPanel(
       </form>
       {error && <p className="source-error" role="alert">{error}</p>}
       <div className="mb-2.5 text-xs text-muted-foreground" aria-live="polite">
-        {busy ? "Checking access…" : `${result?.results.length ?? 0} results`}
+        {busy ? "Checking access…" : `${displayedResults.length} results`}
       </div>
       <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
-        {result?.results.map((item) => {
+        {displayedResults.map((item) => {
           const detailCount = item.tags.length + item.links.length +
-            item.backlinks.length;
+            item.backlinks.length + item.alsoDefinedIn.length +
+            item.conflicts.length;
           return (
             <article className="border-b last:border-b-0" key={item.id}>
               <div className="px-4 py-3.5">
@@ -263,6 +279,9 @@ export function SearchPanel(
                   </Button>
                   <div className="flex shrink-0 items-center gap-1.5">
                     <Badge variant="outline">{item.type}</Badge>
+                    {item.conflicts.length > 0 && (
+                      <Badge variant="destructive">Potential conflict</Badge>
+                    )}
                     {item.trust !== "current" && (
                       <Badge variant="destructive">
                         {item.trust.replace("_", " ")}
@@ -308,13 +327,18 @@ export function SearchPanel(
                     )}
                     {relationships("Links to", item.links)}
                     {relationships("Linked from", item.backlinks)}
+                    {relationships("Also defined in", item.alsoDefinedIn)}
+                    {relationships(
+                      "Potential definition conflict",
+                      item.conflicts,
+                    )}
                   </div>
                 </details>
               )}
             </article>
           );
         })}
-        {!busy && result?.results.length === 0 && (
+        {!busy && result && displayedResults.length === 0 && (
           <p className="p-10 text-center text-sm text-muted-foreground">
             No accessible knowledge matches these filters.
           </p>

@@ -27,6 +27,7 @@ import {
 } from "./export-archive.ts";
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
 import { retrieveKnowledge } from "./knowledge-retrieval.ts";
+import { buildKnowledgeGraph, definitionContent } from "./knowledge-graph.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
 import { createChangeProposalRoutes } from "./change-proposals.ts";
 import { createObjectStore } from "./object-store.ts";
@@ -340,6 +341,9 @@ type SearchDocument = {
   sourceRevision?: string;
   importedAt?: string;
   linkHrefs: string[];
+  stableId?: string;
+  body?: string;
+  canReviewConflicts: boolean;
 };
 
 function bodyOnly(markdown: string) {
@@ -401,9 +405,11 @@ function withoutFrontmatter(markdown: string) {
 
 function markdownHrefs(markdown: string) {
   return Array.from(
-    markdown.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g),
-  )
-    .map((match) => match[1]);
+    markdown.matchAll(
+      /(?<!!)\[[^\]]+\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)/g,
+    ),
+    (match) => match[1] || match[2],
+  );
 }
 
 function templateVariables(markdown: string) {
@@ -483,10 +489,11 @@ export function publishedMarkdown(
   publishedAt: string,
   title = "Incident communication",
   type = "Policy",
+  stableId?: string,
 ) {
-  return `---\ntype: ${type}\ntitle: ${
-    JSON.stringify(title)
-  }\nstatus: stable\ngenerated: { by: "human:${actorUserId}", at: "${publishedAt}" }\n---\n\n${
+  return `---\ntype: ${type}\ntitle: ${JSON.stringify(title)}\n${
+    stableId ? `id: ${JSON.stringify(stableId)}\n` : ""
+  }status: stable\ngenerated: { by: "human:${actorUserId}", at: "${publishedAt}" }\n---\n\n${
     bodyOnly(body).trimEnd()
   }\n`;
 }
@@ -2005,6 +2012,7 @@ export async function createCollabApp({
         publishedAt,
         row.title,
         row.type,
+        row.id,
       ),
     );
     db.exec("BEGIN");
@@ -2146,6 +2154,8 @@ export async function createCollabApp({
         path: `okf/${documentPath}.md`,
         body: `---\ntype: ${JSON.stringify(row.type)}\ntitle: ${
           JSON.stringify(row.title)
+        }\nid: ${
+          JSON.stringify(row.id)
         }\nstatus: ${status}\nintent: ${row.intent}\n---\n\n${
           bodyOnly(draft).trimEnd()
         }\n`,
@@ -2306,37 +2316,10 @@ export async function createCollabApp({
     return await payload(concept(conceptId)!, true, userId);
   }
 
-  function resolveDocumentLink(item: SearchDocument, href: string) {
-    const target = href.split(/[?#]/, 1)[0];
-    if (item.sourceId === "hub") {
-      const match = target.match(/^\/knowledge\/([^/]+)$/);
-      if (!match) return null;
-      try {
-        return decodeURIComponent(match[1]);
-      } catch {
-        return null;
-      }
-    }
-    if (!item.path) return null;
-    if (
-      !target || target.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(target)
-    ) {
-      return null;
-    }
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(target);
-    } catch {
-      return null;
-    }
-    const path = normalize(
-      decoded.startsWith("/")
-        ? decoded.slice(1)
-        : join(dirname(item.path), decoded),
-    );
-    if (!path || path === ".." || path.startsWith("../")) return null;
-    return importedId(item.sourceId, path);
-  }
+  const definitionCache = new Map<
+    string,
+    { stableId?: string; body?: string }
+  >();
 
   async function visibleSearchDocuments(
     userId: string,
@@ -2386,6 +2369,9 @@ export async function createCollabApp({
           trust: "current",
           searchText: [row.title, row.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
+          stableId: row.id,
+          body: content || undefined,
+          canReviewConflicts: Boolean(canEditHub),
         });
       }
     }
@@ -2399,7 +2385,21 @@ export async function createCollabApp({
         : repositorySource(item.sourceId);
       const source = item.sourceId === "notion" ? notion : repository ?? shared;
       const failed = source?.status === "sync_failed";
+      // Imported objects only change on sync, so cache by key and revision.
+      const cacheKey = `${item.objectKey}@${item.sourceRevision}`;
+      let definition = definitionCache.get(cacheKey);
+      if (!definition) {
+        try {
+          definition = definitionContent(await store.get(item.objectKey));
+          if (definitionCache.size >= 5_000) definitionCache.clear();
+          definitionCache.set(cacheKey, definition);
+        } catch {
+          // Unavailable bodies cannot produce conflict signals.
+          definition = {};
+        }
+      }
       documents.push({
+        ...definition,
         id: item.id,
         kind: "imported",
         sourceId: item.sourceId,
@@ -2427,6 +2427,7 @@ export async function createCollabApp({
         sourceRevision: item.sourceRevision,
         importedAt: item.importedAt,
         linkHrefs: JSON.parse(item.links) as string[],
+        canReviewConflicts: await security.check(userId, "edit", item.id),
       });
     }
     return { documents, canIncludeArchived };
@@ -2448,34 +2449,7 @@ export async function createCollabApp({
       userName,
       input.includeArchived === true,
     );
-    const visibleById = new Map(documents.map((item) => [item.id, item]));
-    const outgoing = new Map<string, Set<string>>();
-    const incoming = new Map<string, Set<string>>();
-    for (const item of documents) {
-      const targets = new Set<string>();
-      for (const href of item.linkHrefs) {
-        const id = resolveDocumentLink(item, href);
-        if (id && id !== item.id && visibleById.has(id)) targets.add(id);
-      }
-      outgoing.set(item.id, targets);
-      for (const target of targets) {
-        const sources = incoming.get(target) ?? new Set<string>();
-        sources.add(item.id);
-        incoming.set(target, sources);
-      }
-    }
-    const relationship = (id: string) => {
-      const item = visibleById.get(id)!;
-      return {
-        id: item.id,
-        kind: item.kind,
-        sourceId: item.sourceId,
-        title: item.title,
-        path: item.path,
-        trust: item.trust,
-        sourceLabel: item.sourceLabel,
-      };
-    };
+    const graph = buildKnowledgeGraph(documents);
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     const results = documents.filter((item) => {
       if (type && item.type.toLocaleLowerCase() !== type) return false;
@@ -2497,7 +2471,13 @@ export async function createCollabApp({
         : title.includes(loweredQuery)
         ? 10
         : 1;
-      const { searchText, linkHrefs: _linkHrefs, ...visible } = item;
+      const {
+        searchText,
+        linkHrefs: _linkHrefs,
+        stableId: _stableId,
+        body: _body,
+        ...visible
+      } = item;
       return {
         ...visible,
         score,
@@ -2506,8 +2486,7 @@ export async function createCollabApp({
           item.owner,
           item.tags.join(" "),
         ]),
-        links: Array.from(outgoing.get(item.id) ?? []).map(relationship),
-        backlinks: Array.from(incoming.get(item.id) ?? []).map(relationship),
+        ...graph.get(item.id)!,
       };
     }).sort((left, right) =>
       right.score - left.score || left.title.localeCompare(right.title)
