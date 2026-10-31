@@ -1753,13 +1753,10 @@ export default function App() {
   if (bootstrap.setupRequired) {
     return <WorkspaceOnboarding onComplete={refresh} onSignOut={signOut} />;
   }
-  const invitationId = new URLSearchParams(globalThis.location.search).get(
-    "invitation",
-  );
   if (!bootstrap.canView) {
     return (
       <AccessGate
-        invited={Boolean(invitationId && bootstrap.invitationRequired)}
+        invited={Boolean(bootstrap.invitationRequired)}
         onAccepted={refresh}
         onSignOut={signOut}
       />

@@ -1062,6 +1062,13 @@ export async function createSecurity({
     for (const key of settings) unset(key);
   }
 
+  function pendingInvitationFor(email: string) {
+    const row = db.prepare(
+      "SELECT id FROM invitation WHERE lower(email) = lower(?) AND status = 'pending' ORDER BY createdAt DESC LIMIT 1",
+    ).get(email) as Row | undefined;
+    return row ? String(row.id) : undefined;
+  }
+
   async function bootstrap(current: NonNullable<Session>) {
     const membership = member(current.user.id);
     const configured = Boolean(get("organization_id"));
@@ -1164,9 +1171,10 @@ export async function createSecurity({
       : [];
     const invitations = owner
       ? db.prepare(
-        `SELECT d.invitationId, d.email, d.access, d.url, i.status FROM okf_invite_delivery d JOIN invitation i ON i.id = d.invitationId ORDER BY i.createdAt DESC`,
+        `SELECT d.invitationId, d.email, d.access, d.url, i.status FROM okf_invite_delivery d JOIN invitation i ON i.id = d.invitationId WHERE i.status = 'pending' ORDER BY i.createdAt DESC`,
       ).all()
       : [];
+    const pendingInvitationId = pendingInvitationFor(current.user.email);
     return json({
       user: current.user,
       access,
@@ -1176,12 +1184,7 @@ export async function createSecurity({
       passwordChangeRequired: Boolean(
         get(`password_change:${current.user.id}`),
       ),
-      invitationRequired: !membership &&
-        Boolean(
-          db.prepare(
-            "SELECT 1 FROM invitation WHERE email = ? AND status = 'pending'",
-          ).get(current.user.email),
-        ),
+      invitationRequired: !membership && Boolean(pendingInvitationId),
       invitations,
       workspace,
       members,
@@ -1461,12 +1464,17 @@ export async function createSecurity({
       url.pathname === "/api/invitations/accept" && request.method === "POST"
     ) {
       const body = await request.json().catch(() => ({})) as Row;
-      const invitationId = String(body.invitationId ?? "");
+      // Without an id, fall back to the invitation issued to the signed-in email.
+      const invitationId = String(
+        body.invitationId ?? pendingInvitationFor(current.user.email) ?? "",
+      );
       const invitation = db.prepare(
         "SELECT email, teamId, status FROM invitation WHERE id = ?",
       ).get(invitationId) as Row | undefined;
       if (
-        !invitation || invitation.email !== current.user.email ||
+        !invitation ||
+        String(invitation.email).toLowerCase() !==
+          current.user.email.toLowerCase() ||
         invitation.status !== "pending"
       ) return json({ error: "Invitation not found" }, 404);
       try {

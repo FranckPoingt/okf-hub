@@ -388,7 +388,7 @@ export function AccessGate(
     );
     const response = await api("/api/invitations/accept", {
       method: "POST",
-      body: JSON.stringify({ invitationId }),
+      body: JSON.stringify({ invitationId: invitationId || undefined }),
     });
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
