@@ -196,3 +196,32 @@ Deno.test("manual Git sources get a git-apply compatible patch", async () => {
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("patches build with write access limited to the data directory", async () => {
+  const data = await Deno.makeTempDir();
+  try {
+    const module = new URL("./change-proposals.ts", import.meta.url).href;
+    const script = `import { buildPatch } from ${JSON.stringify(module)};
+      const patch = await buildPatch({ revision: "r1", path: "a.md", before: "Old\\n", after: "New\\n", name: "Ada", subject: "S", rationale: "R", tempDir: ${
+      JSON.stringify(data)
+    } });
+      console.log(patch.includes("+New"));`;
+    await Deno.writeTextFile(`${data}/run.ts`, script);
+    const result = await new Deno.Command("deno", {
+      args: [
+        "run",
+        `--allow-write=${data}`,
+        "--allow-run=git",
+        "--allow-read",
+        "--allow-env",
+        `${data}/run.ts`,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assert(result.success, new TextDecoder().decode(result.stderr));
+    assert.equal(new TextDecoder().decode(result.stdout).trim(), "true");
+  } finally {
+    await Deno.remove(data, { recursive: true });
+  }
+});

@@ -21,7 +21,7 @@
     "admin": "NODE_DISABLE_COLORS=1 BETTER_AUTH_TELEMETRY=0 deno run --allow-read --allow-write --allow-net --allow-env --allow-run=docker scripts/admin.ts",
     "typecheck": "tsc --noEmit",
     "lint": "deno lint src server scripts tests vite.config.ts",
-    "test": "deno task typecheck && deno task build && deno task lint && deno test --allow-net --allow-run=git --allow-env --allow-read --allow-write tests server scripts"
+    "test": "deno task typecheck && deno task build && deno task lint && deno test --allow-net --allow-run=git,deno --allow-env --allow-read --allow-write tests server scripts"
   },
   "imports": {
     "@std/yaml": "jsr:@std/yaml@^1.2.0"

@@ -1503,6 +1503,7 @@ export async function createCollabApp({
     read: (key) => store.get(key),
     app: githubApp,
     baseUrl: baseURL,
+    tempDir: dataDir,
   });
   const repositoryRefreshes = new Map<string, Promise<void>>();
   function refreshRepository(

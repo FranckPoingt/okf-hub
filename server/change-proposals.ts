@@ -66,7 +66,7 @@ export function proposalBody(
 }
 
 export async function buildPatch(
-  { revision, path, before, after, name, subject, rationale }: {
+  { revision, path, before, after, name, subject, rationale, tempDir }: {
     revision: string;
     path: string;
     before: string;
@@ -74,9 +74,11 @@ export async function buildPatch(
     name: string;
     subject: string;
     rationale: string;
+    // The server may only write under its data directory, not the system tmp.
+    tempDir?: string;
   },
 ) {
-  const dir = await Deno.makeTempDir();
+  const dir = await Deno.makeTempDir({ dir: tempDir });
   try {
     for (const [side, content] of [["a", before], ["b", after]]) {
       const file = `${dir}/${side}/${path}`;
@@ -119,7 +121,16 @@ export async function buildPatch(
 }
 
 export function createChangeProposalRoutes(
-  { db, security, repositorySource, read, app, baseUrl, fetcher = fetch }: {
+  {
+    db,
+    security,
+    repositorySource,
+    read,
+    app,
+    baseUrl,
+    tempDir,
+    fetcher = fetch,
+  }: {
     db: DatabaseSync;
     security: Pick<
       Awaited<ReturnType<typeof createSecurity>>,
@@ -129,6 +140,7 @@ export function createChangeProposalRoutes(
     read: (objectKey: string) => Promise<string>;
     app: GitHubAppClient | null | undefined;
     baseUrl?: string;
+    tempDir?: string;
     fetcher?: typeof fetch;
   },
 ) {
@@ -273,6 +285,7 @@ export function createChangeProposalRoutes(
             name,
             subject: title,
             rationale,
+            tempDir,
           });
           security.audit(
             current.user.id,
