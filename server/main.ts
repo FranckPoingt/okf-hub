@@ -1,5 +1,7 @@
 /// <reference lib="deno.ns" />
 
+import { parse as parseYaml } from "@std/yaml";
+
 import {
   createFrontmatterStore,
   editableSources,
@@ -2247,7 +2249,14 @@ export async function createCollabApp({
         // Never substitute a private working title for malformed publication data.
       }
     }
-    const type = frontmatter?.match(/^type:\s*(.+)$/m)?.[1]?.trim();
+    let type = frontmatter?.match(/^type:\s*(.+)$/m)?.[0];
+    // typeYaml quotes YAML-sensitive types such as 'Null' or 'true'.
+    try {
+      const value = type && (parseYaml(type) as { type?: unknown }).type;
+      type = typeof value === "string" ? value.trim() : undefined;
+    } catch {
+      type = undefined;
+    }
     if (type && /^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)) {
       metadata.type = type;
     }
