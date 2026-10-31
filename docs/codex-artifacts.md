@@ -202,7 +202,10 @@ way. Do not delete the receipt merely to work around an error.
 Use the Hub's space or workspace ZIP export. It includes the OKF context and the
 artifact's original static files, including `context.md`. Extract the ZIP and
 open the exported `index.html` to check that this self-contained artifact
-remains usable outside the Hub. The receipt and API key are excluded.
+remains usable outside the Hub. The receipt and API key are excluded. Browsers
+block ES module scripts on `file://` pages, so serve an artifact that uses
+modules (such as vendored React) from the extracted folder, for example with
+`deno run -A jsr:@std/http/file-server`, and open the printed URL.
 
 This proves portability of the static files and context. It does not yet export
 Hub App data, package a server runtime, or automatically translate artifacts
