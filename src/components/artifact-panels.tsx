@@ -209,7 +209,12 @@ function ContextPanelBody({
                   Draft · v{activeApp.version}
                 </StatusBadge>
               )}
-            <TrustBadge trust={concept.trust} reason={concept.trustReason} />
+            <TrustBadge
+              trust={concept.trust}
+              reason={concept.trustReason}
+              freshness={concept.freshness}
+              reviewDueDate={concept.reviewDueDate}
+            />
             <Badge
               variant="outline"
               className="h-auto max-w-full shrink gap-1 py-0.5 text-left whitespace-normal"

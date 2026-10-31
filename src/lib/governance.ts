@@ -60,3 +60,38 @@ export function deriveFreshness(
     reason: review.reviewedRevision ? "revision_changed" : "never_reviewed",
   };
 }
+
+const reviewDateFormatter = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+/** Review deadlines are calendar dates; display their UTC day in every timezone. */
+export function formatReviewDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime())
+    ? reviewDateFormatter.format(date)
+    : value;
+}
+
+/** Why a review needs attention, or null when it does not. */
+export function reviewAttention(
+  freshness: Freshness,
+  reviewDueDate?: string | null,
+): string | null {
+  const due = reviewDueDate ? formatReviewDate(reviewDueDate) : null;
+  switch (freshness.status) {
+    case "due":
+      return `Review due ${due ?? "today"}`;
+    case "overdue":
+      return `Review overdue${due ? ` since ${due}` : ""}`;
+    case "unreviewed":
+      return freshness.reason === "revision_changed"
+        ? "Published revision changed since its last review"
+        : "Published document not reviewed yet";
+    default:
+      return null;
+  }
+}

@@ -8,7 +8,6 @@ import type {
 } from "../lib/models.ts";
 import {
   formatReviewDate,
-  FreshnessBadge,
   freshnessExplanation,
 } from "./knowledge-freshness.tsx";
 import { Button } from "./ui/button.tsx";
@@ -336,6 +335,10 @@ export function SearchPanel(
                     <TrustBadge
                       trust={item.trust}
                       reason={item.trustReason}
+                      freshness={item.kind === "hub-native"
+                        ? item.freshness
+                        : undefined}
+                      reviewDueDate={item.reviewDueDate}
                     />
                     {item.kind === "hub-native" &&
                       Boolean(item.publishedRevision) &&
@@ -346,12 +349,6 @@ export function SearchPanel(
                       >
                         Draft changes
                       </Badge>
-                    )}
-                    {item.kind === "hub-native" && item.freshness && (
-                      <FreshnessBadge
-                        freshness={item.freshness}
-                        reviewDueDate={item.reviewDueDate}
-                      />
                     )}
                     {item.status === "archived" && (
                       <Badge variant="secondary">Archived</Badge>

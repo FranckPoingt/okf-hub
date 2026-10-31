@@ -20,6 +20,11 @@
 
 ### Behavior changes
 
+- The UI says Artifact wherever it used to say App. API routes, action names
+  (`apps.*`) and MCP tools are unchanged.
+- Stale and review-due documents share one **Needs attention** badge with all
+  reasons in its tooltip; **Sync failed** keeps its own badge. Home no longer
+  repeats the count above its Needs attention tab.
 - Agents can pull artifact context and visible files with `artifact.get` or
   `deno task artifact:pull`, then revise using a receipt or document/App IDs.
   Added workspace `knowledge.ask`, permission-filtered

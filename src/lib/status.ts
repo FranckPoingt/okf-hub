@@ -7,7 +7,7 @@ const STATUSES: Record<string, [label: string, variant: Variant]> = {
   current: ["Current", "success"],
   syncing: ["Syncing", "secondary"],
   sync_failed: ["Sync failed", "destructive"],
-  stale: ["Stale", "warning"],
+  needs_attention: ["Needs attention", "warning"],
   running: ["Running", "secondary"],
   succeeded: ["Succeeded", "success"],
   partial: ["Partial", "warning"],

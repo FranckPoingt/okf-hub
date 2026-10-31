@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Database, GitBranch, Plus, Search } from "lucide-react";
-import { formatReviewDate, FreshnessBadge } from "./knowledge-freshness.tsx";
+import { formatReviewDate } from "./knowledge-freshness.tsx";
 import { TrustBadge } from "./trust-badge.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -87,6 +87,8 @@ export function HomePanel(
       imported: false as const,
       freshness: item.freshness,
       reviewDueDate: item.reviewDueDate,
+      trust: item.trust,
+      trustReason: item.trustReason,
       open: () => onOpenConcept(item.id),
     })),
     ...imports.map((item) => ({
@@ -98,6 +100,8 @@ export function HomePanel(
       imported: true as const,
       freshness: undefined,
       reviewDueDate: undefined,
+      trust: undefined,
+      trustReason: undefined,
       open: () => void onOpenImported(item.sourceId, item.path),
     })),
   ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(
@@ -108,7 +112,6 @@ export function HomePanel(
     item.status === "active" &&
     (item.hasUnpublishedChanges ?? !item.publishedRevision)
   ).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  // Review status (`freshness`) and dependency staleness (`trust`) stay separate signals.
   const attention = concepts.filter((item) =>
     item.status === "active" && (
       item.trust === "stale" ||
@@ -205,19 +208,6 @@ export function HomePanel(
                 {sourceAttention}{" "}
                 {sourceAttention === 1 ? "source needs" : "sources need"}{" "}
                 attention
-              </button>
-            </>
-          )}
-          {canEdit && attention.length > 0 && (
-            <>
-              <span aria-hidden="true">·</span>
-              <button
-                className="font-medium text-foreground hover:underline"
-                type="button"
-                onClick={() => setTab("attention")}
-              >
-                {attention.length}{" "}
-                {attention.length === 1 ? "page needs" : "pages need"} attention
               </button>
             </>
           )}
@@ -344,12 +334,12 @@ export function HomePanel(
                     </small>
                   </span>
                   <span className="flex flex-col items-end gap-1.5">
-                    {item.freshness && (
-                      <FreshnessBadge
-                        freshness={item.freshness}
-                        reviewDueDate={item.reviewDueDate}
-                      />
-                    )}
+                    <TrustBadge
+                      trust={item.trust}
+                      reason={item.trustReason}
+                      freshness={item.freshness}
+                      reviewDueDate={item.reviewDueDate}
+                    />
                     <time
                       dateTime={item.updatedAt}
                       title={`${
@@ -461,13 +451,9 @@ export function HomePanel(
                       <TrustBadge
                         trust={item.trust}
                         reason={item.trustReason}
+                        freshness={item.freshness}
+                        reviewDueDate={item.reviewDueDate}
                       />
-                      {item.freshness.status !== "current" && (
-                        <FreshnessBadge
-                          freshness={item.freshness}
-                          reviewDueDate={item.reviewDueDate}
-                        />
-                      )}
                     </span>
                   </Button>
                 ))}

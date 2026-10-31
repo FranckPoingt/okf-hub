@@ -23,6 +23,7 @@ import {
   Users,
 } from "lucide-react";
 import type { Collaborator } from "../../collab-provider.ts";
+import type { Freshness } from "../../lib/governance.ts";
 import type { Trust } from "../../lib/models.ts";
 import { TrustBadge } from "../trust-badge.tsx";
 import { Button } from "../ui/button.tsx";
@@ -57,6 +58,8 @@ type DocumentToolbarProps = {
   revisionCount: number;
   status: "active" | "archived";
   trust?: Trust;
+  freshness?: Freshness;
+  reviewDueDate?: string | null;
   trustReason?: string;
   surface: DocumentSurface;
   view: "draft" | "published";
@@ -95,6 +98,8 @@ export function DocumentToolbar({
   revisionCount,
   status,
   trust,
+  freshness,
+  reviewDueDate,
   trustReason,
   surface,
   view,
@@ -220,7 +225,12 @@ export function DocumentToolbar({
         <Link2 />
       </Button>
 
-      <TrustBadge trust={trust} reason={trustReason} />
+      <TrustBadge
+        trust={trust}
+        reason={trustReason}
+        freshness={freshness}
+        reviewDueDate={reviewDueDate}
+      />
 
       {canEdit && status === "active" && (
         <Tabs

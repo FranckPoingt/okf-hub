@@ -104,17 +104,19 @@ calendar day; the following day it becomes overdue. With no deadline, the hub
 shows the recorded review date without inventing an expiry.
 
 **Home → Needs attention** collects maintained, published documents that need an
-owner or review, plus documents you can edit that are **stale** because a source
-or dependency changed (the reason is shown). Search also exposes ownership and
-review filters. Editors see a separate **Draft changes** label when search shows
-unpublished writing beside the review status of its publication. Drafts and
-source connection failures remain separately identifiable.
+owner or review, plus documents you can edit that went stale because a source or
+dependency changed. Search also exposes ownership and review filters. Editors
+see a separate **Draft changes** label when search shows unpublished writing
+beside the review status of its publication. Drafts and source connection
+failures remain separately identifiable.
 
-Review status and trust are separate signals. The review badge (current, due,
-overdue, needs review) comes from the ownership and review settings above. The
-trust badge (**stale**, **sync failed**) comes from sources and dependencies,
-described in [Freshness and ownership](#freshness-and-ownership). A reviewed
-document still shows **stale** when a document in its `sources:` goes stale, and
+Review status and trust stay separate in the data and API, but the UI shows one
+**Needs attention** badge when either applies: a review that is due, overdue or
+missing (from the ownership and review settings above), or stale code or
+dependencies (from sources, described in
+[Freshness and ownership](#freshness-and-ownership)). Its tooltip lists every
+reason. **Sync failed** is a source error, so it keeps its own badge. A reviewed
+document still needs attention when a document in its `sources:` goes stale, and
 a stale reason never names a source you cannot view.
 
 Which owner is shown:
@@ -205,10 +207,10 @@ describes: [src/billing/**, db/migrations/*billing*.sql]
 
 On every successful sync (webhook, manual, or scheduled), the hub compares the
 previously imported revision with the new one. If a described path changed and
-the concept file did not, the concept is marked **stale**; the badge tooltip
-shows the commit range and up to ten changed paths. Publishing an update to the
-concept file clears it. A failed sync, a first import, or a missing previous
-revision never marks anything stale.
+the concept file did not, the concept is marked stale; the **Needs attention**
+tooltip shows the commit range and up to ten changed paths. Publishing an update
+to the concept file clears it. A failed sync, a first import, or a missing
+previous revision never marks anything stale.
 
 Each sync also reads the repository's `CODEOWNERS` (`.github/`, the root, then
 `docs/`, as GitHub does; the last matching rule wins). A concept without an
@@ -218,9 +220,9 @@ also lists the code owners of the described paths.
 Hub documents, especially Artifacts, can list the concepts they were built from
 in `sources:` frontmatter, using a hub document id or `/knowledge/<id>` link, an
 imported concept id, or an imported path such as `billing.md`. When any of them
-is stale, archived, or deleted, the dependent document shows **stale: depends on
-…** in its view and in search. Other `sources:` entries, such as external URLs,
-are kept as citations and are not tracked.
+is stale, archived, or deleted, the dependent document shows **Needs attention**
+with the reason “Depends on …” in its view and in search. Other `sources:`
+entries, such as external URLs, are kept as citations and are not tracked.
 
 ### Ask OKF
 

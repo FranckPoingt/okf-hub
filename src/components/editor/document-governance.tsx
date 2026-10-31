@@ -379,6 +379,11 @@ export function DocumentGovernance({
           freshness={concept.freshness}
           reviewDueDate={concept.reviewDueDate}
         />
+        {concept.trust === "stale" && (
+          <span className="text-muted-foreground">
+            Stale: {concept.trustReason ?? "a dependency changed"}
+          </span>
+        )}
         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
           <UserRound className="size-3.5" aria-hidden="true" />Owner:{" "}
           {concept.owner?.name ??

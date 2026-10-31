@@ -1,21 +1,8 @@
-import type { Freshness } from "../lib/governance.ts";
+import { formatReviewDate, type Freshness } from "../lib/governance.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
-const reviewDateFormatter = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  timeZone: "UTC",
-});
-
-/** Review deadlines are calendar dates; display their UTC day in every timezone. */
-export function formatReviewDate(value: string): string {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime())
-    ? reviewDateFormatter.format(date)
-    : value;
-}
+export { formatReviewDate };
 
 export function freshnessExplanation(
   freshness: Freshness,

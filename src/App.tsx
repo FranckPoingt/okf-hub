@@ -2106,6 +2106,8 @@ export default function App() {
                   revisionCount={concept.revisions.length}
                   status={concept.status}
                   trust={concept.trust}
+                  freshness={concept.freshness}
+                  reviewDueDate={concept.reviewDueDate}
                   trustReason={concept.trustReason}
                   surface={surface}
                   view={view}
