@@ -1167,7 +1167,7 @@ details[open] > summary .source-details-chevron {
   align-items: center;
   gap: 5px;
 }
-.imported-document-location > span {
+.imported-document-location > span:not([data-slot]) {
   color: var(--muted-foreground);
   font-size: .8125rem;
 }
