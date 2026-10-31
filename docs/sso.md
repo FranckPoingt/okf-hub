@@ -85,6 +85,10 @@ only when the returned email has a pending invitation; the user then accepts the
 workspace invitation normally. Existing SSO users can sign in without another
 invite.
 
+SSO cannot create the very first account. Create it with the one-time setup link
+from the server log, or with `deno task admin create-owner`, then invite SSO
+users. See [Recover access](README.md#recover-access).
+
 See the official
 [Better Auth SSO documentation](https://better-auth.com/docs/plugins/sso) for
 every supported OIDC and SAML option.
