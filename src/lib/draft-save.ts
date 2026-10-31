@@ -54,6 +54,14 @@ export class DraftSaveQueue {
     return true;
   }
 
+  /** False when the editor's serialization is just the accepted checkpoint. */
+  differs(id: string, markdown: string) {
+    const draft = this.drafts.get(id);
+    return Boolean(
+      draft?.dirty || !draft?.version || draft.markdown !== markdown,
+    );
+  }
+
   state(id: string) {
     return this.drafts.get(id)?.state ?? "saved";
   }

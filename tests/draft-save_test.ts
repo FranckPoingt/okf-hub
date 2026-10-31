@@ -123,3 +123,44 @@ Deno.test("refuses a server basis while local edits are pending or a checkpoint 
   assert.equal(queue.hasPending(), false);
   queue.clear();
 });
+
+// The editor drops the leading `# Title` and re-serializes list markers when it
+// opens a document; neither may be saved as a draft change.
+const editorNormalize = (markdown: string) =>
+  markdown.replace(/^#\s+[^\n]*\n+/, "").replace(/^\* /gm, "- ");
+
+for (
+  const apiMarkdown of ["# Title\n\nBody\n", "# Title\n\n* one\n* two\n"]
+) {
+  Deno.test(
+    `opening an API-written document is not a draft change: ${
+      JSON.stringify(apiMarkdown)
+    }`,
+    async () => {
+      const writes: string[] = [];
+      const queue = new DraftSaveQueue(
+        (_id, markdown) => {
+          writes.push(markdown);
+          return Promise.resolve();
+        },
+        () => {},
+        60_000,
+      );
+      queue.accept("doc", apiMarkdown);
+      const opened = editorNormalize(apiMarkdown);
+      assert.notEqual(opened, apiMarkdown);
+      queue.accept("doc", opened); // editor reports its baseline after loading
+      assert.equal(queue.differs("doc", opened), false);
+      queue.stage("doc", opened);
+      assert.equal(queue.hasPending(), false);
+      assert.equal(await queue.flush("doc"), true);
+      assert.deepEqual(writes, []);
+
+      queue.stage("doc", `${opened}More\n`);
+      assert.equal(queue.differs("doc", `${opened}More\n`), true);
+      assert.equal(await queue.flush("doc"), true);
+      assert.deepEqual(writes, [`${opened}More\n`]);
+      queue.clear();
+    },
+  );
+}

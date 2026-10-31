@@ -304,7 +304,10 @@ export default function App() {
       await governanceFlush.current?.();
       const content = documentSnapshot.current?.();
       const id = activeConceptId.current;
-      if (id && content != null && content !== latestMarkdown.current) {
+      if (
+        id && content != null && content !== latestMarkdown.current &&
+        saveQueue.differs(id, content)
+      ) {
         latestMarkdown.current = content;
         setMarkdown(content);
         saveQueue.stage(id, content);
@@ -330,7 +333,9 @@ export default function App() {
   useEffect(() => {
     const protectDraft = (event: BeforeUnloadEvent) => {
       const content = documentSnapshot.current?.();
-      const unstaged = content != null && content !== latestMarkdown.current;
+      const id = activeConceptId.current;
+      const unstaged = content != null && content !== latestMarkdown.current &&
+        (!id || saveQueue.differs(id, content));
       if (
         !unstaged && !saveQueue.hasPending() && !templateDraftCache.current.size
       ) return;
@@ -2744,6 +2749,8 @@ export default function App() {
                             canEdit={canEditDocument}
                             onMarkdown={saveMarkdown}
                             onSnapshotReady={handleDraftSnapshot}
+                            onLoaded={(content) =>
+                              saveQueue.accept(concept.id, content)}
                             onStatus={setStatus}
                             onCollaborators={setCollaborators}
                             onReferenceReady={handleReferenceReady}

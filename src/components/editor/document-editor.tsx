@@ -500,6 +500,7 @@ export function DocumentEditor({
   canEdit,
   onMarkdown,
   onSnapshotReady,
+  onLoaded,
   onStatus,
   onCollaborators,
   onReferenceReady,
@@ -514,6 +515,8 @@ export function DocumentEditor({
   canEdit: boolean;
   onMarkdown: (markdown: string) => void;
   onSnapshotReady?: (read: (() => string | null) | null) => void;
+  /** The editor's own serialization of the opened document, before any edit. */
+  onLoaded?: (markdown: string) => void;
   onStatus: (status: ConnectionStatus) => void;
   onCollaborators: (users: Collaborator[]) => void;
   onReferenceReady?: (
@@ -529,9 +532,12 @@ export function DocumentEditor({
   markdownChange.current = onMarkdown;
   const snapshotReady = useRef(onSnapshotReady);
   snapshotReady.current = onSnapshotReady;
+  const loaded = useRef(onLoaded);
+  loaded.current = onLoaded;
   const [ready, setReady] = useState(false);
   useEditor((root) => {
     setReady(false);
+    let emitted = "";
     const doc = new Y.Doc();
     const provider = new DenoCollabProvider(
       `${SERVICE.replace("http", "ws")}/collab?conceptId=${
@@ -601,6 +607,10 @@ export function DocumentEditor({
             view.dispatch(transaction);
           }
           editorConnected = true;
+          // Opening must not look like an edit: the title strip and Markdown
+          // normalization above are the baseline, not a change.
+          emitted = crepe.getMarkdown();
+          loaded.current?.(emitted);
           view.setProps({ editable: () => canEdit && editorConnected });
           onCommentReady?.(() => {
             const { from, to, empty } = view.state.selection;
@@ -618,8 +628,9 @@ export function DocumentEditor({
         });
         provider.connect();
       });
-      listener.markdownUpdated((_ctx, markdown, previous) => {
-        if (editorConnected && canEdit && markdown !== previous) {
+      listener.markdownUpdated((_ctx, markdown) => {
+        if (editorConnected && canEdit && markdown !== emitted) {
+          emitted = markdown;
           markdownChange.current(markdown);
         }
       });
