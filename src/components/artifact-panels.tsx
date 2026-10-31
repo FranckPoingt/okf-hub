@@ -28,6 +28,7 @@ import type {
 import { DocumentPreview } from "./editor/document-editor.tsx";
 import { AppFrame } from "./source-panels.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
+import { StatusBadge } from "./status-badge.tsx";
 import { TrustBadge } from "./trust-badge.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -189,15 +190,15 @@ function ContextPanelBody({
           <dd className="flex flex-wrap items-center gap-1.5">
             {showingLive
               ? (
-                <Badge variant="default" className="gap-1">
-                  <ShieldCheck className="size-3" />
-                  Activated · v{activeApp.liveVersion}
-                </Badge>
+                <StatusBadge status="live">
+                  <ShieldCheck />
+                  Live · v{activeApp.liveVersion}
+                </StatusBadge>
               )
               : (
-                <Badge variant="secondary">
+                <StatusBadge status="draft">
                   Draft · v{activeApp.version}
-                </Badge>
+                </StatusBadge>
               )}
             <TrustBadge trust={concept.trust} reason={concept.trustReason} />
             <Badge
@@ -380,24 +381,24 @@ export function ArtifactFirstView({
 
           {showingLive
             ? (
-              <Badge variant="default" className="h-6 gap-1 px-2 text-[11px]">
-                <ShieldCheck className="size-3" />
-                <span>Activated · v{activeApp.liveVersion}</span>
-              </Badge>
+              <StatusBadge status="live">
+                <ShieldCheck />
+                <span>Live · v{activeApp.liveVersion}</span>
+              </StatusBadge>
             )
             : (
-              <Badge variant="secondary" className="h-6 gap-1 px-2 text-[11px]">
+              <StatusBadge status="draft">
                 <span>
                   {activeApp.status === "changes_pending"
                     ? `Draft · v${activeApp.version} (live v${activeApp.liveVersion})`
                     : `Draft · v${activeApp.version}`}
                 </span>
-              </Badge>
+              </StatusBadge>
             )}
 
           <Badge
             variant="outline"
-            className="hidden h-6 gap-1 px-2 text-[11px] md:inline-flex"
+            className="hidden md:inline-flex"
             title={activeApp.grants.length
               ? `Allowed Hub capabilities: ${activeApp.grants.join(", ")}`
               : "Isolated sandboxed iframe with no Hub capabilities"}
@@ -854,40 +855,20 @@ export function ArtifactGallery({
                       <span className="artifact-gallery-card-badges">
                         {item.liveVersion !== null
                           ? (
-                            <Badge
-                              variant="default"
-                              className="h-5 gap-1 px-1.5 text-[10px]"
-                            >
-                              <ShieldCheck className="size-2.5" />
+                            <StatusBadge status="live">
+                              <ShieldCheck />
                               Live · v{item.liveVersion}
-                            </Badge>
+                            </StatusBadge>
                           )
                           : item.appCount > 0
                           ? (
-                            <Badge
-                              variant="secondary"
-                              className="h-5 px-1.5 text-[10px]"
-                            >
+                            <StatusBadge status="draft">
                               Draft app · v{item.version ?? 1}
-                            </Badge>
+                            </StatusBadge>
                           )
                           : item.publishedRevision !== null
-                          ? (
-                            <Badge
-                              variant="outline"
-                              className="h-5 px-1.5 text-[10px]"
-                            >
-                              Published
-                            </Badge>
-                          )
-                          : (
-                            <Badge
-                              variant="secondary"
-                              className="h-5 px-1.5 text-[10px]"
-                            >
-                              Draft
-                            </Badge>
-                          )}
+                          ? <Badge variant="outline">Published</Badge>
+                          : <StatusBadge status="draft" />}
                         {/* Plain badge: a tooltip trigger cannot nest in the card button. */}
                         <TrustBadge trust={item.trust} />
                         {item.trustReason && (

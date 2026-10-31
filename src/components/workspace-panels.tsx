@@ -326,7 +326,7 @@ export function SearchPanel(
                   <div className="flex max-w-[55%] shrink-0 flex-wrap justify-end gap-1.5">
                     <Badge variant="outline">{item.type}</Badge>
                     {item.conflicts.length > 0 && (
-                      <Badge variant="destructive">Potential conflict</Badge>
+                      <Badge variant="warning">Potential conflict</Badge>
                     )}
                     <TrustBadge
                       trust={item.trust}

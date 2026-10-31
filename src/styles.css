@@ -1873,6 +1873,8 @@ details[open] > summary .source-details-chevron {
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -1915,8 +1917,11 @@ details[open] > summary .source-details-chevron {
   --muted-foreground: #68746f;
   --accent: #e5eee9;
   --accent-foreground: #193d33;
-  --destructive: #b95340;
+  --destructive: #a8432f;
   --destructive-foreground: #ffffff;
+  /* Status tones: AA (>= 4.5:1) as text on their own 10% tint. */
+  --success: #1d6a46;
+  --warning: #8a5300;
   --border: #dedfd9;
   --input: #ced2cb;
   --ring: #52796f;
@@ -3241,6 +3246,8 @@ label {
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --success: #6fcf97;
+  --warning: #f2b35b;
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);

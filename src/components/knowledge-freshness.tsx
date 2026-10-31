@@ -56,6 +56,14 @@ const freshnessLabels: Record<Freshness["status"], string> = {
   overdue: "Review overdue",
 };
 
+const freshnessVariants = {
+  unpublished: "outline",
+  unreviewed: "secondary",
+  current: "success",
+  due: "warning",
+  overdue: "destructive",
+} as const;
+
 export function FreshnessBadge(
   { freshness, reviewDueDate, className }: {
     freshness: Freshness;
@@ -70,11 +78,7 @@ export function FreshnessBadge(
       <TooltipTrigger
         render={
           <Badge
-            variant={freshness.status === "overdue"
-              ? "destructive"
-              : freshness.status === "unreviewed" || freshness.status === "due"
-              ? "secondary"
-              : "outline"}
+            variant={freshnessVariants[freshness.status]}
             className={className}
           />
         }
