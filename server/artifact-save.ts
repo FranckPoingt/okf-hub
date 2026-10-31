@@ -186,7 +186,7 @@ export async function savePackedArtifact(
   });
   if (options.publish && appState.canPublish !== true) {
     throw new Error(
-      "Owner access is required to publish and activate this artifact; rerun without --publish to save a draft",
+      "Owner access or space manager access is required to publish and activate this artifact; rerun without --publish to save a draft",
     );
   }
   const apps = (appState.apps ?? appState.artifacts ?? []) as App[];

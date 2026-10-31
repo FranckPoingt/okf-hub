@@ -17,6 +17,7 @@ import {
   readArtifactUpload,
 } from "./artifact-upload.ts";
 import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
+import { createArtifactUsage } from "./artifact-usage.ts";
 import { createConnectorRegistry } from "./connector-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import {
@@ -1029,6 +1030,7 @@ export async function createCollabApp({
     )
   `);
   const artifactStore = createArtifactStore(db, allowedArtifactHosts);
+  const artifactUsage = createArtifactUsage(db);
   const connectors = createConnectorRegistry({
     git: repositorySync,
     s3: sharedSourceSync,
@@ -2548,8 +2550,18 @@ export async function createCollabApp({
       apps: artifactStore.list(conceptId, canEdit),
       allowedHosts: canEdit ? artifactStore.allowedHosts : [],
       canEdit,
-      canPublish: canEdit && security.isOwner(userId),
+      canPublish: canEdit && await canActivateApps(userId, row.spaceId),
+      // Counts only; editors and managers never see who opened an artifact.
+      usage: canEdit && row.type === "Artifact"
+        ? artifactUsage.summary(conceptId)
+        : undefined,
     };
+  }
+
+  // Workspace owners and managers of the document's space; editors alone cannot.
+  async function canActivateApps(userId: string, spaceId: string) {
+    return security.isOwner(userId) ||
+      await security.checkSpace(userId, "manage", spaceId);
   }
 
   async function visibleApp(userId: string, appId: string) {
@@ -2911,16 +2923,17 @@ export async function createCollabApp({
         additionalProperties: false,
       },
       run: async (context, input) => {
-        if (!security.isOwner(context.userId)) {
-          throw new ActionError("Owner access required", 403);
-        }
         const appId = String(input.appId ?? "");
         const conceptId = artifactStore.conceptId(appId);
         if (
           !conceptId ||
           !await security.check(context.userId, "edit", conceptId)
         ) throw new ActionError("App not found", 404);
-        if (concept(conceptId)?.status !== "active") {
+        const row = concept(conceptId);
+        if (!await canActivateApps(context.userId, row?.spaceId ?? "")) {
+          throw new ActionError("Owner or space manager access required", 403);
+        }
+        if (row?.status !== "active") {
           throw new ActionError("Restore the concept first", 409);
         }
         const app = artifactStore.publish(appId, context.userId);
@@ -4319,10 +4332,11 @@ export async function createCollabApp({
       }
       try {
         const appId = decodeURIComponent(appFileRoute[1]);
-        const { state } = await visibleApp(current.user.id, appId);
+        const { conceptId, state } = await visibleApp(current.user.id, appId);
+        const path = decodeURIComponent(appFileRoute[2] ?? "");
         const file = artifactStore.file(
           appId,
-          decodeURIComponent(appFileRoute[2] ?? ""),
+          path,
           state.canEdit,
         );
         if (!file) {
@@ -4331,6 +4345,12 @@ export async function createCollabApp({
             headers: cors(request),
           });
         }
+        const opened = state.apps.find((app) => app?.id === appId);
+        if (
+          (!path || path === opened?.bundle?.entry) &&
+          opened?.version === opened?.liveVersion &&
+          concept(conceptId)?.type === "Artifact"
+        ) artifactUsage.record(conceptId, current.user.id);
         const headers = new Headers(cors(request));
         headers.set("content-type", file.type);
         headers.set("cache-control", "no-store");
@@ -4952,6 +4972,70 @@ export async function createCollabApp({
       } catch (error) {
         return Response.json({
           error: error instanceof Error ? error.message : "Creation failed",
+        }, { status: 503, headers: cors(request) });
+      }
+    }
+    if (url.pathname === "/api/artifact-usage" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const reused = artifactUsage.reused().flatMap((item) => {
+        const row = concept(item.conceptId);
+        return row?.status === "active"
+          ? [{ id: row.id, title: row.title, viewers: item.viewers }]
+          : [];
+      });
+      return Response.json({ reused }, { headers: cors(request) });
+    }
+    const spaceManager = url.pathname.match(
+      /^\/api\/spaces\/([a-z0-9-]+)\/managers\/([^/]+)$/,
+    );
+    if (
+      spaceManager &&
+      (request.method === "PUT" || request.method === "DELETE")
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      if (!security.isOwner(current.user.id)) {
+        return Response.json({ error: "Owner access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      const userId = decodeURIComponent(spaceManager[2]);
+      if (!space(spaceManager[1]) || !security.hasMember(userId)) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      const enabled = request.method === "PUT";
+      try {
+        await security.setSpaceManager(spaceManager[1], userId, enabled);
+        security.audit(
+          current.user.id,
+          enabled ? "space.manager_added" : "space.manager_removed",
+          `space:${spaceManager[1]}:user:${userId}`,
+        );
+        return new Response(null, { status: 204, headers: cors(request) });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Update failed",
         }, { status: 503, headers: cors(request) });
       }
     }

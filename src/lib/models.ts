@@ -304,4 +304,10 @@ export type ArtifactState = {
   }[];
   canEdit: boolean;
   canPublish: boolean;
+  usage?: {
+    viewers30d: number;
+    viewersAllTime: number;
+    othersSaves: number;
+    lastOpenedAt: string | null;
+  };
 };

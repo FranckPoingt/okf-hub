@@ -105,8 +105,9 @@ apps.revise
 ```
 
 If you also want the command to publish, add `documents.publish` and
-`apps.activate`. Activation still requires the key's user to be a workspace
-owner. A key never grants more access than that user already has.
+`apps.activate`. Activation requires the key's user to be a workspace owner or a
+manager of the artifact's space; plain editors cannot activate. A key never
+grants more access than that user already has.
 
 Set your Hub URL and enter the key into the shell without putting it in history:
 
@@ -144,11 +145,11 @@ Saving defaults to a draft. To publish the context and activate the App:
 deno task artifact:save /absolute/path/to/artifact --space "Team knowledge" --publish
 ```
 
-The owner can also publish the document and activate the App in the Hub UI.
-Readers see published context and activated versions. The saver checks
-publication scopes and owner access before publishing. Context publication and
-App activation are two separate requests; if activation fails after context
-publication, rerun the command to finish activation.
+An owner or space manager can also publish the document and activate the App in
+the Hub UI. Readers see published context and activated versions. The saver
+checks publication scopes and activation access before publishing. Context
+publication and App activation are two separate requests; if activation fails
+after context publication, rerun the command to finish activation.
 
 ## Revise the same artifact
 
@@ -197,3 +198,21 @@ improve its work. The next product experiment should test that second use. The
 current Hub still opens the document first and places the creation behind
 **Apps**; an artifact-oriented experience should let people open the useful
 creation directly and consult its context when needed.
+
+## Measure second use
+
+The Hub records, in its own database, when someone opens an activated version of
+an `Artifact` document's static App (at most once per person per artifact per
+hour). Nothing leaves your deployment. For each artifact it derives:
+
+- distinct people other than the creator who opened it, in the last 30 days and
+  all time (the creator is whoever added the document's first App);
+- App versions and published document revisions saved by someone other than the
+  creator;
+- when it was last opened.
+
+Editors and managers see these counts above the artifact's Apps. Workspace
+owners also see, on Home, how many artifacts were reused by others in the last
+30 days, with a short list. The Hub exposes counts only, never who opened an
+artifact. Hosted-URL Apps and inline-HTML Apps without a file bundle are not
+counted.

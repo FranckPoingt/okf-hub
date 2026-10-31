@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Database,
@@ -9,6 +10,7 @@ import {
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
+import { api } from "../lib/api.ts";
 import type {
   Concept,
   ImportedConcept,
@@ -32,6 +34,7 @@ export function HomePanel(
     shared,
     notion,
     canEdit,
+    isOwner,
     onOpenConcept,
     onOpenImported,
     onCreate,
@@ -45,6 +48,7 @@ export function HomePanel(
     shared: SharedSource | null;
     notion: NotionSource | null;
     canEdit: boolean;
+    isOwner: boolean;
     onOpenConcept: (id: string) => void;
     onOpenImported: (
       sourceId: string,
@@ -55,6 +59,15 @@ export function HomePanel(
     onSources: () => void;
   },
 ) {
+  const [reused, setReused] = useState<
+    { id: string; title: string; viewers: number }[]
+  >([]);
+  useEffect(() => {
+    if (!isOwner) return;
+    api("/api/artifact-usage").then((response) =>
+      response.ok ? response.json() : { reused: [] }
+    ).then((result) => setReused(result.reused)).catch(() => setReused([]));
+  }, [isOwner]);
   const sourceLabels = new Map(
     repositories.map((source) => [
       source.id,
@@ -155,6 +168,30 @@ export function HomePanel(
             </>
           )}
         </div>
+
+        {isOwner && reused.length > 0 && (
+          <section className="mt-5 rounded-lg border bg-card p-4 text-sm">
+            <strong>
+              {reused.length} {reused.length === 1 ? "artifact" : "artifacts"}
+              {" "}
+              reused by others in the last 30 days
+            </strong>
+            <ul className="mt-2 grid gap-1 text-muted-foreground">
+              {reused.slice(0, 5).map((item) => (
+                <li key={item.id}>
+                  <button
+                    className="hover:underline"
+                    type="button"
+                    onClick={() => onOpenConcept(item.id)}
+                  >
+                    {item.title}
+                  </button>{" "}
+                  · {item.viewers} {item.viewers === 1 ? "person" : "people"}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <Tabs className="mt-7" defaultValue="recent">
           <TabsList variant="line" className="w-full justify-start border-b">
