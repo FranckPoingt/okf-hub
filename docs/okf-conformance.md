@@ -38,6 +38,25 @@ original Markdown. A malformed concept is reported as a per-file issue without
 blocking healthy concepts. Reserved `index.md` and `log.md` files are not
 treated as concepts.
 
+# Extension fields
+
+OKF consumers must tolerate unknown fields. OKF Hub reads these extensions on
+imported concepts and hub documents; neither affects conformance:
+
+- `describes`: a list of repository-relative globs naming the code a concept
+  explains, using CODEOWNERS/gitignore syntax (`*` within a path segment, `**`
+  across segments, a slash anchoring to the repository root, and a directory
+  covering everything below it). When a Git sync changes a matching path but not
+  the concept file, the concept's trust becomes `stale` until the concept is
+  updated.
+- `sources`: the standard OKF citation list. Entries whose `id` or `resource`
+  names a hub document, an imported concept id, or an imported concept path are
+  tracked as dependencies. A dependent document derives `stale` trust while any
+  dependency is stale or missing.
+
+Without an explicit `owner`, a Git-imported concept takes its owners from the
+repository's `CODEOWNERS` rule for the concept file.
+
 # Portable exports
 
 Workspace and space ZIP exports contain an `okf/` bundle with a root `index.md`

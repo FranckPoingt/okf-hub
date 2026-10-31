@@ -241,8 +241,8 @@ verification. `AFK` means it can be implemented without a product decision;
 - **Acceptance criteria:**
   - [ ] A policy space can require review before publication.
   - [ ] Review decisions and comments are recorded against a revision.
-  - [ ] A concept can become stale without changing its published content state.
-  - [ ] A reviewer can see why a concept is stale or trustworthy.
+  - [x] A concept can become stale without changing its published content state.
+  - [x] A reviewer can see why a concept is stale or trustworthy.
 
 ### Epic 3 — Connected sources and unified discovery
 

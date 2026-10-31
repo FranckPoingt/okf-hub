@@ -16,6 +16,7 @@ export type RepositoryFile = {
   links: string[];
   searchText: string;
   hash: string;
+  describes?: string[];
 };
 
 export type RepositoryIssue = { path: string; error: string };
@@ -49,7 +50,11 @@ function gitAuthEnv(
   };
 }
 
-async function git(args: string[], cwd?: string, env?: Record<string, string>) {
+export async function git(
+  args: string[],
+  cwd?: string,
+  env?: Record<string, string>,
+) {
   const output = await new Deno.Command("git", {
     args,
     cwd,
@@ -119,6 +124,14 @@ export async function inspectOkf(path: string, markdown: string) {
       : []).filter((tag): tag is string => typeof tag === "string")
       .map((tag) => tag.trim()).filter(Boolean);
   const owner = typeof fields.owner === "string" ? fields.owner.trim() : "";
+  // OKF extension: repository-relative globs of the code this concept describes.
+  const describes =
+    (Array.isArray(fields.describes)
+      ? fields.describes
+      : typeof fields.describes === "string"
+      ? [fields.describes]
+      : []).filter((glob): glob is string => typeof glob === "string")
+      .map((glob) => glob.trim()).filter(Boolean).slice(0, 50);
   const body = markdown.slice(frontmatter[0].length);
   const links = Array.from(
     body.matchAll(/(?<!!)\[[^\]]+\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)/g),
@@ -135,6 +148,7 @@ export async function inspectOkf(path: string, markdown: string) {
     links,
     searchText: [title, type, owner, tags.join(" "), body].join("\n"),
     hash: await hash(markdown),
+    describes,
   };
 }
 

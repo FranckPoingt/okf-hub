@@ -8,6 +8,7 @@ import type {
 } from "../lib/models.ts";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { TrustBadge } from "./trust-badge.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
 import { Input } from "./ui/input.tsx";
 import { Label } from "./ui/label.tsx";
@@ -263,11 +264,10 @@ export function SearchPanel(
                   </Button>
                   <div className="flex shrink-0 items-center gap-1.5">
                     <Badge variant="outline">{item.type}</Badge>
-                    {item.trust !== "current" && (
-                      <Badge variant="destructive">
-                        {item.trust.replace("_", " ")}
-                      </Badge>
-                    )}
+                    <TrustBadge
+                      trust={item.trust}
+                      reason={item.trustReason}
+                    />
                     {item.status === "archived" && (
                       <Badge variant="secondary">Archived</Badge>
                     )}

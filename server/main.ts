@@ -16,6 +16,12 @@ import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
 import { createConnectorRegistry } from "./connector-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import {
+  createFreshnessStore,
+  documentSources,
+  inspectRepositoryFreshness,
+  staleMessage,
+} from "./freshness.ts";
+import {
   createZip,
   ExportArchiveError,
   type ExportFile,
@@ -328,7 +334,8 @@ type SearchDocument = {
   tags: string[];
   owner: string;
   status: "active" | "archived" | "current";
-  trust: "current" | "sync_failed";
+  trust: "current" | "stale" | "sync_failed";
+  trustReason?: string;
   searchText: string;
   path?: string;
   sourceRevision?: string;
@@ -1025,6 +1032,7 @@ export async function createCollabApp({
     )
   `);
   const artifactStore = createArtifactStore(db, allowedArtifactHosts);
+  const freshness = createFreshnessStore(db);
   const connectors = createConnectorRegistry({
     git: repositorySync,
     s3: sharedSourceSync,
@@ -1195,6 +1203,7 @@ export async function createCollabApp({
     importedAt: item.importedAt,
     tags: JSON.parse(item.tags) as string[],
     owner: item.owner,
+    ...freshness.get(item.id),
   });
 
   function sourcePayload(sourceId: string) {
@@ -1376,17 +1385,34 @@ export async function createCollabApp({
       if (source.githubInstallationId && !credentials) {
         throw new Error("GitHub App is not configured");
       }
+      const checkout = `${dataDir}/sources/${sourceId}`;
       const snapshot = await connectors.sync({
         kind: "git",
-        checkout: `${dataDir}/sources/${sourceId}`,
+        checkout,
         repositoryUrl: source.repositoryUrl,
         folder: source.folder,
         credentials,
+      });
+      const fresh = await inspectRepositoryFreshness({
+        checkout,
+        folder: source.folder,
+        from: source.revision,
+        to: snapshot.revision,
+        files: snapshot.files,
+        previous: new Map(
+          importedConcepts(sourceId, ["current", "invalid"]).map((item) => [
+            item.path,
+            { ...item, stale: freshness.get(item.id).stale },
+          ]),
+        ),
       });
       await importSnapshot(sourceId, snapshot, (revision, now) => {
         db.prepare(
           "UPDATE okf_repository_source SET status = 'current', revision = ?, lastSyncedAt = ?, error = NULL WHERE id = ?",
         ).run(revision, now, sourceId);
+        for (const [path, value] of fresh) {
+          freshness.save(importedId(sourceId, path), value);
+        }
       });
       db.prepare(
         "UPDATE okf_source_sync SET status = 'succeeded', revision = ?, finishedAt = ? WHERE id = ?",
@@ -1879,6 +1905,8 @@ export async function createCollabApp({
       throw new DocumentLocked("Unlock the document to edit it");
     }
     const live = await loadDocument(row);
+    const sources = documentSources(next);
+    if (sources) freshness.setSources(conceptId, sources);
     live.markdown = `${bodyOnly(next).trimEnd()}\n`;
     const now = new Date().toISOString();
     db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
@@ -2011,6 +2039,13 @@ export async function createCollabApp({
     return await payload(concept(conceptId)!, true, userId);
   }
 
+  function dependencyTrust(conceptId: string) {
+    const reason = freshness.dependency(conceptId);
+    return reason
+      ? { trust: "stale" as const, trustReason: reason }
+      : { trust: "current" as const };
+  }
+
   async function payload(row: ConceptRow, canEdit: boolean, userId: string) {
     const live = await loadDocument(row);
     const history = revisions(row.id);
@@ -2024,6 +2059,7 @@ export async function createCollabApp({
     return {
       ...row,
       openCommentCount: openCommentCount(row.id),
+      ...dependencyTrust(row.id),
       space: space(row.spaceId)?.name ?? row.spaceId,
       draft: canEdit ? live.markdown : null,
       published: published ? bodyOnly(published) : null,
@@ -2366,7 +2402,7 @@ export async function createCollabApp({
             ? userName
             : "OKF Hub authors",
           status: row.status,
-          trust: "current",
+          ...dependencyTrust(row.id),
           searchText: [row.title, row.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
         });
@@ -2382,6 +2418,7 @@ export async function createCollabApp({
         : repositorySource(item.sourceId);
       const source = item.sourceId === "notion" ? notion : repository ?? shared;
       const failed = source?.status === "sync_failed";
+      const stale = freshness.get(item.id).stale;
       documents.push({
         id: item.id,
         kind: "imported",
@@ -2404,7 +2441,8 @@ export async function createCollabApp({
             ? "Repository owner"
             : "Shared-store owner"),
         status: "current",
-        trust: failed ? "sync_failed" : "current",
+        trust: failed ? "sync_failed" : stale ? "stale" : "current",
+        trustReason: stale ? staleMessage(stale) : undefined,
         searchText: item.searchText || `${item.title}\n${item.type}`,
         path: item.path,
         sourceRevision: item.sourceRevision,
@@ -2456,6 +2494,7 @@ export async function createCollabApp({
         title: item.title,
         path: item.path,
         trust: item.trust,
+        trustReason: item.trustReason,
         sourceLabel: item.sourceLabel,
       };
     };
@@ -2686,11 +2725,17 @@ export async function createCollabApp({
         const imported = importedConcepts().find((item) => item.id === id);
         if (imported) {
           const source = sourcePayload(imported.sourceId);
+          const fields = importedPayload(imported);
           return {
-            ...importedPayload(imported),
+            ...fields,
             kind: "imported",
             source,
-            trust: source?.status === "sync_failed" ? "sync_failed" : "current",
+            trust: source?.status === "sync_failed"
+              ? "sync_failed"
+              : fields.stale
+              ? "stale"
+              : "current",
+            trustReason: fields.stale ? staleMessage(fields.stale) : undefined,
             markdown: withoutFrontmatter(await store.get(imported.objectKey)),
           };
         }
@@ -2702,15 +2747,20 @@ export async function createCollabApp({
         ) {
           throw new ActionError("Not found", 404);
         }
+        const document = await payload(row, canEdit, context.userId);
+        const author = (document.activity as {
+          action: string;
+          actorName: string | null;
+        }[]).find((event) =>
+          event.action === "concept.published" ||
+          event.action === "concept.created"
+        );
         return {
-          ...await payload(row, canEdit, context.userId),
+          ...document,
           kind: "hub-native",
           sourceId: "hub",
           source: { label: "OKF Hub" },
-          owner: canEdit && !row.publishedRevision
-            ? context.userName
-            : "OKF Hub authors",
-          trust: "current",
+          owner: author?.actorName ?? "OKF Hub authors",
         };
       },
     },
