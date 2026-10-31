@@ -25,6 +25,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "./ui/command.tsx";
+import { DocumentIcon } from "./document-icon.tsx";
 
 export function CommandPalette({
   canEdit,
@@ -163,7 +164,9 @@ export function CommandPalette({
                 key={`${item.sourceId}-${item.id}`}
                 onSelect={() => openResult(item)}
               >
-                {item.kind === "hub-native" ? <FileText /> : <GitBranch />}
+                {item.kind === "hub-native"
+                  ? <DocumentIcon type={item.type} />
+                  : <GitBranch />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{item.title}</span>
                   <span className="block truncate text-xs text-muted-foreground">

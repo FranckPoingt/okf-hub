@@ -1,12 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  ArrowRight,
-  Database,
-  FileText,
-  GitBranch,
-  Plus,
-  Search,
-} from "lucide-react";
+import { ArrowRight, Database, GitBranch, Plus, Search } from "lucide-react";
 import { formatReviewDate, FreshnessBadge } from "./knowledge-freshness.tsx";
 import { TrustBadge } from "./trust-badge.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -21,6 +14,7 @@ import type {
   SharedSource,
   Space,
 } from "../lib/models.ts";
+import { DocumentIcon } from "./document-icon.tsx";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -338,7 +332,9 @@ export function HomePanel(
                   onClick={item.open}
                 >
                   <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                    {item.imported ? <GitBranch /> : <FileText />}
+                    {item.imported
+                      ? <GitBranch />
+                      : <DocumentIcon type={item.type} />}
                   </span>
                   <span className="min-w-0">
                     <strong className="block truncate text-sm font-medium text-foreground">
@@ -389,7 +385,7 @@ export function HomePanel(
                     onClick={() => onOpenConcept(item.id)}
                   >
                     <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                      <FileText />
+                      <DocumentIcon type={item.type} />
                     </span>
                     <span className="min-w-0">
                       <strong className="block truncate text-sm font-medium text-foreground">
@@ -436,7 +432,7 @@ export function HomePanel(
                     onClick={() => onOpenConcept(item.id)}
                   >
                     <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                      <FileText />
+                      <DocumentIcon type={item.type} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <strong className="block truncate text-sm font-medium text-foreground">

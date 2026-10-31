@@ -6,6 +6,7 @@ import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
+import { DocumentIcon } from "./document-icon.tsx";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -49,9 +50,7 @@ export function SpacePanel({
           onClick={() => onOpenConcept(item.id)}
         >
           <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-            {item.type.toLocaleLowerCase() === "artifact"
-              ? <Blocks />
-              : <FileText />}
+            <DocumentIcon type={item.type} />
           </span>
           <span className="min-w-0">
             <strong className="block truncate text-sm font-medium text-foreground">

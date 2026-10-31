@@ -33,7 +33,7 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { Textarea } from "./ui/textarea.tsx";
-import { Search, SearchX, SlidersHorizontal, X } from "lucide-react";
+import { Blocks, Search, SearchX, SlidersHorizontal, X } from "lucide-react";
 import { EmptyState } from "./empty-state.tsx";
 
 const attentionFilterLabels: Record<string, string> = {
@@ -325,7 +325,12 @@ export function SearchPanel(
                     {item.title}
                   </Button>
                   <div className="flex max-w-[55%] shrink-0 flex-wrap justify-end gap-1.5">
-                    <Badge variant="outline">{item.type}</Badge>
+                    <Badge variant="outline">
+                      {item.type.toLocaleLowerCase() === "artifact" && (
+                        <Blocks />
+                      )}
+                      {item.type}
+                    </Badge>
                     {item.conflicts.length > 0 && (
                       <Badge variant="warning">Potential conflict</Badge>
                     )}
