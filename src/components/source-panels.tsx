@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { OkfDraftPanel } from "./okf-draft-panel.tsx";
 import { SourceAccess } from "./source-access.tsx";
+import { StatusBadge } from "./status-badge.tsx";
 import { api, SERVICE } from "../lib/api.ts";
 import type {
   Artifact,
@@ -446,13 +447,7 @@ function SyncHistory({ source }: { source: RepositorySource }) {
                   </TableCell>
                   <TableCell>{sync.trigger}</TableCell>
                   <TableCell>
-                    <Badge
-                      variant={sync.status === "failed"
-                        ? "destructive"
-                        : "outline"}
-                    >
-                      {sync.status}
-                    </Badge>
+                    <StatusBadge status={sync.status} />
                   </TableCell>
                   <TableCell>
                     <code>{sync.revision?.slice(0, 12) ?? "—"}</code>
@@ -573,13 +568,7 @@ export function RepositoryPanel(
             </div>
           </div>
           <CardAction className="source-connection-actions">
-            <Badge
-              variant={source.status === "sync_failed"
-                ? "destructive"
-                : "outline"}
-            >
-              {source.status.replace("_", " ")}
-            </Badge>
+            <StatusBadge status={source.status} />
             {canManage && (
               <Button
                 variant="outline"
@@ -850,8 +839,8 @@ export function SharedStorePanel(
             <dl className="source-provenance">
               <div>
                 <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
+                <dd>
+                  <StatusBadge status={source.status} />
                 </dd>
               </div>
               <div>
@@ -989,8 +978,8 @@ function NotionPanel({
             <dl className="source-provenance">
               <div>
                 <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
+                <dd>
+                  <StatusBadge status={source.status} />
                 </dd>
               </div>
               <div>
@@ -1203,13 +1192,7 @@ function ConnectorCatalog({
                           {source.detail}
                         </span>
                       </div>
-                      <Badge
-                        variant={source.status === "current"
-                          ? "secondary"
-                          : "outline"}
-                      >
-                        {source.status.replace("_", " ")}
-                      </Badge>
+                      <StatusBadge status={source.status} />
                     </div>
                   ))}
                 </div>
@@ -1376,9 +1359,7 @@ export function AutomationPanel() {
         {state?.runs.map((run, index) => (
           <details key={run.id} open={index === 0}>
             <summary>
-              <strong className={`automation-status ${run.status}`}>
-                {run.status}
-              </strong>
+              <StatusBadge status={run.status} />
               <span>{run.trigger}</span>
               <time>{new Date(run.startedAt).toLocaleString()}</time>
             </summary>
@@ -2107,11 +2088,7 @@ export function AppPanel(
                 {artifact.description || "No purpose has been added yet."}
               </CardDescription>
               <CardAction className="app-card-badges">
-                <Badge
-                  variant={artifact.status === "live" ? "default" : "secondary"}
-                >
-                  {artifact.status.replace("_", " ")}
-                </Badge>
+                <StatusBadge status={artifact.status} />
                 <Badge variant="outline">v{artifact.version}</Badge>
               </CardAction>
             </CardHeader>

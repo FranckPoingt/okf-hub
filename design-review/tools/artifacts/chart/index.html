@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deploys per week</title>
+    <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      font: 14px/1.5 system-ui, sans-serif;
+      color: #1c2421;
+      background: #fbfaf7;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 4px;
+    }
+    p {
+      margin: 0 0 16px;
+      color: #55605b;
+    }
+    svg {
+      width: 100%;
+      max-width: 640px;
+      height: auto;
+    }
+    </style>
+  </head>
+  <body>
+    <h1>Deploys per week</h1>
+    <p>Production deploys for the last 12 weeks. The dip is the billing migration freeze.</p>
+    <svg id="chart" viewBox="0 0 640 260" role="img"
+      aria-label="Bar chart of deploys per week"></svg>
+    <script>
+    var data = [31, 28, 35, 33, 30, 37, 41, 12, 9, 29, 34, 38];
+    var svg = document.getElementById("chart");
+    var ns = "http://www.w3.org/2000/svg";
+    var max = Math.max.apply(null, data);
+    data.forEach(function (value, index) {
+      var height = value / max * 200;
+      var bar = document.createElementNS(ns, "rect");
+      bar.setAttribute("x", 30 + index * 50);
+      bar.setAttribute("y", 220 - height);
+      bar.setAttribute("width", 34);
+      bar.setAttribute("height", height);
+      bar.setAttribute("rx", 4);
+      bar.setAttribute("fill", index === 7 || index === 8 ? "#d9825b" : "#2f6b58");
+      svg.appendChild(bar);
+      var label = document.createElementNS(ns, "text");
+      label.setAttribute("x", 47 + index * 50);
+      label.setAttribute("y", 242);
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("font-size", "11");
+      label.setAttribute("fill", "#55605b");
+      label.textContent = "W" + (index + 31);
+      svg.appendChild(label);
+    });
+    </script>
+  </body>
+</html>

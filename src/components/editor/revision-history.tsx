@@ -144,7 +144,7 @@ export function RevisionHistory({
                           <Badge variant="secondary">Current publication</Badge>
                         )}
                         {revision.number === reviewedRevision && reviewedAt && (
-                          <Badge variant="outline">Reviewed</Badge>
+                          <Badge variant="success">Reviewed</Badge>
                         )}
                       </span>
                       <span className="text-xs font-normal text-muted-foreground">

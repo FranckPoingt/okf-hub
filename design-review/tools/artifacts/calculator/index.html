@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Support cost calculator</title>
+    <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      font: 15px/1.5 system-ui, sans-serif;
+      color: #1c2421;
+      background: #fbfaf7;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 4px;
+    }
+    p {
+      margin: 0 0 20px;
+      color: #55605b;
+    }
+    label {
+      display: grid;
+      gap: 4px;
+      margin-bottom: 14px;
+      font-weight: 600;
+    }
+    input {
+      font: inherit;
+      padding: 8px 10px;
+      border: 1px solid #c9cdc6;
+      border-radius: 6px;
+      max-width: 220px;
+    }
+    output {
+      display: block;
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: #e7f0eb;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    </style>
+  </head>
+  <body>
+    <h1>Support cost calculator</h1>
+    <p>Estimate the monthly cost of handling tickets with the current team.</p>
+    <label>Tickets per month <input id="tickets" type="number" value="1800"></label>
+    <label>Minutes per ticket <input id="minutes" type="number" value="14"></label>
+    <label>Loaded hourly cost (€) <input id="rate" type="number" value="48"></label>
+    <output id="result"></output>
+    <script>
+    function update() {
+      var tickets = Number(document.getElementById("tickets").value) || 0;
+      var minutes = Number(document.getElementById("minutes").value) || 0;
+      var rate = Number(document.getElementById("rate").value) || 0;
+      var cost = tickets * minutes / 60 * rate;
+      document.getElementById("result").textContent = "≈ €" +
+        Math.round(cost).toLocaleString("en-GB") + " per month";
+    }
+    document.querySelectorAll("input").forEach(function (input) {
+      input.addEventListener("input", update);
+    });
+    update();
+    </script>
+  </body>
+</html>

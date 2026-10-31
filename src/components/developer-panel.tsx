@@ -76,8 +76,12 @@ const ScalarApiReference = lazy(() =>
   ]).then(([{ ApiReferenceReact }]) => ({ default: ApiReferenceReact }))
 );
 
+// Scalar sets its own mode class on <body>; outrank it so app tokens (and
+// dark mode) apply.
 const scalarTheme = `
-:root {
+:root,
+body.light-mode,
+body.dark-mode {
   --scalar-font: "Geist Variable", Arial, sans-serif;
   --scalar-font-code: ui-monospace, SFMono-Regular, Menlo, monospace;
   --scalar-background-1: var(--card);

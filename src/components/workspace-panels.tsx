@@ -33,7 +33,8 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { Textarea } from "./ui/textarea.tsx";
-import { Search, SlidersHorizontal, X } from "lucide-react";
+import { Search, SearchX, SlidersHorizontal, X } from "lucide-react";
+import { EmptyState } from "./empty-state.tsx";
 
 const attentionFilterLabels: Record<string, string> = {
   "": "Any ownership or review status",
@@ -318,7 +319,7 @@ export function SearchPanel(
                   <Button
                     variant="ghost"
                     type="button"
-                    className="h-auto min-w-0 justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
+                    className="h-auto min-w-0 shrink justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
                     onClick={() => open(item)}
                   >
                     {item.title}
@@ -326,7 +327,7 @@ export function SearchPanel(
                   <div className="flex max-w-[55%] shrink-0 flex-wrap justify-end gap-1.5">
                     <Badge variant="outline">{item.type}</Badge>
                     {item.conflicts.length > 0 && (
-                      <Badge variant="destructive">Potential conflict</Badge>
+                      <Badge variant="warning">Potential conflict</Badge>
                     )}
                     <TrustBadge
                       trust={item.trust}
@@ -424,9 +425,11 @@ export function SearchPanel(
           );
         })}
         {!busy && result && displayedResults.length === 0 && (
-          <p className="p-10 text-center text-sm text-muted-foreground">
-            No accessible knowledge matches these filters.
-          </p>
+          <EmptyState
+            icon={<SearchX />}
+            title="No results"
+            description="No accessible knowledge matches these filters. Try fewer words or clear the filters."
+          />
         )}
       </div>
     </section>

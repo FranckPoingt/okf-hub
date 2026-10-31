@@ -53,6 +53,10 @@
   .workspace-header.editor-workspace-header[data-has-actions="true"] nav {
     display: flex;
   }
+  /* Outside documents the page heading already names the context. */
+  .workspace-header.editor-workspace-header:not([data-has-actions="true"]) .workspace-header-status {
+    display: none;
+  }
   .workspace-header.editor-workspace-header[data-has-actions="true"] .workspace-header-status {
     display: flex;
     flex-basis: 100%;
