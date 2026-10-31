@@ -155,6 +155,11 @@ Deno.test("cascades stale imported knowledge to dependent artifacts, never on fa
     assert.equal(result(artifact.id).trust, "stale");
     assert.match(result(artifact.id).trustReason, /^Depends on billing\.md: /);
     assert.equal(result(artifact.id).freshness.status, "current");
+    const [card] = (await json("/api/artifact-gallery")).artifacts;
+    assert.equal(card.id, artifact.id);
+    assert.equal(card.trust, "stale");
+    assert.match(card.trustReason, /^Depends on billing\.md: /);
+    assert.equal(card.freshness.status, "current");
 
     const document = (await json("/api/v1/actions/documents.get", {
       id: artifact.id,

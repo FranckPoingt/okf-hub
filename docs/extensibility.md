@@ -94,11 +94,13 @@ scripts and imports are CORS requests that send `Origin: null` without cookies.
 The cookie-authenticated `/api/apps/:id/files/*` route correctly refuses them.
 When the Hub shows an App, it calls `POST /api/apps/:id/capability`. That
 requires a session that can view the App. The call mints a 256-bit random token
-scoped to one user and the one App version that user would see. It expires after
-10 minutes and the Hub mints a new one on every load. Only its SHA-256 hash is
-kept, in server memory. The iframe loads from `/app-files/<token>/<path>`, which
-needs no cookie. That route answers `GET` only, sends
-`Access-Control-Allow-Origin: *` and never sends
+scoped to one user and the one App version that user would see: the draft for
+editors, the activated version for readers. An editor can send `{"live": true}`
+to preview the activated version instead; readers always get it. It expires
+after 10 minutes and the Hub mints a new one on every load. Only its SHA-256
+hash is kept, in server memory. The iframe loads from
+`/app-files/<token>/<path>`, which needs no cookie. That route answers `GET`
+only, sends `Access-Control-Allow-Origin: *` and never sends
 `Access-Control-Allow-Credentials`. It keeps the bundle CSP (also sent as a
 response header), `nosniff`, and file MIME types. On every request it re-checks
 the user's current view permission and the pinned version. Unknown, expired,

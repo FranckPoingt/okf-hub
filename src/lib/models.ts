@@ -101,6 +101,7 @@ export type Concept = GovernanceSummary & {
   openCommentCount: number;
   trust?: Trust;
   trustReason?: string;
+  artifactMeta?: ArtifactMeta;
 };
 export type CommentMessage = {
   id: string;
@@ -343,4 +344,37 @@ export type ArtifactState = {
     othersSaves: number;
     lastOpenedAt: string | null;
   };
+};
+export type ArtifactSource = {
+  kind: "frontmatter" | "hub" | "external" | "trace";
+  label: string;
+  href?: string;
+  conceptId?: string;
+};
+export type ArtifactMeta = {
+  description: string;
+  publishedDescription: string;
+  sources: ArtifactSource[];
+};
+export type ArtifactGalleryItem = {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  updatedAt: string;
+  spaceId: string;
+  space: string;
+  spaceIcon: string;
+  publishedRevision: number | null;
+  trust: Trust;
+  trustReason?: string;
+  freshness?: Freshness;
+  appCount: number;
+  appStatus: "draft" | "live" | "changes_pending" | null;
+  liveVersion: number | null;
+  version: number | null;
+  grants: string[];
+};
+export type ArtifactGalleryResponse = {
+  artifacts: ArtifactGalleryItem[];
 };

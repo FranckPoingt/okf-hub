@@ -46,6 +46,9 @@ product overview and roadmap live in [README.md](../README.md) and
 - **Search**: permission-aware search with filters for type, tag, ownership,
   review status, and archived content.
 - **Spaces**: grouped knowledge with inherited access rules.
+- **Artifacts**: a gallery of the Artifacts you can open, workspace-wide or per
+  space, with trust and review state. An Artifact with an App opens full-bleed;
+  **View context** shows its document, and **Open as document** edits it.
 - **Sources**: connected imports, sync status, schedules, and source issues.
 - **Workspace settings**: workspace identity, spaces, members, templates,
   connectors, export, and the Developer API.

@@ -48,6 +48,7 @@ const documentTypes = [
   "Guide",
   "Specification",
   "Architecture",
+  "Artifact",
   "SOP",
   "Plan",
   "Note",

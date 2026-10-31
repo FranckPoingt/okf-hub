@@ -1,6 +1,7 @@
 import {
   AppWindow,
   Archive,
+  Blocks,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -51,6 +52,8 @@ import {
 type NavigationView =
   | "home"
   | "search"
+  | "artifacts"
+  | "space_artifacts"
   | "sources"
   | "developer"
   | "space"
@@ -65,6 +68,7 @@ type SidebarConcept = {
   parentId: string | null;
   sortOrder: number;
   title: string;
+  type?: string;
   status: "active" | "archived";
   lockedAt: string | null;
   lockedBy: string | null;
@@ -97,6 +101,7 @@ type AppSidebarProps = {
   workspace: { name: string; tagline: string; logo: string };
   onCreate: () => void;
   onCreateApp: () => void;
+  onCreateArtifact: (spaceId?: string) => void;
   onCreateDocument: (spaceId?: string, parentId?: string) => void;
   onCreateSpace: () => void;
   onArchiveDocument: (concept: SidebarConcept) => void;
@@ -106,12 +111,14 @@ type AppSidebarProps = {
     destination: { spaceId: string; parentId: string | null; index: number },
   ) => void;
   onManageAccess: () => void;
+  onOpenArtifacts: () => void;
   onOpenDeveloper: () => void;
   onOpenConcept: (id: string) => void;
   onOpenHome: () => void;
   onOpenImported: (sourceId: string, path: string) => void;
   onOpenSearch: () => void;
   onOpenSpace: (id: string) => void;
+  onOpenSpaceArtifacts: (id: string) => void;
   onOpenSources: () => void;
   onSignOut: () => void;
 };
@@ -135,18 +142,21 @@ export function AppSidebar({
   workspace,
   onCreate,
   onCreateApp,
+  onCreateArtifact,
   onCreateDocument,
   onCreateSpace,
   onArchiveDocument,
   onToggleDocumentLock,
   onMoveDocument,
   onManageAccess,
+  onOpenArtifacts,
   onOpenDeveloper,
   onOpenConcept,
   onOpenHome,
   onOpenImported,
   onOpenSearch,
   onOpenSpace,
+  onOpenSpaceArtifacts,
   onOpenSources,
   onSignOut,
 }: AppSidebarProps) {
@@ -283,6 +293,8 @@ export function AppSidebar({
               ? <Archive />
               : concept.lockedAt
               ? <Lock />
+              : concept.type?.toLocaleLowerCase() === "artifact"
+              ? <Blocks />
               : <FileText />}
             <span>{concept.title}</span>
           </SidebarMenuButton>
@@ -335,6 +347,11 @@ export function AppSidebar({
         </SidebarMenuItem>
       );
     });
+
+  const totalArtifacts =
+    concepts.filter((item) =>
+      item.status === "active" && item.type?.toLocaleLowerCase() === "artifact"
+    ).length;
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -402,6 +419,22 @@ export function AppSidebar({
                   ⌘K
                 </SidebarMenuBadge>
               </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  tooltip="Artifacts"
+                  isActive={activeView === "artifacts"}
+                  onClick={onOpenArtifacts}
+                >
+                  <Blocks />
+                  <span>Artifacts</span>
+                </SidebarMenuButton>
+                {totalArtifacts > 0 && (
+                  <SidebarMenuBadge className="font-normal text-sidebar-foreground/60">
+                    {totalArtifacts}
+                  </SidebarMenuBadge>
+                )}
+              </SidebarMenuItem>
               {canEdit && (
                 <SidebarMenuItem>
                   <DropdownMenu>
@@ -424,6 +457,9 @@ export function AppSidebar({
                     >
                       <DropdownMenuItem onClick={() => onCreateDocument()}>
                         <FileText /> Document
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onCreateArtifact()}>
+                        <Blocks /> Artifact
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={!currentConceptId}
@@ -466,9 +502,17 @@ export function AppSidebar({
 
         {spaces.map((space) => {
           const collapsed = collapsedSpaces.has(space.id);
+          const spaceArtifacts = concepts.filter((item) =>
+            item.spaceId === space.id &&
+            item.status === "active" &&
+            item.type?.toLocaleLowerCase() === "artifact"
+          ).length;
+          const spaceArtifactsActive = activeView === "space_artifacts" &&
+            activeSpaceId === space.id;
           if (iconOnly) {
             const active =
-              activeView === "space" && activeSpaceId === space.id ||
+              (activeView === "space" || activeView === "space_artifacts") &&
+                activeSpaceId === space.id ||
               activeView === "concept" &&
                 concepts.some((item) =>
                   item.id === currentConceptId && item.spaceId === space.id
@@ -570,7 +614,28 @@ export function AppSidebar({
               </div>
               {!collapsed && (
                 <SidebarGroupContent>
-                  <SidebarMenu>{renderConcepts(space.id, null)}</SidebarMenu>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        type="button"
+                        size="sm"
+                        tooltip={`${space.name} artifacts`}
+                        aria-label={`${space.name} artifacts`}
+                        isActive={spaceArtifactsActive}
+                        onClick={() => onOpenSpaceArtifacts(space.id)}
+                        className="pl-6 text-sidebar-foreground/75"
+                      >
+                        <Blocks />
+                        <span>Artifacts</span>
+                      </SidebarMenuButton>
+                      {spaceArtifacts > 0 && (
+                        <SidebarMenuBadge className="font-normal text-sidebar-foreground/55">
+                          {spaceArtifacts}
+                        </SidebarMenuBadge>
+                      )}
+                    </SidebarMenuItem>
+                    {renderConcepts(space.id, null)}
+                  </SidebarMenu>
                 </SidebarGroupContent>
               )}
             </SidebarGroup>

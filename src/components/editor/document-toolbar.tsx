@@ -66,6 +66,7 @@ type DocumentToolbarProps = {
   onComments: () => void;
   onHistory: () => void;
   onModeChange: (mode: DocumentMode) => void;
+  onOpenArtifactView?: () => void;
   onPublish: () => void;
   onReviewChanges: () => void;
   onRetrySave?: () => void;
@@ -103,6 +104,7 @@ export function DocumentToolbar({
   onComments,
   onHistory,
   onModeChange,
+  onOpenArtifactView,
   onPublish,
   onReviewChanges,
   onRetrySave,
@@ -118,6 +120,18 @@ export function DocumentToolbar({
 }: DocumentToolbarProps) {
   return (
     <div className="document-toolbar">
+      {onOpenArtifactView && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="h-8 gap-1.5 px-2.5 text-xs"
+          onClick={onOpenArtifactView}
+        >
+          <Blocks className="size-3.5" />
+          <span>Open artifact</span>
+        </Button>
+      )}
       <Tabs
         className="document-surface-tabs"
         value={surface}

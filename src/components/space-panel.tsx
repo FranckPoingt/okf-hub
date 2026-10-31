@@ -1,5 +1,5 @@
 import { ArtifactUpload } from "./artifact-upload.tsx";
-import { FileText, Plus } from "lucide-react";
+import { Blocks, FileText, Plus } from "lucide-react";
 import type { Concept, Space } from "../lib/models.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -16,15 +16,21 @@ export function SpacePanel({
   concepts,
   canEdit,
   onCreate,
+  onOpenArtifacts,
   onOpenConcept,
 }: {
   space: Space;
   concepts: Concept[];
   canEdit: boolean;
   onCreate: () => void;
+  onOpenArtifacts: () => void;
   onOpenConcept: (id: string) => void;
 }) {
   const documents = concepts.filter((item) => item.spaceId === space.id);
+  const artifactCount =
+    documents.filter((item) =>
+      item.status === "active" && item.type.toLocaleLowerCase() === "artifact"
+    ).length;
   const alphabetical = [...documents].sort((left, right) =>
     left.title.localeCompare(right.title)
   );
@@ -42,7 +48,9 @@ export function SpacePanel({
           onClick={() => onOpenConcept(item.id)}
         >
           <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-            <FileText />
+            {item.type.toLocaleLowerCase() === "artifact"
+              ? <Blocks />
+              : <FileText />}
           </span>
           <span className="min-w-0">
             <strong className="block truncate text-sm font-medium text-foreground">
@@ -78,7 +86,7 @@ export function SpacePanel({
   return (
     <section className="home-panel">
       <div className="mx-auto w-full max-w-4xl">
-        <header className="flex items-start justify-between gap-6">
+        <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
               <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-xl text-muted-foreground">
@@ -93,23 +101,38 @@ export function SpacePanel({
               {documents.length === 1 ? "document" : "documents"} in this space.
             </p>
           </div>
-          {canEdit && (
-            <div className="flex gap-2">
-              <ArtifactUpload
-                key={space.id}
-                spaceId={space.id}
-                onCreated={(id) => {
-                  globalThis.location.href = `/knowledge/${
-                    encodeURIComponent(id)
-                  }`;
-                }}
-              />
-              <Button type="button" onClick={onCreate}>
-                <Plus data-icon="inline-start" />
-                New document
-              </Button>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onOpenArtifacts}
+            >
+              <Blocks data-icon="inline-start" />
+              Artifacts
+              {artifactCount > 0 && (
+                <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5">
+                  {artifactCount}
+                </Badge>
+              )}
+            </Button>
+            {canEdit && (
+              <>
+                <ArtifactUpload
+                  key={space.id}
+                  spaceId={space.id}
+                  onCreated={(id) => {
+                    globalThis.location.href = `/knowledge/${
+                      encodeURIComponent(id)
+                    }`;
+                  }}
+                />
+                <Button type="button" onClick={onCreate}>
+                  <Plus data-icon="inline-start" />
+                  New document
+                </Button>
+              </>
+            )}
+          </div>
         </header>
 
         <Tabs className="mt-8" defaultValue="documents">

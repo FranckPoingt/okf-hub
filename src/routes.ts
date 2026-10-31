@@ -12,10 +12,12 @@ export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 
 export type AppRoute =
   | { kind: "home" }
+  | { kind: "artifacts" }
   | { kind: "search" }
   | { kind: "sources" }
   | { kind: "developer" }
   | { kind: "space"; id: string }
+  | { kind: "space_artifacts"; id: string }
   | { kind: "manage"; section: SettingsSection }
   | { kind: "concept"; id: string }
   | { kind: "imported"; sourceId: string; path: string }
@@ -23,10 +25,14 @@ export type AppRoute =
 
 export function routePath(route: Exclude<AppRoute, { kind: "not_found" }>) {
   if (route.kind === "home") return "/";
+  if (route.kind === "artifacts") return "/artifacts";
   if (route.kind === "search") return "/search";
   if (route.kind === "sources") return "/sources";
   if (route.kind === "developer") return "/developer/api";
   if (route.kind === "space") return `/spaces/${encodeURIComponent(route.id)}`;
+  if (route.kind === "space_artifacts") {
+    return `/spaces/${encodeURIComponent(route.id)}/artifacts`;
+  }
   if (route.kind === "manage") return `/settings/${route.section}`;
   if (route.kind === "concept") {
     return `/knowledge/${encodeURIComponent(route.id)}`;
@@ -39,6 +45,7 @@ export function routePath(route: Exclude<AppRoute, { kind: "not_found" }>) {
 
 export function parseAppRoute(pathname: string): AppRoute {
   if (pathname === "/") return { kind: "home" };
+  if (pathname === "/artifacts") return { kind: "artifacts" };
   if (pathname === "/search") return { kind: "search" };
   if (pathname === "/sources") return { kind: "sources" };
   if (pathname === "/developer/api") return { kind: "developer" };
@@ -46,6 +53,7 @@ export function parseAppRoute(pathname: string): AppRoute {
     return { kind: "manage", section: "general" };
   }
   const settings = pathname.match(/^\/settings\/([^/]+)$/);
+  const spaceArtifacts = pathname.match(/^\/spaces\/([^/]+)\/artifacts$/);
   const space = pathname.match(/^\/spaces\/([^/]+)$/);
   const concept = pathname.match(/^\/knowledge\/([^/]+)$/);
   const imported = pathname.match(/^\/imports\/([^/]+)\/(.+)$/);
@@ -54,6 +62,12 @@ export function parseAppRoute(pathname: string): AppRoute {
       const section = decodeURIComponent(settings[1]);
       return SETTINGS_SECTIONS.includes(section as SettingsSection)
         ? { kind: "manage", section: section as SettingsSection }
+        : { kind: "not_found" };
+    }
+    if (spaceArtifacts) {
+      const id = decodeURIComponent(spaceArtifacts[1]);
+      return /^[a-z0-9-]+$/.test(id)
+        ? { kind: "space_artifacts", id }
         : { kind: "not_found" };
     }
     if (space) {

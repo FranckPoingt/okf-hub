@@ -466,6 +466,8 @@ export function NewDocumentDialog({
   initialSpaceId,
   initialParentId,
   initialTemplateId,
+  initialType = "Document",
+  initialIntent = "canonical",
   busy,
   error,
   onOpenChange,
@@ -478,30 +480,40 @@ export function NewDocumentDialog({
   initialSpaceId?: string;
   initialParentId?: string;
   initialTemplateId?: string;
+  initialType?: string;
+  initialIntent?: string;
   busy: boolean;
   error: string;
   onOpenChange: (open: boolean) => void;
   onCreate: (event: FormEvent<HTMLFormElement>) => Promise<boolean>;
 }) {
+  const brief = initialTemplateId === "understanding-brief";
   const [templateId, setTemplateId] = useState(initialTemplateId ?? "");
   const [values, setValues] = useState<Record<string, string>>({});
-  const [documentType, setDocumentType] = useState("Document");
-  const [intent, setIntent] = useState("canonical");
+  const [documentType, setDocumentType] = useState(
+    brief ? "Explanation" : initialType,
+  );
+  const [intent, setIntent] = useState(brief ? "working" : initialIntent);
   const [spaceId, setSpaceId] = useState(initialSpaceId || spaces[0]?.id || "");
   const [parentId, setParentId] = useState(initialParentId ?? "");
   useEffect(() => {
     if (!open) return;
     setTemplateId(initialTemplateId ?? "");
     setValues({});
-    setDocumentType(
-      initialTemplateId === "understanding-brief" ? "Explanation" : "Document",
-    );
-    setIntent(
-      initialTemplateId === "understanding-brief" ? "working" : "canonical",
-    );
+    setDocumentType(brief ? "Explanation" : initialType);
+    setIntent(brief ? "working" : initialIntent);
     setSpaceId(initialSpaceId || spaces[0]?.id || "");
     setParentId(initialParentId ?? "");
-  }, [open, initialSpaceId, initialParentId, initialTemplateId, spaces]);
+  }, [
+    open,
+    brief,
+    initialIntent,
+    initialParentId,
+    initialSpaceId,
+    initialTemplateId,
+    initialType,
+    spaces,
+  ]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
   const variableValue = (name: string) =>
     Object.hasOwn(values, name) ? values[name] : "";

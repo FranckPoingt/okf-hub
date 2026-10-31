@@ -2099,6 +2099,135 @@ export async function createCollabApp({
     return visible;
   }
 
+  async function artifactMeta(
+    row: ConceptRow,
+    canEdit: boolean,
+    userId: string,
+    publication: Awaited<ReturnType<typeof currentPublication>>,
+    traces: { sourceUrl: string; title: string }[],
+  ) {
+    const published = extensionFields(publication?.markdown ?? "") ?? {};
+    const fields = canEdit ? frontmatter.get(row.id) : published;
+    const text = (value: unknown) =>
+      typeof value === "string" ? value.trim().slice(0, 300) : "";
+    const describe = (item: Record<string, unknown>) =>
+      text(item.description) || text(item.subject);
+    const sources: {
+      kind: "frontmatter" | "hub" | "external" | "trace";
+      label: string;
+      href?: string;
+      conceptId?: string;
+    }[] = [];
+    const seen = new Set<string>();
+    const add = (item: typeof sources[number]) => {
+      const key = item.href ?? item.label;
+      if (!key || seen.has(key) || sources.length >= 12) return;
+      seen.add(key);
+      sources.push(item);
+    };
+    const body = canEdit
+      ? (await loadDocument(row)).markdown
+      : bodyOnly(publication?.markdown ?? "");
+    const declared = editableSources(fields).filter((entry) =>
+      typeof entry === "string"
+    );
+    for (const entry of [...declared, ...markdownHrefs(body)]) {
+      let id = entry.split(/[?#]/, 1)[0].replace(/^\/knowledge\//, "");
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // Keep undecodable entries as plain citations.
+      }
+      const target = id !== row.id ? concept(id) : undefined;
+      if (target) {
+        // Never name hub documents the reader cannot open.
+        if (
+          await security.check(userId, "view", target.id) &&
+          (await security.check(userId, "edit", target.id) ||
+            (target.status === "active" && target.publishedRevision))
+        ) {
+          add({
+            kind: "hub",
+            label: await publishedLabelFor(userId, target.id),
+            conceptId: target.id,
+            href: `/knowledge/${encodeURIComponent(target.id)}`,
+          });
+        }
+      } else if (/^https:\/\//i.test(entry)) {
+        add({
+          kind: "external",
+          label: entry.replace(/^https:\/\//i, "").replace(/\/$/, ""),
+          href: entry,
+        });
+      } else if (declared.includes(entry)) {
+        add({ kind: "frontmatter", label: entry });
+      }
+    }
+    for (const trace of traces) {
+      if (trace.sourceUrl) {
+        add({ kind: "trace", label: trace.title, href: trace.sourceUrl });
+      }
+    }
+    return {
+      description: describe(fields),
+      publishedDescription: describe(published),
+      sources,
+    };
+  }
+
+  async function artifactGallery(userId: string, spaceId: string) {
+    if (
+      spaceId &&
+      (!space(spaceId) || !await security.checkSpace(userId, "view", spaceId))
+    ) throw new ActionError("Not found", 404);
+    const { documents } = await visibleSearchDocuments(userId, false);
+    const artifacts = [];
+    for (const item of documents) {
+      const row = item.kind === "hub-native" ? concept(item.id) : undefined;
+      if (
+        !row || item.type !== "Artifact" ||
+        (spaceId && row.spaceId !== spaceId)
+      ) continue;
+      const canEdit = Boolean(await security.check(userId, "edit", row.id));
+      const fields = canEdit
+        ? frontmatter.get(row.id)
+        : extensionFields((await currentPublication(row))?.markdown ?? "") ??
+          {};
+      const apps = artifactStore.list(row.id, canEdit).filter((app) =>
+        app !== null
+      );
+      const primary = apps.find((app) => app.liveVersion !== null) ?? apps[0];
+      const spaceRow = space(row.spaceId);
+      artifacts.push({
+        id: row.id,
+        title: item.title,
+        description: typeof fields.description === "string"
+          ? fields.description.trim().slice(0, 300)
+          : typeof fields.subject === "string"
+          ? fields.subject.trim().slice(0, 300)
+          : "",
+        owner: item.owner,
+        updatedAt: row.updatedAt,
+        spaceId: row.spaceId,
+        space: spaceRow?.name ?? row.spaceId,
+        spaceIcon: spaceRow?.icon ?? "",
+        publishedRevision: row.publishedRevision,
+        trust: item.trust,
+        trustReason: item.trustReason,
+        freshness: item.freshness,
+        appCount: apps.length,
+        appStatus: primary?.status ?? null,
+        liveVersion: primary?.liveVersion ?? null,
+        version: primary?.version ?? null,
+        grants: primary?.grants ?? [],
+      });
+    }
+    artifacts.sort((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt)
+    );
+    return { artifacts };
+  }
+
   async function publishConceptForUser(
     userId: string,
     conceptId: string,
@@ -2497,6 +2626,17 @@ export async function createCollabApp({
         ? publication?.metadata ?? unavailablePublishedMetadata()
         : {}),
       publishedMetadata: publication?.metadata ?? null,
+      ...((canEdit ? row.type : publication?.metadata.type) === "Artifact"
+        ? {
+          artifactMeta: await artifactMeta(
+            row,
+            canEdit,
+            userId,
+            publication,
+            traces,
+          ),
+        }
+        : {}),
       sources: editableSources(
         canEdit
           ? frontmatter.get(row.id)
@@ -3567,10 +3707,12 @@ export async function createCollabApp({
         appFiles[2] ?? "",
         async ({ appId, version, userId }, path) => {
           const visible = await visibleApp(userId, appId);
+          const draft = visible.state.apps.find((app) => app?.id === appId);
+          // An editor token pins either the draft or the activated version.
           const file = artifactStore.file(
             appId,
             path,
-            visible.state.canEdit,
+            visible.state.canEdit && draft?.version === version,
             version,
           );
           if (file) recordAppOpen(visible, appId, path, userId);
@@ -4939,8 +5081,13 @@ export async function createCollabApp({
       }
       try {
         const appId = decodeURIComponent(appCapabilityRoute[1]);
-        const { state } = await visibleApp(current.user.id, appId);
-        const opened = state.apps.find((app) => app?.id === appId);
+        const { conceptId, state } = await visibleApp(current.user.id, appId);
+        const live = state.canEdit &&
+          (await request.json().catch(() => ({})))?.live === true;
+        // Editors may preview the activated version; readers only ever get it.
+        const opened =
+          (live ? artifactStore.list(conceptId, false) : state.apps)
+            .find((app) => app?.id === appId);
         if (!opened?.bundle) throw new ActionError("App not found", 404);
         const token = await appCapabilities.mint({
           appId,
@@ -4957,6 +5104,31 @@ export async function createCollabApp({
           error: error instanceof Error ? error.message : "App unavailable",
         }, {
           status: error instanceof ActionError ? error.status : 400,
+          headers: cors(request),
+        });
+      }
+    }
+    if (url.pathname === "/api/artifact-gallery" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      try {
+        return Response.json(
+          await artifactGallery(
+            current.user.id,
+            (url.searchParams.get("spaceId") ?? "").trim(),
+          ),
+          { headers: cors(request) },
+        );
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Gallery unavailable",
+        }, {
+          status: error instanceof ActionError ? error.status : 503,
           headers: cors(request),
         });
       }
