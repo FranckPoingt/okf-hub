@@ -77,20 +77,21 @@ anything the user has not asked to keep; saving creates a draft in the Hub.
 
 ## Common errors
 
-| Error                                                       | Fix                                                                                                                                                    |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Artifact folder needs index.html` / `non-empty context.md` | Add the missing file at the folder root.                                                                                                               |
-| `Excluded artifact file` / `unsafe filename`                | Remove dotfiles, `node_modules`, credential or key files; rename unsafe paths.                                                                         |
-| `Unsupported static file`                                   | Keep to web assets (html, css, js, json, images, fonts, text).                                                                                         |
-| `Artifact exceeds 8 MiB` / `exceeds 200 files`              | Drop unused files, shrink or compress data and images.                                                                                                 |
-| `Artifact dependency must be included locally`              | CLI: rerun with `--vendor`. MCP: bundle the file locally. Hosts outside the allow-list must be downloaded by hand.                                     |
-| `ES module dependency must be included locally`             | Bare (`react`) or root (`/app.js`) module specifier: use relative `./file.js` imports and bundle the dependency.                                       |
-| `references must be relative (./file), not root paths`      | Change `src="/app.js"`, `href="/app.css"` or `url(/x.png)` to `./app.js` style paths.                                                                  |
-| `Artifact title must be 1–100 characters`                   | Fix the `# heading` in `context.md`, or pass `--title` (CLI) or `title` (MCP). No heading: the document is named `Artifact`.                           |
-| `Choose space or spaceId`                                   | You passed both `space` and `spaceId`; pass one.                                                                                                       |
-| `Choose exactly one editable space`                         | Pass the `spaceId` of an editable space from `spaces.list`.                                                                                            |
-| `Use the receipt returned by this Hub MCP action`           | The receipt came from the CLI; save without it, or use the receipt of an MCP save.                                                                     |
-| 401/403 or missing `artifact.save` tool                     | The key lacks scopes; see docs/mcp.md. All save scopes are required.                                                                                   |
-| Save failed midway                                          | Rerun the same command; the receipt resumes completed steps. If the document id was lost, find it in the Hub and put it in the receipt's `documentId`. |
+| Error                                                          | Fix                                                                                                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Artifact folder needs index.html` / `non-empty context.md`    | Add the missing file at the folder root.                                                                                                               |
+| `Excluded artifact file` / `unsafe filename`                   | Remove dotfiles, `node_modules`, credential or key files; rename unsafe paths.                                                                         |
+| `Unsupported static file`                                      | Keep to web assets (html, css, js, json, images, fonts, text).                                                                                         |
+| `Artifact exceeds 8 MiB` / `exceeds 200 files`                 | Drop unused files, shrink or compress data and images.                                                                                                 |
+| `Artifact dependency must be included locally`                 | CLI: rerun with `--vendor`. MCP: bundle the file locally. Hosts outside the allow-list must be downloaded by hand.                                     |
+| `ES module dependency must be included locally`                | Bare (`react`) or root (`/app.js`) module specifier: use relative `./file.js` imports and bundle the dependency.                                       |
+| `references must be relative (./file), not root paths`         | Change `src="/app.js"`, `href="/app.css"` or `url(/x.png)` to `./app.js` style paths.                                                                  |
+| `Artifact title must be 1–100 characters`                      | Fix the `# heading` in `context.md`, or pass `--title` (CLI) or `title` (MCP). No heading: the CLI uses the folder name.                               |
+| `Add a # Title heading to context.md or pass a title argument` | MCP only: add a `# Title` heading (or frontmatter `title:`) to `context.md`, or pass `title`.                                                          |
+| `Choose space or spaceId`                                      | You passed both `space` and `spaceId`; pass one.                                                                                                       |
+| `Choose exactly one editable space`                            | Pass the `spaceId` of an editable space from `spaces.list`.                                                                                            |
+| `Use the receipt returned by this Hub MCP action`              | The receipt came from the CLI; save without it, or use the receipt of an MCP save.                                                                     |
+| 401/403 or missing `artifact.save` tool                        | The key lacks scopes (see docs/mcp.md; all save scopes are required) or its user cannot edit any space.                                                |
+| Save failed midway                                             | Rerun the same command; the receipt resumes completed steps. If the document id was lost, find it in the Hub and put it in the receipt's `documentId`. |
 
 Full details: `docs/codex-artifacts.md` and `docs/mcp.md` in the okf-hub repo.

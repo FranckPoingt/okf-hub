@@ -1,4 +1,5 @@
 import { CompareDefinitions } from "./compare-definitions.tsx";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
 import type {
@@ -18,6 +19,7 @@ export function KnowledgeDocument({
   onCommentOpen,
   onOpenHub,
   onOpenImported,
+  onOpenSettings,
 }: {
   documentId: string;
   markdown?: string;
@@ -26,6 +28,7 @@ export function KnowledgeDocument({
   onCommentOpen?: (threadId: string) => void;
   onOpenHub: (id: string) => void;
   onOpenImported: (sourceId: string, path: string) => Promise<unknown>;
+  onOpenSettings?: () => void;
 }) {
   const [state, setState] = useState<
     { documentId: string; result?: SearchResult; error?: string } | null
@@ -77,7 +80,10 @@ export function KnowledgeDocument({
     );
   return (
     <>
-      <aside className="my-4 grid gap-3" aria-label="Knowledge relationships">
+      <aside
+        className="knowledge-relationships my-4 grid gap-3"
+        aria-label="Knowledge relationships"
+      >
         {current?.error && (
           <p className="text-sm text-muted-foreground" role="status">
             {current.error}
@@ -94,7 +100,10 @@ export function KnowledgeDocument({
               deciding which applies.
             </p>
             {relationships("Compare with", current?.result?.conflicts)}
-            <CompareDefinitions current={current?.result} />
+            <CompareDefinitions
+              current={current?.result}
+              onOpenSettings={onOpenSettings}
+            />
           </div>
         )}
         {relationships("Also defined in", current?.result?.alsoDefinedIn)}
@@ -102,9 +111,10 @@ export function KnowledgeDocument({
           current?.result &&
             (current.result.links.length || current.result.backlinks.length),
         ) && (
-          <details className="text-sm">
-            <summary className="cursor-pointer">
+          <details className="relationship-details text-sm">
+            <summary>
               References and backlinks
+              <ChevronDown className="source-details-chevron size-4" />
             </summary>
             <div className="mt-2 grid gap-2">
               {relationships("Links to", current?.result?.links)}

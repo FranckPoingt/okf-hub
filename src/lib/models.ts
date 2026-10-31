@@ -260,6 +260,7 @@ export type SearchResult = SearchRelationship & {
   conflicts: (SearchRelationship & { difference: number })[];
   canReviewConflicts: boolean;
   canCompareDefinitions?: boolean;
+  aiEnabled?: boolean;
 };
 export type SearchResponse = {
   query: string;

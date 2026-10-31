@@ -34,7 +34,7 @@ const handle = createMcpHandler(catalog, (request) => {
   return Promise.resolve(
     request.headers.get("authorization") === "Bearer okf_test" ? actor : null,
   );
-});
+}, () => Promise.resolve(false));
 function request(
   body: unknown,
   headers: Record<string, string> = {},
@@ -207,4 +207,43 @@ Deno.test("MCP rejects malformed and oversized JSON bodies", async () => {
   assert.equal((await malformed.json()).error.code, -32700);
   const oversized = await raw("x".repeat(9 * 1024 * 1024 + 1));
   assert.equal(oversized.status, 413);
+});
+
+Deno.test("MCP hides mutation tools from keys whose user can edit nowhere", async () => {
+  const both = createActionCatalog(["query", "mutation"].map((mode) => ({
+    name: `knowledge.${mode}`,
+    tag: "Knowledge",
+    title: mode,
+    description: mode,
+    mode: mode as "query" | "mutation",
+    approval: "none" as const,
+    inputSchema: { type: "object" as const, additionalProperties: false },
+    run: () => ({}),
+  })));
+  const names = async (editor: boolean) => {
+    const handler = createMcpHandler(
+      both,
+      () => Promise.resolve(actor),
+      () => Promise.resolve(editor),
+    );
+    const response = await handler(
+      new Request("http://localhost/api/mcp", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer okf_test",
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify(rpc("tools/list")),
+      }),
+    );
+    return (await response.json()).result.tools.map((tool: { name: string }) =>
+      tool.name
+    );
+  };
+  assert.deepEqual(await names(false), ["knowledge.query"]);
+  assert.deepEqual(await names(true), [
+    "knowledge.query",
+    "knowledge.mutation",
+  ]);
 });

@@ -1937,6 +1937,12 @@ export default function App() {
       title: displayedConcept!.title,
     }
     : null;
+  const openAISettings = bootstrap.canEdit
+    ? () => {
+      setReferencesOpen(false);
+      showCreate("ai");
+    }
+    : undefined;
   const canEditDocument = Boolean(
     bootstrap.canEdit && concept?.lockedAt === null,
   );
@@ -2441,6 +2447,7 @@ export default function App() {
                     imported
                     onOpenHub={showHubConcept}
                     onOpenImported={openImported}
+                    onOpenSettings={openAISettings}
                   />
                 </div>
               </MilkdownProvider>
@@ -2590,6 +2597,7 @@ export default function App() {
                   onOpenChange={setReferencesOpen}
                   onOpenConcept={showHubConcept}
                   onOpenImported={openImported}
+                  onOpenSettings={openAISettings}
                 />
 
                 <DraftReview
@@ -2623,13 +2631,6 @@ export default function App() {
                   onOpenChange={setHistoryOpen}
                   onRestore={(number) => void restoreRevision(number)}
                 />
-                {view === "draft" && canEditDocument && (
-                  <KnowledgeDocument
-                    documentId={concept.id}
-                    onOpenHub={showHubConcept}
-                    onOpenImported={openImported}
-                  />
-                )}
                 {actionError && (
                   <p className="action-error" role="alert">{actionError}</p>
                 )}
@@ -2728,6 +2729,12 @@ export default function App() {
                             }}
                           />
                           {documentGovernance}
+                          <KnowledgeDocument
+                            documentId={concept.id}
+                            onOpenHub={showHubConcept}
+                            onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
+                          />
                           <DocumentEditor
                             key={editorVersion}
                             conceptId={concept.id}
@@ -2762,6 +2769,7 @@ export default function App() {
                             documentId={concept.id}
                             onOpenHub={showHubConcept}
                             onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
                             key={`${concept.publishedRevision}-${view}`}
                             conceptId={concept.id}
                             markdown={view === "draft"

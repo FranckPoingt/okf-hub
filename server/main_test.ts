@@ -547,6 +547,27 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     assert.equal(saved.result.isError, undefined, JSON.stringify(saved));
     const savedArtifact = JSON.parse(saved.result.content[0].text);
     assert.equal(savedArtifact.published, false);
+    const untitled = await mcp("artifact.save", {
+      spaceId: "policies",
+      files: { ...files, "context.md": "Sources and assumptions." },
+    });
+    assert.equal(untitled.result.isError, true);
+    assert.match(untitled.result.content[0].text, /# Title/);
+    const fromFrontmatter = await mcp("artifact.save", {
+      spaceId: "policies",
+      files: {
+        ...files,
+        "context.md": '---\ntitle: "Frontmatter name"\n---\nSources.',
+      },
+    });
+    assert.equal(
+      JSON.parse(
+        (await mcp("documents.get", {
+          id: JSON.parse(fromFrontmatter.result.content[0].text).documentId,
+        })).result.content[0].text,
+      ).title,
+      "Frontmatter name",
+    );
     const same = await mcp("artifact.save", {
       files,
       receipt: savedArtifact.receipt,
@@ -3696,6 +3717,34 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
     assert.equal((await setManager(spaceB, "manager")).status, 204);
     assert.equal(await activate(clients.manager), 404);
 
+    // tools/list hides mutation tools from keys whose user can edit nowhere.
+    const mutationTools = async (client: Client) => {
+      const created = await client.request("/api/developer/keys", {
+        method: "POST",
+        body: JSON.stringify({ name: "List tools", scopes: ["*"] }),
+      });
+      const listed = await (await fetch(`${base}/api/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${(await created.json()).token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      })).json();
+      return listed.result.tools.filter((tool: {
+        annotations: { readOnlyHint: boolean };
+      }) => !tool.annotations.readOnlyHint).map((tool: { name: string }) =>
+        tool.name
+      );
+    };
+    assert.deepEqual(await mutationTools(clients.viewer), []);
+    const canEditOf = async (client: Client) =>
+      (await (await client.request("/api/v1/actions")).json()).canEdit;
+    assert.equal(await canEditOf(clients.viewer), false);
+    assert.equal(await canEditOf(clients.manager), true);
+    assert.ok((await mutationTools(clients.manager)).includes("artifact.save"));
+
     const key = await owner.request("/api/developer/keys", {
       method: "POST",
       body: JSON.stringify({
@@ -4006,6 +4055,9 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
       item.id === "active-customer"
     );
     assert.equal(editorHub.canReviewConflicts, true);
+    // Without a provider the editor still sees Compare, disabled.
+    assert.equal(editorHub.canCompareDefinitions, true);
+    assert.equal(editorHub.aiEnabled, false);
     assert.ok(
       editorHub.backlinks.some((item: { id: string }) =>
         item.id === "repository/secret"

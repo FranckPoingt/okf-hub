@@ -26,6 +26,7 @@ export function DocumentReferences({
   onOpenChange,
   onOpenConcept,
   onOpenImported,
+  onOpenSettings,
 }: {
   canEdit: boolean;
   conceptId: string;
@@ -34,6 +35,7 @@ export function DocumentReferences({
   onOpenChange: (open: boolean) => void;
   onOpenConcept: (id: string) => void;
   onOpenImported: (sourceId: string, path: string) => Promise<unknown>;
+  onOpenSettings?: () => void;
 }) {
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [query, setQuery] = useState("");
@@ -105,7 +107,10 @@ export function DocumentReferences({
           {relationships("Linked from", current?.backlinks)}
           {relationships("Also defined in", current?.alsoDefinedIn)}
           {relationships("Potential definition conflict", current?.conflicts)}
-          <CompareDefinitions current={current} />
+          <CompareDefinitions
+            current={current}
+            onOpenSettings={onOpenSettings}
+          />
           {canEdit && (
             <section className="grid gap-3 border-t pt-5">
               <h3 className="text-sm font-semibold">Insert a page reference</h3>
