@@ -168,6 +168,19 @@ export function createChangeProposalRoutes(
     Response.json({ error }, { status });
 
   return {
+    updateStatus(
+      installationId: number,
+      repositoryId: number,
+      prNumber: number,
+      status: Proposal["status"],
+    ) {
+      return db.prepare(
+        `UPDATE okf_change_proposal SET status = ? WHERE prNumber = ?
+        AND sourceId IN (SELECT id FROM okf_repository_source
+          WHERE githubInstallationId = ? AND githubRepositoryId = ?)`,
+      )
+        .run(status, prNumber, installationId, repositoryId).changes;
+    },
     // Best-effort: called after a source sync, so merged/closed PRs show up.
     async refresh(sourceId: string) {
       const source = repositorySource(sourceId);

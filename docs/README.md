@@ -368,22 +368,26 @@ levels and 1,000 visited entries. This selection may omit relevant evidence.
 Review the file list, rendered Markdown, provenance, and any dropped invalid
 concepts in the Hub. Generated concepts remain drafts and cite the repository
 paths used. Nothing is imported or published by drafting. Drafts expire after 30
-minutes or server restart. Approval applies to the exact reviewed draft.
+minutes and are persisted in the app SQLite database across server restarts. Up
+to 32 pending drafts are retained. Approval applies to the exact reviewed draft.
 
 For GitHub App sources, approval creates a new branch and a **draft pull
 request**. The default branch is never written to. If the base revision has
 changed, regenerate and review the proposal. The App needs repository
 **Contents: Read and write** (`contents:write`) and **Pull requests: Read and
 write** (`pull_requests:write`), in addition to metadata read access and
-existing push webhook subscriptions. Update existing App registrations and
-approve the new permissions on installations. `stack:github` configures
-credentials; it does not modify the GitHub App's permission settings.
+**Push** and **Pull request** (`pull_request`) webhook subscriptions on
+`/api/webhooks/github`. The signed Pull request events update suggestion status
+on close, merge and reopen, deduplicated by delivery. Update existing App
+registrations and approve the new permissions on installations. `stack:github`
+configures credentials; it does not modify the GitHub App's permission settings.
 
 For manual HTTPS Git sources, approval downloads a ZIP rooted at the configured
 OKF folder. Submit it through your repository's normal review process. Drafting,
 proposal creation, downloads and failures are recorded in the audit trail.
-GitHub failures after branch creation may leave an unused proposal branch;
-inspect GitHub before retrying. The Hub never merges the proposal.
+GitHub failures after branch creation trigger best-effort deletion of that
+proposal branch. If cleanup also fails, an unused branch may remain; inspect
+GitHub before retrying. The Hub never merges the proposal.
 
 ## Suggest a change to imported knowledge
 
@@ -399,8 +403,8 @@ reason, your Hub display name, and links back to the concept; `@mentions` in
 your text are neutralized so nobody is notified unexpectedly. The Hub copy does
 not change until the pull request is merged and the source next syncs (push
 webhook, schedule or manual refresh). The concept shows "1 open suggestion" with
-a link; the status is refreshed after each sync, so merged or closed suggestions
-drop off.
+a link; signed Pull request webhooks update its status on close, merge and
+reopen. Source sync also refreshes open suggestions as a fallback.
 
 The suggestion must be based on the revision you edited. If the concept was
 re-synced meanwhile, or the repository default branch has moved since the last
@@ -425,3 +429,14 @@ access. This role does not grant general workspace ownership.
 The owner-only `GET /api/spaces/:id/managers` endpoint returns
 `{ managers: [userId, ...] }`. Assign or revoke with `PUT` or
 `DELETE /api/spaces/:id/managers/:userId`.
+
+## Compare definitions
+
+With an AI provider configured, editors can choose **Compare definitions** in
+the conflict panel or References sheet. Both definitions must still be visible
+to the requesting editor and belong to the same cross-source group. The
+read-only comparison sends up to 12,000 characters per definition (plus bounded
+labels) to the configured provider as untrusted evidence, and returns a short
+explanation of material agreement or disagreement. Shortened input is marked.
+Review the originals: AI output is advisory, never changes a source, and is
+recorded as `knowledge.definitions-compared` in the audit trail.

@@ -85,12 +85,34 @@ export async function openRepositoryPR({
     throw new Error("Proposal branch must differ from default");
   }
   await request("/git/refs", { ref: `refs/heads/${branch}`, sha: next.sha });
-  const pr = await request("/pulls", {
-    title,
-    body,
-    head: branch,
-    base: repo.defaultBranch,
-    draft: true,
-  });
-  return { url: pr.html_url as string, branch };
+  try {
+    const pr = await request("/pulls", {
+      title,
+      body,
+      head: branch,
+      base: repo.defaultBranch,
+      draft: true,
+    });
+    return { url: pr.html_url as string, branch };
+  } catch (error) {
+    // Only this call's successfully created proposal ref is eligible for cleanup.
+    try {
+      await fetcher(
+        `https://api.github.com/repos/${repo.fullName}/git/refs/heads/${
+          encodeURIComponent(branch)
+        }`,
+        {
+          method: "DELETE",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${token}`,
+            "x-github-api-version": "2022-11-28",
+          },
+        },
+      );
+    } catch {
+      // Best effort; preserve the original proposal error.
+    }
+    throw error;
+  }
 }

@@ -3268,6 +3268,69 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
       username: "x-access-token",
       token: "installation-token",
     });
+    // Signed PR deliveries update only proposals in the matching installation/repository.
+    const proposalDb = new DatabaseSync(`${dataDir}/hub.db`);
+    proposalDb.prepare(
+      `INSERT INTO okf_change_proposal VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .run(
+        "webhook-proposal",
+        githubSource.id,
+        "test-concept",
+        "test-user",
+        "https://github.com/acme/knowledge/pull/7",
+        7,
+        "open",
+        new Date().toISOString(),
+      );
+    const sendPR = (
+      delivery: string,
+      action: string,
+      merged = false,
+      signature = "valid-signature",
+      repositoryId = 77,
+    ) =>
+      fetch(`${base}/api/webhooks/github`, {
+        method: "POST",
+        headers: {
+          "x-github-delivery": delivery,
+          "x-github-event": "pull_request",
+          ...(signature ? { "x-hub-signature-256": signature } : {}),
+        },
+        body: JSON.stringify({
+          installation: { id: 9 },
+          repository: { id: repositoryId },
+          action,
+          pull_request: { number: 7, merged },
+        }),
+      });
+    const proposalStatus = () =>
+      proposalDb.prepare(
+        "SELECT status FROM okf_change_proposal WHERE id = 'webhook-proposal'",
+      ).get()!.status;
+    assert.equal(
+      (await sendPR("pr-unsigned", "closed", false, "")).status,
+      401,
+    );
+    assert.equal(proposalStatus(), "open");
+    assert.equal(
+      (await sendPR("pr-other-repo", "closed", false, "valid-signature", 78))
+        .status,
+      202,
+    );
+    assert.equal(proposalStatus(), "open");
+    assert.equal((await sendPR("pr-close", "closed")).status, 202);
+    assert.equal(proposalStatus(), "closed");
+    assert.equal((await sendPR("pr-reopen", "reopened")).status, 202);
+    assert.equal(proposalStatus(), "open");
+    assert.equal((await sendPR("pr-merge", "closed", true)).status, 202);
+    assert.equal(proposalStatus(), "merged");
+    assert.equal(
+      (await (await sendPR("pr-reopen", "reopened")).json()).duplicate,
+      true,
+    );
+    assert.equal(proposalStatus(), "merged");
+    proposalDb.close();
     const webhookPayload = JSON.stringify({
       installation: { id: 9 },
       repository: { id: 77 },
@@ -4634,4 +4697,108 @@ Deno.test("archive names stay unique when generated ids share a long prefix", ()
   ]);
   const values = [...names.values()].map((name) => name.toLowerCase());
   assert.equal(new Set(values).size, 3);
+});
+
+Deno.test("reviewed OKF draft survives app restart on the same data directory", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const fga = fakeOpenFga();
+  const options = {
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    dataDir,
+    authSecret: "a-secure-test-secret-with-at-least-32-characters",
+    aiResponder: () =>
+      Promise.resolve(JSON.stringify({
+        concepts: [{
+          path: "overview.md",
+          type: "Overview",
+          title: "Test",
+          body: "# Test",
+          sources: ["README.md"],
+        }],
+      })),
+  };
+  let app = await createCollabApp(options);
+  let server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  let client = new Client(
+    `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`,
+  );
+  try {
+    await client.signUp("Owner", "restart-owner@example.com");
+    const setup = await client.request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ name: "Restart test" }),
+    });
+    assert.equal(setup.status, 200, await setup.text());
+    const db = new DatabaseSync(`${dataDir}/hub.db`);
+    db.prepare(
+      "INSERT INTO okf_repository_source (id, repositoryUrl, folder, status) VALUES ('restart-repository', 'https://example.com/knowledge.git', 'okf', 'current')",
+    ).run();
+    db.close();
+    const checkout = `${dataDir}/sources/restart-repository`;
+    await Deno.mkdir(checkout, { recursive: true });
+    for (
+      const args of [["init", "-q"], [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "initial",
+      ]]
+    ) {
+      assert(
+        (await new Deno.Command("git", {
+          args,
+          cwd: checkout,
+          stdout: "null",
+          stderr: "null",
+        }).output()).success,
+      );
+    }
+    await Deno.writeTextFile(`${checkout}/README.md`, "# Test component");
+    const path = "/api/sources/repositories/restart-repository/okf-draft";
+    const response = await client.request(path, { method: "POST", body: "{}" });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    const cookie = client.cookie;
+    await server.shutdown();
+    await app.close();
+    app = await createCollabApp(options);
+    server = Deno.serve(
+      { hostname: "127.0.0.1", port: 0, onListen() {} },
+      app.fetch,
+    );
+    client = new Client(
+      `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`,
+    );
+    client.cookie = cookie;
+    const approved = await client.request(`${path}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ draftId: body.draftId }),
+    });
+    assert.equal(
+      approved.status,
+      200,
+      approved.status === 200 ? undefined : await approved.text(),
+    );
+    assert.equal(approved.headers.get("content-type"), "application/zip");
+    await approved.arrayBuffer();
+    assert.equal(
+      (await client.request(`${path}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ draftId: body.draftId }),
+      })).status,
+      400,
+    );
+  } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
 });

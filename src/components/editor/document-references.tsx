@@ -1,3 +1,4 @@
+import { CompareDefinitions } from "./compare-definitions.tsx";
 import { ArrowUpRight, Link2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api.ts";
@@ -104,6 +105,7 @@ export function DocumentReferences({
           {relationships("Linked from", current?.backlinks)}
           {relationships("Also defined in", current?.alsoDefinedIn)}
           {relationships("Potential definition conflict", current?.conflicts)}
+          <CompareDefinitions current={current} />
           {canEdit && (
             <section className="grid gap-3 border-t pt-5">
               <h3 className="text-sm font-semibold">Insert a page reference</h3>

@@ -1,4 +1,5 @@
 /// <reference lib="deno.ns" />
+import type { DatabaseSync } from "node:sqlite";
 import type { AIResponder } from "./ai.ts";
 import type { GitHubAppClient } from "./github-app.ts";
 import { openRepositoryPR } from "./github-pr.ts";
@@ -13,6 +14,7 @@ type Source = {
 };
 export function createOkfDraftRoutes(
   {
+    db,
     dataDir,
     security,
     repositorySource,
@@ -22,6 +24,7 @@ export function createOkfDraftRoutes(
     model,
     app,
   }: {
+    db: DatabaseSync;
     dataDir: string;
     security: Pick<
       Awaited<ReturnType<typeof createSecurity>>,
@@ -35,13 +38,21 @@ export function createOkfDraftRoutes(
     app: GitHubAppClient | null | undefined;
   },
 ) {
-  const okfDrafts = new Map<string, {
+  type PendingDraft = {
     userId: string;
     source: string;
     revision: string;
-    createdAt: number;
     draft: Awaited<ReturnType<typeof draftOkf>>;
-  }>();
+  };
+  db.exec(`CREATE TABLE IF NOT EXISTS okf_pending_draft (
+    id TEXT PRIMARY KEY, userId TEXT NOT NULL, source TEXT NOT NULL,
+    revision TEXT NOT NULL, draft TEXT NOT NULL, createdAt INTEGER NOT NULL
+  )`);
+  const prune = () =>
+    db.prepare(
+      "DELETE FROM okf_pending_draft WHERE createdAt < ?",
+    ).run(Date.now() - 30 * 60_000);
+  prune();
   const draftingSources = new Set<string>();
   return {
     busy: (id: string) => draftingSources.has(id),
@@ -89,15 +100,21 @@ export function createOkfDraftRoutes(
       }
       draftingSources.add(sourceId);
       try {
-        for (const [id, proposal] of okfDrafts) {
-          if (Date.now() - proposal.createdAt > 30 * 60_000) {
-            okfDrafts.delete(id);
-          }
-        }
+        prune();
         const identity = JSON.stringify({ sourceId, source });
         if (approve) {
           const { draftId } = await request.json();
-          const proposal = okfDrafts.get(draftId);
+          const row = typeof draftId === "string"
+            ? db.prepare(
+              "SELECT userId, source, revision, draft FROM okf_pending_draft WHERE id = ? AND createdAt >= ?",
+            ).get(draftId, Date.now() - 30 * 60_000)
+            : undefined;
+          const proposal = row
+            ? {
+              ...row,
+              draft: JSON.parse(row.draft as string),
+            } as PendingDraft
+            : undefined;
           if (
             JSON.stringify({ sourceId, source: repositorySource(sourceId) }) !==
               identity ||
@@ -109,7 +126,13 @@ export function createOkfDraftRoutes(
             );
           }
           // Consume before external writes, preventing duplicate approvals.
-          okfDrafts.delete(draftId);
+          if (
+            !db.prepare("DELETE FROM okf_pending_draft WHERE id = ?").run(
+              draftId,
+            ).changes
+          ) {
+            throw new Error("Draft already consumed");
+          }
           const folder = source.folder === "." ? "" : `${source.folder}/`;
           const files = proposal.draft.files.map((file) => ({
             ...file,
@@ -151,7 +174,11 @@ export function createOkfDraftRoutes(
             },
           });
         }
-        if (okfDrafts.size >= 32) {
+        if (
+          Number(
+            db.prepare("SELECT COUNT(*) AS n FROM okf_pending_draft").get()!.n,
+          ) >= 32
+        ) {
           throw new Error("Too many pending drafts; try again later");
         }
         const head = await new Deno.Command("git", {
@@ -176,13 +203,21 @@ export function createOkfDraftRoutes(
           throw new Error("Source changed; regenerate the draft");
         }
         const draftId = crypto.randomUUID();
-        okfDrafts.set(draftId, {
-          userId: current.user.id,
-          source: identity,
-          revision,
-          draft,
-          createdAt: Date.now(),
-        });
+        prune();
+        const inserted = db.prepare(`INSERT INTO okf_pending_draft
+          (id, userId, source, revision, draft, createdAt)
+          SELECT ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM okf_pending_draft) < 32`)
+          .run(
+            draftId,
+            current.user.id,
+            identity,
+            revision,
+            JSON.stringify(draft),
+            Date.now(),
+          ).changes;
+        if (!inserted) {
+          throw new Error("Too many pending drafts; try again later");
+        }
         security.audit(
           current.user.id,
           "source.okf-drafted",

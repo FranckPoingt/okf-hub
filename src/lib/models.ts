@@ -259,6 +259,7 @@ export type SearchResult = SearchRelationship & {
   alsoDefinedIn: SearchRelationship[];
   conflicts: (SearchRelationship & { difference: number })[];
   canReviewConflicts: boolean;
+  canCompareDefinitions?: boolean;
 };
 export type SearchResponse = {
   query: string;

@@ -57,6 +57,7 @@ import {
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
 import { retrieveKnowledge } from "./knowledge-retrieval.ts";
 import { buildKnowledgeGraph, definitionContent } from "./knowledge-graph.ts";
+import { createDefinitionComparison } from "./compare-definitions.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
 import { createChangeProposalRoutes } from "./change-proposals.ts";
 import { createObjectStore } from "./object-store.ts";
@@ -1496,6 +1497,7 @@ export async function createCollabApp({
   }
 
   const okfDraftRoutes = createOkfDraftRoutes({
+    db,
     dataDir,
     security,
     repositorySource,
@@ -3080,6 +3082,13 @@ export async function createCollabApp({
     return { documents, canIncludeArchived };
   }
 
+  const compareDefinitions = createDefinitionComparison({
+    responder: respondWithAI,
+    loadVisible: async (userId) =>
+      (await visibleSearchDocuments(userId, false)).documents,
+    audit: (userId, event, object) => security.audit(userId, event, object),
+  });
+
   async function searchKnowledge(
     userId: string,
     input: Record<string, unknown>,
@@ -3148,6 +3157,8 @@ export async function createCollabApp({
       return {
         ...visible,
         score,
+        canCompareDefinitions: Boolean(respondWithAI) &&
+          item.canReviewConflicts,
         snippet: searchSnippet(searchText, query, item.title, [
           item.type,
           item.owner,
@@ -4090,9 +4101,14 @@ export async function createCollabApp({
       let payload: {
         installation?: { id?: number };
         repository?: { id?: number };
+        action?: string;
+        pull_request?: { number?: number; merged?: boolean };
       };
       try {
         payload = JSON.parse(new TextDecoder().decode(raw));
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          throw new Error("Expected an object");
+        }
       } catch {
         return Response.json({ error: "Invalid GitHub webhook payload" }, {
           status: 400,
@@ -4102,7 +4118,7 @@ export async function createCollabApp({
         "INSERT OR IGNORE INTO okf_github_delivery (deliveryId, event, receivedAt) VALUES (?, ?, ?)",
       ).run(deliveryId, event, new Date().toISOString()).changes;
       if (!inserted) return Response.json({ duplicate: true }, { status: 202 });
-      if (event !== "push") {
+      if (event !== "push" && event !== "pull_request") {
         return Response.json({ accepted: true, refreshed: 0 }, { status: 202 });
       }
       const installationId = Number(payload.installation?.id);
@@ -4114,6 +4130,29 @@ export async function createCollabApp({
         return Response.json({ error: "Invalid GitHub push payload" }, {
           status: 400,
         });
+      }
+      if (event === "pull_request") {
+        const number = payload.pull_request?.number;
+        if (!Number.isSafeInteger(number) || number! < 1) {
+          return Response.json(
+            { error: "Invalid GitHub pull request payload" },
+            { status: 400 },
+          );
+        }
+        const status = payload.action === "reopened"
+          ? "open"
+          : payload.action === "closed"
+          ? (payload.pull_request?.merged === true ? "merged" : "closed")
+          : null;
+        const updated = status
+          ? changeProposals.updateStatus(
+            installationId,
+            repositoryId,
+            number!,
+            status,
+          )
+          : 0;
+        return Response.json({ accepted: true, updated }, { status: 202 });
       }
       const sources = db.prepare(
         "SELECT id FROM okf_repository_source WHERE githubInstallationId = ? AND githubRepositoryId = ?",
@@ -5523,6 +5562,15 @@ export async function createCollabApp({
           error: error instanceof Error ? error.message : "Storage unavailable",
         }, { status: 503, headers: cors(request) });
       }
+    }
+    if (
+      url.pathname === "/api/knowledge/compare" && request.method === "POST"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, { status: 401 });
+      }
+      return await compareDefinitions(request, current.user.id);
     }
     if (url.pathname === "/api/search" && request.method === "GET") {
       const current = await security.session(request);

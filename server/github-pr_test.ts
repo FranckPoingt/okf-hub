@@ -98,3 +98,58 @@ Deno.test("GitHub denies moved base, inaccessible repositories, permissions and 
   );
   assert.equal(writes, 0);
 });
+
+Deno.test("failed PR deletes only its created proposal branch and keeps original error", async () => {
+  for (const refFails of [false, true]) {
+    const calls: {
+      path: string;
+      method: string;
+      body: Record<string, string>;
+    }[] = [];
+    await assert.rejects(
+      () =>
+        openRepositoryPR({
+          ...proposal,
+          fetcher: (url, init) => {
+            const path = new URL(String(url)).pathname;
+            calls.push({
+              path,
+              method: init!.method!,
+              body: JSON.parse(String(init?.body ?? "{}")),
+            });
+            if (init?.method === "DELETE") throw new Error("cleanup failure");
+            if (path.endsWith("/pulls")) {
+              return Promise.resolve(new Response(null, { status: 422 }));
+            }
+            if (refFails && path.endsWith("/git/refs")) {
+              return Promise.resolve(new Response(null, { status: 403 }));
+            }
+            return Promise.resolve(
+              Response.json(
+                path.endsWith("/ref/heads/main")
+                  ? { object: { sha: "base" } }
+                  : path.endsWith("/commits/base")
+                  ? { tree: { sha: "tree" } }
+                  : { sha: "next" },
+              ),
+            );
+          },
+        }),
+      refFails ? /403/ : /422/,
+    );
+    const deleted = calls.filter((call) => call.method === "DELETE");
+    assert.equal(deleted.length, refFails ? 0 : 1);
+    if (!refFails) {
+      const created = calls.find((call) =>
+        call.path.endsWith("/git/refs")
+      )!.body.ref;
+      assert.equal(
+        deleted[0].path,
+        `/repos/org/repo/git/refs/heads/${
+          encodeURIComponent(created.replace("refs/heads/", ""))
+        }`,
+      );
+      assert(!deleted[0].path.endsWith("/main"));
+    }
+  }
+});

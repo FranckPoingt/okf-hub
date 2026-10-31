@@ -1,3 +1,4 @@
+import { CompareDefinitions } from "./compare-definitions.tsx";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
 import type {
@@ -93,6 +94,7 @@ export function KnowledgeDocument({
               deciding which applies.
             </p>
             {relationships("Compare with", current?.result?.conflicts)}
+            <CompareDefinitions current={current?.result} />
           </div>
         )}
         {relationships("Also defined in", current?.result?.alsoDefinedIn)}
