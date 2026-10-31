@@ -5989,6 +5989,8 @@ export async function createCollabApp({
             hasUnpublishedChanges: canEdit
               ? await hasUnpublishedChanges(row)
               : false,
+            // Editors see dependency staleness (Home → Needs attention).
+            ...(canEdit ? await dependencyTrust(row.id, current.user.id) : {}),
           };
         }),
       );
