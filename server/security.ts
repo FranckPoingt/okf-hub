@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { getMigrations } from "better-auth/db/migration";
-import { organization } from "better-auth/plugins";
+import { magicLink, organization } from "better-auth/plugins";
 import { runWithAdapter } from "@better-auth/core/context";
 import { sso } from "@better-auth/sso";
 import type { ConfiguredSSOProvider } from "./sso-config.ts";
@@ -20,6 +20,9 @@ export type AuthActor = {
 };
 
 const SOURCE = "company";
+// Host-operator actions (CLI, startup bootstrap) are audited under this actor.
+export const HOST_OPERATOR = "host-operator";
+const LOGIN_LINK_SECONDS = 15 * 60;
 const SPACE = "policies";
 const IMPORTED_SPACE = "imported";
 export const CONCEPT = "incident-communication";
@@ -163,6 +166,13 @@ function json(data: unknown, status = 200) {
   return Response.json(data, { status });
 }
 
+function randomToken(bytes = 32) {
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(bytes)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 async function secret(dataDir: string, configured?: string) {
   if (configured) return configured;
   const path = `${dataDir}/auth-secret`;
@@ -187,6 +197,7 @@ export async function createSecurity({
   openfgaKey,
   trustedOrigins = [],
   ssoProviders = [],
+  requireSetupToken = false,
 }: {
   dataDir: string;
   baseURL?: string;
@@ -195,6 +206,8 @@ export async function createSecurity({
   openfgaKey?: string;
   trustedOrigins?: string[];
   ssoProviders?: ConfiguredSSOProvider[];
+  // Production entry points set this; tests create the first account freely.
+  requireSetupToken?: boolean;
 }) {
   const db = new DatabaseSync(`${dataDir}/hub.db`);
   db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
@@ -203,6 +216,9 @@ export async function createSecurity({
       | Row
       | undefined)?.value as string | undefined;
   const authSecretValue = await secret(dataDir, authSecret);
+  // Emails allowed past the signup gate: a valid setup token or a host operator.
+  const allowedSignups = new Set<string>();
+  let capturedLoginLink = "";
   const authHost = new URL(baseURL).hostname;
   const localCookieDomain = authHost === "okf-hub.localhost"
     ? "okf-hub.localhost"
@@ -223,7 +239,16 @@ export async function createSecurity({
       user: {
         create: {
           before: (user) => {
-            if (!get("organization_id")) return Promise.resolve();
+            if (allowedSignups.has(user.email.toLowerCase())) {
+              return Promise.resolve();
+            }
+            if (!get("organization_id")) {
+              if (!requireSetupToken) return Promise.resolve();
+              throw new APIError("FORBIDDEN", {
+                message:
+                  "Open the setup link from the server logs to create the first account",
+              });
+            }
             const invited = db.prepare(
               "SELECT 1 FROM invitation WHERE lower(email) = lower(?) AND status = 'pending'",
             ).get(user.email);
@@ -249,6 +274,15 @@ export async function createSecurity({
     telemetry: { enabled: false },
     plugins: [
       organization({ teams: { enabled: true } }),
+      // Links are only minted by the host operator; the request route is blocked in handle().
+      magicLink({
+        expiresIn: LOGIN_LINK_SECONDS,
+        disableSignUp: true,
+        storeToken: "hashed",
+        sendMagicLink: ({ url }) => {
+          capturedLoginLink = url;
+        },
+      }),
       ...(ssoProviders.length
         ? [sso({ defaultSSO: ssoProviders.map((provider) => provider.auth) })]
         : []),
@@ -526,6 +560,171 @@ export async function createSecurity({
   function isOwner(userId: string) {
     return String(member(userId)?.role ?? "").split(",").includes("owner");
   }
+
+  function findUser(email: string) {
+    return db.prepare(
+      'SELECT id, name, email FROM "user" WHERE lower(email) = lower(?)',
+    ).get(email.trim()) as Row | undefined;
+  }
+
+  // Signup without an invitation needs this token until the first account exists.
+  function setupURL() {
+    if (
+      !requireSetupToken || get("organization_id") ||
+      db.prepare('SELECT 1 FROM "user" LIMIT 1').get()
+    ) return null;
+    db.prepare(
+      "INSERT INTO okf_config (key, value) VALUES ('setup_token', ?) ON CONFLICT(key) DO NOTHING",
+    ).run(randomToken());
+    return `${baseURL}/?setup=${get("setup_token")}`;
+  }
+
+  // Returns false when the user already has the requested ownership.
+  async function setOwner(userId: string, enabled: boolean) {
+    const organizationId = get("organization_id");
+    if (!organizationId) throw new Error("Finish workspace setup first");
+    const membership = member(userId);
+    const roles = String(membership?.role ?? "").split(",").filter(Boolean);
+    if (roles.includes("owner") === enabled) return false;
+    const owners = (db.prepare(
+      "SELECT role FROM member WHERE organizationId = ?",
+    ).all(organizationId) as Row[]).filter((row) =>
+      String(row.role).split(",").includes("owner")
+    ).length;
+    if (!enabled && owners <= 1) {
+      throw new Error("The workspace must keep at least one owner");
+    }
+    const ownerTuple = {
+      user: `user:${userId}`,
+      relation: "owner",
+      object: `source:${SOURCE}`,
+    };
+    if (enabled) {
+      await writeTuples([ownerTuple]);
+      if (!membership) {
+        await authCall(() =>
+          auth.api.addMember({
+            body: { userId, organizationId, role: "owner" },
+          })
+        );
+        return true;
+      }
+    } else {
+      // Former owners keep editor access instead of losing the workspace.
+      const editorTeamId = get("editor_team_id");
+      const joinEditors = editorTeamId &&
+        !db.prepare("SELECT 1 FROM teamMember WHERE userId = ? AND teamId = ?")
+          .get(userId, editorTeamId);
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...(joinEditors
+            ? {
+              writes: {
+                tuple_keys: [{
+                  user: `user:${userId}`,
+                  relation: "member",
+                  object: `group:${editorTeamId}`,
+                }],
+              },
+            }
+            : {}),
+          deletes: { tuple_keys: [ownerTuple] },
+          authorization_model_id: modelId,
+        }),
+      });
+      if (joinEditors) {
+        await authCall(() =>
+          authContext.adapter.create({
+            model: "teamMember",
+            data: { teamId: editorTeamId, userId, createdAt: new Date() },
+          })
+        );
+      }
+    }
+    const role = enabled
+      ? [...roles, "owner"]
+      : roles.filter((item) => item !== "owner");
+    await authCall(() =>
+      authContext.adapter.update({
+        model: "member",
+        where: [{ field: "id", value: String(membership!.id) }],
+        update: { role: role.join(",") || "member" },
+      })
+    );
+    return true;
+  }
+
+  // Host-only operations for server/admin.ts. Never route these from handle().
+  const operator = {
+    findUser,
+    workspaceReady: () => Boolean(get("organization_id")),
+    users: () =>
+      (db.prepare(
+        `SELECT u.id, u.name, u.email, u.createdAt, m.role
+         FROM "user" u LEFT JOIN member m ON m.userId = u.id
+         ORDER BY u.createdAt`,
+      ).all() as Row[]).map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        email: String(row.email),
+        owner: String(row.role ?? "").split(",").includes("owner"),
+        createdAt: new Date(row.createdAt as string).toISOString(),
+      })),
+    async createAccount(email: string, name = "") {
+      const clean = email.trim().toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(clean)) throw new Error("Enter a valid email");
+      if (findUser(clean)) throw new Error(`${clean} already has an account`);
+      allowedSignups.add(clean);
+      try {
+        const user = await authCall(() =>
+          authContext.internalAdapter.createUser({
+            email: clean,
+            name: name.trim() || clean.split("@")[0],
+            emailVerified: true,
+          })
+        );
+        return String(user.id);
+      } finally {
+        allowedSignups.delete(clean);
+      }
+    },
+    async resetPassword(userId: string) {
+      const password = randomToken(16);
+      const hash = await authContext.password.hash(password);
+      await authCall(async () => {
+        const adapter = authContext.internalAdapter;
+        const accounts = await adapter.findAccounts(userId);
+        if (accounts.some((account) => account.providerId === "credential")) {
+          await adapter.updatePassword(userId, hash);
+        } else {
+          await adapter.linkAccount({
+            userId,
+            providerId: "credential",
+            accountId: userId,
+            password: hash,
+          });
+        }
+        // The operator vouches for the address, so login links keep this password.
+        await adapter.updateUser(userId, { emailVerified: true });
+        await adapter.deleteUserSessions(userId);
+      });
+      set(`password_change:${userId}`, "1");
+      return password;
+    },
+    async loginLink(email: string) {
+      capturedLoginLink = "";
+      await authCall(() =>
+        auth.api.signInMagicLink({
+          body: { email: email.trim().toLowerCase(), callbackURL: "/" },
+          headers: new Headers(),
+        })
+      );
+      if (!capturedLoginLink) throw new Error("Login link was not created");
+      return capturedLoginLink;
+    },
+  };
 
   async function setup(
     current: NonNullable<Session>,
@@ -974,6 +1173,9 @@ export async function createSecurity({
       canView,
       canEdit,
       setupRequired: !configured && (owner || !organizationExists),
+      passwordChangeRequired: Boolean(
+        get(`password_change:${current.user.id}`),
+      ),
       invitationRequired: !membership &&
         Boolean(
           db.prepare(
@@ -993,9 +1195,26 @@ export async function createSecurity({
       url.pathname === "/api/auth/sign-up/email" && request.method === "POST"
     ) {
       const body = await request.clone().json().catch(() => ({})) as Row;
-      if (get("organization_id")) {
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const setupToken = String(body.setupToken ?? "");
+      delete body.setupToken;
+      let allowed = false;
+      if (!get("organization_id")) {
+        const expected = setupURL() && get("setup_token");
+        if (requireSetupToken && (!expected || setupToken !== expected)) {
+          return json({
+            error:
+              "Open the setup link from the server logs to create the first account",
+          }, 403);
+        }
+        if (expected) {
+          // Single use: consumed before the account exists, restored if signup fails.
+          unset("setup_token");
+          allowedSignups.add(email);
+          allowed = true;
+        }
+      } else {
         const invitationId = String(body.invitationId ?? "");
-        const email = String(body.email ?? "").trim().toLowerCase();
         const invitation = invitationId
           ? db.prepare(
             "SELECT email, status FROM invitation WHERE id = ?",
@@ -1013,13 +1232,39 @@ export async function createSecurity({
       delete body.invitationId;
       const headers = new Headers(request.headers);
       headers.delete("content-length");
-      return auth.handler(
-        new Request(request.url, {
-          method: request.method,
-          headers,
-          body: JSON.stringify(body),
-        }),
-      );
+      try {
+        const response = await auth.handler(
+          new Request(request.url, {
+            method: request.method,
+            headers,
+            body: JSON.stringify(body),
+          }),
+        );
+        if (allowed && !response.ok) set("setup_token", setupToken);
+        if (allowed && response.ok) {
+          const created = findUser(email);
+          if (created) {
+            audit(String(created.id), "setup.account_created", "workspace");
+          }
+        }
+        return response;
+      } finally {
+        if (allowed) allowedSignups.delete(email);
+      }
+    }
+    // Login links are minted only by the host operator CLI.
+    if (url.pathname === "/api/auth/sign-in/magic-link") {
+      return json({ error: "Not found" }, 404);
+    }
+    if (
+      url.pathname === "/api/auth/change-password" && request.method === "POST"
+    ) {
+      const current = await session(request);
+      const response = await auth.handler(request);
+      if (current && response.ok) {
+        unset(`password_change:${current.user.id}`);
+      }
+      return response;
     }
     if (url.pathname.startsWith("/api/auth/")) return auth.handler(request);
     if (!url.pathname.startsWith("/api/")) return null;
@@ -1031,7 +1276,9 @@ export async function createSecurity({
     if (url.pathname === "/api/bootstrap" && request.method === "GET") {
       return current ? await bootstrap(current) : json({
         user: null,
-        signupAllowed: !get("organization_id"),
+        signupAllowed: !get("organization_id") &&
+          (!requireSetupToken || Boolean(setupURL())),
+        setupTokenRequired: requireSetupToken && !get("organization_id"),
         ssoProviders: ssoProviders.map(({ providerId, name, type }) => ({
           providerId,
           name,
@@ -1086,6 +1333,34 @@ export async function createSecurity({
       logo ? set("workspace_logo", logo) : unset("workspace_logo");
       audit(current.user.id, "workspace.updated", "workspace:company");
       return await bootstrap(current);
+    }
+    const ownerRoute = url.pathname.match(/^\/api\/members\/([^/]+)\/owner$/);
+    if (ownerRoute && request.method === "PUT") {
+      if (!isOwner(current.user.id)) {
+        return json({ error: "Owner access required" }, 403);
+      }
+      const userId = decodeURIComponent(ownerRoute[1]);
+      const body = await request.json().catch(() => ({})) as Row;
+      if (typeof body.owner !== "boolean" || !hasMember(userId)) {
+        return json({ error: "Choose a workspace member" }, 400);
+      }
+      if (userId === current.user.id) {
+        return json({ error: "Ask another owner to change your access" }, 400);
+      }
+      try {
+        if (await setOwner(userId, body.owner)) {
+          audit(
+            current.user.id,
+            body.owner ? "member.owner_granted" : "member.owner_revoked",
+            `user:${userId}`,
+          );
+        }
+        return await bootstrap(current);
+      } catch (error) {
+        return json({
+          error: error instanceof Error ? error.message : "Update failed",
+        }, 409);
+      }
     }
     if (url.pathname === "/api/groups" && request.method === "POST") {
       if (!isOwner(current.user.id)) {
@@ -1270,6 +1545,9 @@ export async function createSecurity({
     handle,
     isOwner,
     hasMember,
+    setOwner,
+    setupURL,
+    operator,
     setSpaceManager,
     spaceManagers,
     audit,

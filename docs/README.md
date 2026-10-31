@@ -17,7 +17,9 @@ product overview and roadmap live in [README.md](../README.md) and
 
 ## Start here
 
-1. Sign up or sign in to create an account.
+1. Sign up or sign in to create an account. On a fresh install, open the
+   one-time setup link that `deno task stack` and the server log print; the
+   first account can only be created through it.
 2. If this is the first account in a new install, complete the onboarding screen
    to create and name the workspace.
 3. If you were invited, open the invitation link, sign in or create your
@@ -290,6 +292,52 @@ deno task stack:restore backups/okf-hub-<timestamp>.tgz --yes
 The restore command replaces the three persisted volumes and restarts the stack.
 SSO secrets in `config/private/`, `config/sso.json`, GitHub App keys, and
 `.okf-stack.env` are host configuration and must be backed up separately.
+
+Set `OKF_BOOTSTRAP_OWNER_EMAIL=you@example.com` in `.okf-stack.env` (or the
+server environment) to pin your own email as a workspace owner. On every start
+the server makes sure that account exists and is an owner, and prints a one-time
+sign-in link when it had to create or promote it. It never demotes anyone, so it
+is safe to leave set.
+
+## Recover access
+
+Whoever has shell or Docker access to the server is the host operator and can
+always regain owner access without wiping data. `deno task admin` uses the
+running Docker stack when there is one, and otherwise the local data directory
+(`OKF_DATA_DIR`, default `.okf-data`) used by `deno task dev:service`. Force a
+target with `--stack` or `--local`.
+
+```sh
+deno task admin users                         # email, name, owner, created
+deno task admin login-link you@example.com    # one-time sign-in link, 15 minutes
+deno task admin reset-password you@example.com
+deno task admin make-owner you@example.com
+deno task admin create-owner you@example.com --name "Your Name"
+deno task admin setup-url                     # first-run link while no account exists
+```
+
+`reset-password` and `create-owner` print a temporary password once, sign the
+account out everywhere, and ask for a new password at the next sign-in. A login
+link signs in without a password. If the account's email was never verified,
+Better Auth removes its old password when the link is used; run `reset-password`
+afterwards to set one. On a fresh install with no workspace yet, `create-owner`
+and `make-owner` leave ownership to the workspace setup step, which that account
+completes at first sign-in.
+
+Every command is recorded in the audit log with the actor `host-operator`. The
+commands open the server's database directly and are never served over HTTP;
+anyone who can run them could already read the data volume. In the hub, owners
+can promote other members to owner or remove their owner role from **Workspace
+settings → Members**. A workspace always keeps at least one owner, and former
+owners keep editor access.
+
+### Local testing with AI agents
+
+An agent that creates the first account with a random email and password locks
+the human out of that hub. Give agents their own data directory, such as
+`OKF_DATA_DIR=.okf-data/agent OKF_PORT=8789 deno task dev:service` (manage it
+with `OKF_DATA_DIR=.okf-data/agent deno task admin --local users`), or recover
+afterwards with `deno task admin create-owner you@example.com`.
 
 ## What this beta does not promise yet
 

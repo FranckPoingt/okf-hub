@@ -162,8 +162,38 @@ async function expose() {
 
 async function start(usePortless = false) {
   await compose(["up", "--build", "-d", "--wait", "--wait-timeout", "180"]);
-  if (usePortless) return expose();
-  console.log("OKF Hub is ready at http://localhost:8788");
+  if (usePortless) await expose();
+  else console.log("OKF Hub is ready at http://localhost:8788");
+  await admin(["setup-url"]);
+}
+
+// Runs server/admin.ts inside the app container; it never listens on HTTP.
+export function admin(args: string[]) {
+  return compose([
+    "exec",
+    "-T",
+    "app",
+    "deno",
+    "run",
+    "--cached-only",
+    "--allow-net",
+    "--allow-env",
+    "--allow-read=/data",
+    "--allow-write=/data",
+    "server/admin.ts",
+    ...args,
+  ]);
+}
+
+export async function stackRunning() {
+  try {
+    await Deno.stat(ENV_FILE);
+    return Boolean(
+      await composeOutput(["ps", "--status", "running", "--quiet", "app"]),
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function stop() {

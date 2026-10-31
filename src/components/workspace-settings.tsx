@@ -782,6 +782,7 @@ export function WorkspaceSettings({
   invitations,
   members,
   groups,
+  currentUserId,
   connectors,
   repositories,
   sharedSource,
@@ -815,6 +816,7 @@ export function WorkspaceSettings({
   invitations: Invitation[];
   members: NonNullable<Bootstrap["members"]>;
   groups: NonNullable<Bootstrap["groups"]>;
+  currentUserId?: string;
   connectors: ConnectorDefinition[];
   repositories: RepositorySource[];
   sharedSource: SharedSource | null;
@@ -1564,6 +1566,7 @@ export function WorkspaceSettings({
                 invitations={invitations}
                 members={members}
                 groups={groups}
+                currentUserId={currentUserId}
               />
             </SettingsPanel>
           )}

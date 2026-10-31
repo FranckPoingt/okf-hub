@@ -22,6 +22,7 @@ import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
 import {
   AccessGate,
   AuthScreen,
+  PasswordChangeGate,
   WorkspaceOnboarding,
 } from "./components/auth-panels.tsx";
 import { DocumentEditor } from "./components/editor/document-editor.tsx";
@@ -1597,10 +1598,14 @@ export default function App() {
     return (
       <AuthScreen
         signupAllowed={Boolean(bootstrap.signupAllowed)}
+        setupTokenRequired={Boolean(bootstrap.setupTokenRequired)}
         ssoProviders={bootstrap.ssoProviders ?? []}
         onAuthenticated={refresh}
       />
     );
+  }
+  if (bootstrap.passwordChangeRequired) {
+    return <PasswordChangeGate onComplete={refresh} onSignOut={signOut} />;
   }
   if (bootstrap.setupRequired) {
     return <WorkspaceOnboarding onComplete={refresh} onSignOut={signOut} />;
@@ -2066,6 +2071,7 @@ export default function App() {
                 invitations={bootstrap.invitations ?? []}
                 members={bootstrap.members ?? []}
                 groups={bootstrap.groups ?? []}
+                currentUserId={bootstrap.user.id}
                 connectors={connectors}
                 repositories={repositories}
                 sharedSource={sharedSource}

@@ -27,9 +27,10 @@ Requirements: [Deno 2.9](https://deno.com/) and
 deno task stack
 ```
 
-Open `http://localhost:8788`, create the first account, and complete the
-workspace setup. Local credentials and application data are generated in ignored
-files and Docker volumes.
+`deno task stack` prints a one-time setup link. Open it to create the first
+account, then complete the workspace setup. Local credentials and application
+data are generated in ignored files and Docker volumes. Locked out? See
+[Recover access](docs/README.md#recover-access).
 
 Stop the stack without deleting data:
 

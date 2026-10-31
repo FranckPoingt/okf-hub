@@ -68,6 +68,7 @@ import {
   syncRepository,
 } from "./repository-source.ts";
 import { CONCEPT, createSecurity } from "./security.ts";
+import { announceAccess } from "./admin.ts";
 import { type SharedSourceConfig, syncSharedSource } from "./shared-source.ts";
 import { type ConfiguredSSOProvider, parseSSOConfig } from "./sso-config.ts";
 
@@ -203,6 +204,7 @@ type AppOptions = {
   allowedArtifactHosts?: string[];
   githubApp?: GitHubAppClient | null;
   ssoProviders?: ConfiguredSSOProvider[];
+  requireSetupToken?: boolean;
   aiProvider?: string;
   aiModel?: string;
   aiURL?: string;
@@ -608,6 +610,7 @@ export async function createCollabApp({
   allowedArtifactHosts = [],
   githubApp = null,
   ssoProviders = [],
+  requireSetupToken = false,
   aiProvider = "",
   aiModel = "",
   aiURL,
@@ -623,6 +626,7 @@ export async function createCollabApp({
     openfgaURL,
     openfgaKey,
     ssoProviders,
+    requireSetupToken,
   });
   const db = new DatabaseSync(`${dataDir}/hub.db`);
   const credentialVault = await createCredentialVault(dataDir);
@@ -6963,6 +6967,7 @@ ${extensionYaml(extension)}---
 
   return {
     fetch,
+    security,
     close: async () => {
       if (automationTimer !== undefined) clearInterval(automationTimer);
       await activeAutomation;
@@ -7035,6 +7040,11 @@ if (import.meta.main) {
     aiURL: Deno.env.get("OKF_AI_URL")?.trim(),
     aiAPIKey: Deno.env.get("OKF_AI_API_KEY")?.trim() ||
       Deno.env.get("OLLAMA_API_KEY")?.trim(),
+    requireSetupToken: true,
   });
   Deno.serve({ hostname, port }, app.fetch);
+  await announceAccess(
+    app.security,
+    Deno.env.get("OKF_BOOTSTRAP_OWNER_EMAIL"),
+  );
 }

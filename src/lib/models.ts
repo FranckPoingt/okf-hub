@@ -22,12 +22,14 @@ export type Bootstrap = {
   canView?: boolean;
   canEdit?: boolean;
   signupAllowed?: boolean;
+  setupTokenRequired?: boolean;
   ssoProviders?: {
     providerId: string;
     name: string;
     type: "oidc" | "saml";
   }[];
   setupRequired?: boolean;
+  passwordChangeRequired?: boolean;
   invitationRequired?: boolean;
   invitations?: Invitation[];
   workspace?: { name: string; tagline: string; logo: string };
