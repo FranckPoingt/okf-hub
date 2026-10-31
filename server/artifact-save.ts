@@ -208,7 +208,7 @@ export async function savePackedArtifact(
     : undefined;
   if (receipt.appId && !app) {
     throw new Error(
-      "Saved App is unavailable; this command will not replace it",
+      "Saved Artifact is unavailable; this command will not replace it",
     );
   }
   if (!app && receipt.pending === "app") {

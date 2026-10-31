@@ -77,7 +77,7 @@ export function ArtifactUpload(
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Choose one HTML file or a ZIP with index.html at its root. Files
-            must work offline. The App will be saved as a draft.
+            must work offline. The Artifact will be saved as a draft.
           </p>
           <Input
             aria-label="Artifact file"

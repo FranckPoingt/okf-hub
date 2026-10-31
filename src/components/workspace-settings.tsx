@@ -1118,7 +1118,7 @@ export function WorkspaceSettings({
                   <CardTitle>Export your data</CardTitle>
                   <CardDescription>
                     Download a portable ZIP of your hub-native Markdown and
-                    original App files.
+                    original Artifact files.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-wrap items-center justify-between gap-4">
@@ -1137,7 +1137,7 @@ export function WorkspaceSettings({
                     <DialogTitle>Export data</DialogTitle>
                     <DialogDescription>
                       Choose what to include. The ZIP keeps the same space,
-                      nested document, and App folder hierarchy.
+                      nested document, and Artifact folder hierarchy.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-2">
@@ -1192,8 +1192,8 @@ export function WorkspaceSettings({
                     )}
                     <p className="text-xs text-muted-foreground">
                       Includes current drafts and archived documents.
-                      Source-owned imports and private App data stay with their
-                      original systems and users.
+                      Source-owned imports and private Artifact data stay with
+                      their original systems and users.
                     </p>
                   </div>
                   <DialogFooter showCloseButton>

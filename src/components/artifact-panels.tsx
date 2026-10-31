@@ -490,7 +490,7 @@ export function ArtifactFirstView({
             >
               <SelectTrigger
                 className="h-8 w-40 text-xs"
-                aria-label="Select artifact app"
+                aria-label="Select Artifact"
               >
                 <SelectValue>{activeApp.title}</SelectValue>
               </SelectTrigger>
@@ -572,7 +572,7 @@ export function ArtifactFirstView({
         <div
           className="artifact-first-frame-wrap"
           role="region"
-          aria-label={`${concept.title} interactive app`}
+          aria-label={`${concept.title} interactive Artifact`}
         >
           <AppFrame
             artifact={activeApp}
@@ -743,7 +743,7 @@ export function ArtifactGallery({
             </div>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Interactive explanations, calculators, and tools backed by durable
-              Markdown context and sandboxed static Apps.
+              Markdown context and sandboxed static Artifacts.
             </p>
           </div>
           {canEdit && (
@@ -856,7 +856,7 @@ export function ArtifactGallery({
                           : item.appCount > 0
                           ? (
                             <StatusBadge status="draft">
-                              Draft app · v{item.version ?? 1}
+                              Draft Artifact · v{item.version ?? 1}
                             </StatusBadge>
                           )
                           : item.publishedRevision !== null
@@ -915,7 +915,7 @@ export function ArtifactGallery({
               description={query.trim()
                 ? "Try clearing the filter or browsing all spaces."
                 : canEdit
-                ? "Create an Artifact document with context.md frontmatter and attach a static App bundle."
+                ? "Create an Artifact document with context.md frontmatter and attach a static Artifact bundle."
                 : "Live artifacts you have permission to view will appear here."}
             >
               {canEdit && !query.trim() && (

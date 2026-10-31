@@ -196,7 +196,7 @@ export function CommandPalette({
                 <CommandItem
                   onSelect={() => run(() => onOpenSurface("artifacts"))}
                 >
-                  <Blocks /> Apps
+                  <Blocks /> Artifacts
                 </CommandItem>
                 <CommandItem onSelect={() => run(onOpenReferences)}>
                   <Link2 /> References and backlinks

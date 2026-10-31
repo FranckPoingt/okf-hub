@@ -12,7 +12,7 @@ This is the user-facing starting point for the current OKF Hub beta.
 
 If you want the documentation map, read the [OKF bundle index](index.md). The
 product overview and roadmap live in [README.md](../README.md) and
-[PLAN.md](../PLAN.md). For Apps and connector internals, see the
+[PLAN.md](../PLAN.md). For Artifacts and connector internals, see the
 [extensibility model](extensibility.md).
 
 ## Start here
@@ -48,13 +48,13 @@ product overview and roadmap live in [README.md](../README.md) and
   review status, and archived content.
 - **Spaces**: grouped knowledge with inherited access rules.
 - **Artifacts**: a gallery of the Artifacts you can open, workspace-wide or per
-  space, with trust and review state. An Artifact with an App opens full-bleed;
+  space, with trust and review state. An Artifact document opens full-bleed;
   **View context** shows its document, and **Open as document** edits it.
 - **Sources**: connected imports, sync status, schedules, and source issues.
 - **Workspace settings**: workspace identity, spaces, members, templates,
   connectors, export, and the Developer API.
 - **Document view**: draft/published toggle, comments, references, revision
-  history, presentation mode, and Apps.
+  history, presentation mode, and Artifacts.
 
 ## Core concepts
 
@@ -336,16 +336,16 @@ embedding model or endpoint rebuilds vectors in the background. Removing
 `OKF_AI_EMBED_MODEL` stops embedding requests and restores keyword-only
 retrieval; existing private index data remains in SQLite.
 
-### Apps
+### Artifacts
 
-Apps are separate from the document body. They are sandboxed, versioned tools
-attached to a concept and activated only after review by a workspace owner or a
-manager of the document's space (see [Space managers](#space-managers)).
+Artifacts are separate from the document body. They are sandboxed, versioned
+tools attached to a concept and activated only after review by a workspace owner
+or a manager of the document's space (see [Space managers](#space-managers)).
 
-Apps can call only the actions they are explicitly granted. Their data stays
-isolated from the parent document and from other Apps.
+Artifacts can call only the actions they are explicitly granted. Their data
+stays isolated from the parent document and from other Artifacts.
 
-See [docs/extensibility.md](extensibility.md) for the current App model and
+See [docs/extensibility.md](extensibility.md) for the current Artifact model and
 developer surface.
 
 ### Connectors
@@ -365,9 +365,10 @@ Disabling a connector stops new connections and syncs.
 ## Data portability and security
 
 - Exporting the workspace or a space downloads portable ZIP data.
-- Hub-native content exports as Markdown; Apps export with their approved files.
-- Source-owned imports and private App data stay with their original systems and
-  users.
+- Hub-native content exports as Markdown; Artifacts export with their approved
+  files.
+- Source-owned imports and private Artifact data stay with their original
+  systems and users.
 - Permissions are enforced on direct URLs, search, previews, APIs, and exports.
 - Connector credentials are write-only in the UI and stored encrypted by the
   service.
@@ -480,12 +481,12 @@ to 32 pending drafts are retained. Approval applies to the exact reviewed draft.
 
 For GitHub App sources, approval creates a new branch and a **draft pull
 request**. The default branch is never written to. If the base revision has
-changed, regenerate and review the proposal. The App needs repository
+changed, regenerate and review the proposal. The Artifact needs repository
 **Contents: Read and write** (`contents:write`) and **Pull requests: Read and
 write** (`pull_requests:write`), in addition to metadata read access and
 **Push** and **Pull request** (`pull_request`) webhook subscriptions on
 `/api/webhooks/github`. The signed Pull request events update suggestion status
-on close, merge and reopen, deduplicated by delivery. Update existing App
+on close, merge and reopen, deduplicated by delivery. Update existing Artifact
 registrations and approve the new permissions on installations. `stack:github`
 configures credentials; it does not modify the GitHub App's permission settings.
 
@@ -517,7 +518,7 @@ The suggestion must be based on the revision you edited. If the concept was
 re-synced meanwhile, or the repository default branch has moved since the last
 sync, the Hub refuses and asks you to refresh and apply the edit again; it never
 rebases for you. The concept path must lie inside the source's OKF folder. The
-default branch is never written to. This uses the same App permissions as
+default branch is never written to. This uses the same Artifact permissions as
 drafting (`contents:write`, `pull_requests:write`).
 
 For manual HTTPS Git sources there is no write access, so the Hub downloads a
@@ -529,9 +530,9 @@ the audit trail as `source.change-proposed` (pull request) or
 ## Space managers
 
 Workspace owners can add and remove managers in **Workspace settings → Spaces →
-Managers**. Choose a workspace member for each space. Managers can activate Apps
-in that space; ordinary editors cannot. Workspace owners retain activation
-access. This role does not grant general workspace ownership.
+Managers**. Choose a workspace member for each space. Managers can activate
+Artifacts in that space; ordinary editors cannot. Workspace owners retain
+activation access. This role does not grant general workspace ownership.
 
 The owner-only `GET /api/spaces/:id/managers` endpoint returns
 `{ managers: [userId, ...] }`. Assign or revoke with `PUT` or

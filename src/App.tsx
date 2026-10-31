@@ -978,7 +978,7 @@ export default function App() {
     };
     setActionBusy(false);
     if (!response.ok) {
-      setActionError(result.error ?? "App activation failed");
+      setActionError(result.error ?? "Artifact activation failed");
       return;
     }
     await loadConceptApps(concept.id);
@@ -1843,7 +1843,7 @@ export default function App() {
     : developerOpen
     ? "API documentation"
     : imported?.title ?? displayedConcept?.title ?? "Hub-native knowledge";
-  // Editors of this document may see draft Apps; readers only activated ones.
+  // Editors of this document may see draft Artifacts; readers only activated ones.
   const isArtifactOwner = concept?.draft != null;
   const isArtifactFirstEligible = canOpenArtifactFirst(
     concept,

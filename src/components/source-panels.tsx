@@ -1674,7 +1674,7 @@ const BUNDLE_PREFIX = "okf-bundle-v1:";
 type BrowserFile = File & { webkitRelativePath?: string };
 
 async function appBundle(files: File[]) {
-  if (!files.length) throw new Error("Choose an app folder or files");
+  if (!files.length) throw new Error("Choose an Artifact folder or files");
   const paths = files.map((file) =>
     (file as BrowserFile).webkitRelativePath || file.name
   );
@@ -1697,7 +1697,7 @@ async function appBundle(files: File[]) {
   }));
   const entry = packed.find((file) => file.path.toLowerCase() === "index.html")
     ?.path;
-  if (!entry) throw new Error("The app folder needs an index.html file");
+  if (!entry) throw new Error("The Artifact folder needs an index.html file");
   return {
     content: `${BUNDLE_PREFIX}${JSON.stringify({ entry, files: packed })}`,
     entry,
@@ -1754,7 +1754,7 @@ function CapabilityPicker({
       <div className="app-builder-section-heading">
         <div>
           <h3>Capabilities</h3>
-          <p>Apps can only call operations you explicitly grant.</p>
+          <p>Artifacts can only call operations you explicitly grant.</p>
         </div>
         <Badge variant="outline">
           <ShieldCheck /> Least privilege
@@ -1828,7 +1828,7 @@ export function AppFrame(
           ...body,
         }, "*");
       if (!grantAllows(artifact.grants, message.name)) {
-        reply({ error: `App is not allowed to call ${message.name}` });
+        reply({ error: `Artifact is not allowed to call ${message.name}` });
         return;
       }
       const input = message.input && typeof message.input === "object" &&
@@ -1847,7 +1847,7 @@ export function AppFrame(
       reply(
         response.ok
           ? { result: result.result }
-          : { error: result.error ?? "App action failed" },
+          : { error: result.error ?? "Artifact action failed" },
       );
     };
     globalThis.addEventListener("message", receive);
@@ -1909,7 +1909,7 @@ export function AppPanel(
       `/api/apps?conceptId=${encodeURIComponent(conceptId)}`,
     );
     const result = await response.json() as ArtifactState & { error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Apps unavailable");
+    if (!response.ok) throw new Error(result.error ?? "Artifacts unavailable");
     setState(result);
     stateListener.current?.(
       result.apps ?? result.artifacts ?? [],
@@ -1955,7 +1955,7 @@ export function AppPanel(
       setError("");
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "App bundle is invalid",
+        cause instanceof Error ? cause.message : "Artifact bundle is invalid",
       );
     }
   };
@@ -1963,7 +1963,7 @@ export function AppPanel(
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (type === "inline_html" && !content.startsWith(BUNDLE_PREFIX)) {
-      setError("Choose an app folder containing index.html");
+      setError("Choose an Artifact folder containing index.html");
       return;
     }
     setBusy(editing?.id ?? "create");
@@ -1987,7 +1987,8 @@ export function AppPanel(
     setBusy("");
     if (!response.ok) {
       setError(
-        result.error ?? (editing ? "App update failed" : "App creation failed"),
+        result.error ??
+          (editing ? "Artifact update failed" : "Artifact creation failed"),
       );
       return;
     }
@@ -2005,7 +2006,7 @@ export function AppPanel(
     };
     setBusy("");
     if (!response.ok) {
-      setError(result.error ?? "App activation failed");
+      setError(result.error ?? "Artifact activation failed");
       return;
     }
     await load();
@@ -2014,7 +2015,7 @@ export function AppPanel(
   if (!state) {
     return error
       ? <p className="source-error" role="alert">{error}</p>
-      : <div className="artifact-loading">Loading Apps…</div>;
+      : <div className="artifact-loading">Loading Artifacts…</div>;
   }
   if (!state.canEdit && state.artifacts.length === 0) return null;
   const apps = state.apps ?? state.artifacts;
@@ -2022,11 +2023,11 @@ export function AppPanel(
     <section className="artifact-panel" aria-labelledby="artifact-heading">
       <div className="artifact-heading">
         <div>
-          <p className="eyebrow">Document apps</p>
+          <p className="eyebrow">Document Artifacts</p>
           <h2 id="artifact-heading">Tools for this knowledge</h2>
           <p>
             Add focused tools without putting executable code in the document.
-            Every App is sandboxed, versioned, and explicitly approved.
+            Every Artifact is sandboxed, versioned, and explicitly approved.
           </p>
         </div>
         {state.canEdit && conceptActive && (
@@ -2034,7 +2035,7 @@ export function AppPanel(
             type="button"
             onClick={() => openBuilder()}
           >
-            <Plus /> Add App
+            <Plus /> Add Artifact
           </Button>
         )}
       </div>
@@ -2059,7 +2060,7 @@ export function AppPanel(
             <span className="app-empty-icon">
               <Sparkles />
             </span>
-            <h3>No Apps attached</h3>
+            <h3>No Artifacts attached</h3>
             <p>
               Upload a folder of static files, or connect a hosted tool. Readers
               only see versions you activate.
@@ -2069,7 +2070,7 @@ export function AppPanel(
                 type="button"
                 onClick={() => openBuilder()}
               >
-                <Plus /> Add your first App
+                <Plus /> Add your first Artifact
               </Button>
             )}
           </CardContent>
@@ -2131,12 +2132,12 @@ export function AppPanel(
         <DialogContent className="app-builder-dialog sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>
-              {editing ? `Configure ${editing.title}` : "Add an App"}
+              {editing ? `Configure ${editing.title}` : "Add an Artifact"}
             </DialogTitle>
             <DialogDescription>
               {editing
                 ? "Saving creates a reviewable version. The live version is unchanged until activation."
-                : "Upload a folder or select its files. OKF keeps them together as one reviewable App version."}
+                : "Upload a folder or select its files. OKF keeps them together as one reviewable Artifact version."}
             </DialogDescription>
           </DialogHeader>
           <form className="app-builder" onSubmit={(event) => void save(event)}>
@@ -2146,7 +2147,7 @@ export function AppPanel(
             >
               <TabsList className="app-kind-tabs">
                 <TabsTrigger value="https_url">
-                  <AppWindow /> Hosted app
+                  <AppWindow /> Hosted Artifact
                 </TabsTrigger>
                 <TabsTrigger value="inline_html">
                   <FolderOpen /> Upload bundle
@@ -2185,7 +2186,7 @@ export function AppPanel(
                     <Badge variant="secondary">Recommended</Badge>
                   </div>
                   <Label>
-                    <span>App URL</span>
+                    <span>Artifact URL</span>
                     <Input
                       type="url"
                       value={content}
@@ -2204,7 +2205,7 @@ export function AppPanel(
                 <section className="app-bundle-workbench">
                   <div className="app-builder-section-heading">
                     <div>
-                      <h3>App bundle</h3>
+                      <h3>Artifact bundle</h3>
                       <p>
                         Upload a folder of static web files. It must include
                         index.html.
@@ -2229,7 +2230,7 @@ export function AppPanel(
                       <FileUp />
                     </span>
                     <div>
-                      <h4>Drop or paste an app folder</h4>
+                      <h4>Drop or paste an Artifact folder</h4>
                       <p>
                         No build pipeline or configuration file. Static assets
                         are kept together as one reviewed version.
@@ -2311,7 +2312,7 @@ export function AppPanel(
                   ? "Saving…"
                   : editing
                   ? "Save new version"
-                  : "Create draft App"}
+                  : "Create draft Artifact"}
               </Button>
             </DialogFooter>
           </form>

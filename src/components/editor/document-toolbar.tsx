@@ -150,11 +150,11 @@ export function DocumentToolbar({
           <TabsTrigger
             value="artifacts"
             className="h-7 gap-1.5 px-2.5 text-xs"
-            aria-label="Apps"
-            title="Apps"
+            aria-label="Artifacts"
+            title="Artifacts"
           >
             <Blocks className="size-3.5" />
-            <span className="hidden lg:inline">Apps</span>
+            <span className="hidden lg:inline">Artifacts</span>
           </TabsTrigger>
           <TabsTrigger
             value="activity"

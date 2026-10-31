@@ -62,8 +62,8 @@ export function SpaceManagers({ spaceId, members }: {
     <section className="grid gap-3">
       <h4 className="font-medium">Managers</h4>
       <p className="text-sm text-muted-foreground">
-        Managers can activate Apps in this space. Workspace owners can always
-        activate Apps.
+        Managers can activate Artifacts in this space. Workspace owners can
+        always activate Artifacts.
       </p>
       {managers.map((id) => (
         <div key={id} className="flex items-center justify-between gap-2">

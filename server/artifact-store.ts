@@ -214,7 +214,7 @@ export function createArtifactStore(
       clean.length > 20 ||
       clean.some((grant) => !/^[a-z][a-z0-9-]*(?:\.[a-z0-9*-]+)+$/.test(grant))
     ) {
-      throw new ArtifactInputError("Choose valid app capabilities");
+      throw new ArtifactInputError("Choose valid Artifact capabilities");
     }
     return clean;
   }

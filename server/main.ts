@@ -3701,7 +3701,7 @@ export async function createCollabApp({
           throw new ActionError("Restore the concept first", 409);
         }
         if (input.type !== "inline_html" && input.type !== "https_url") {
-          throw new ActionError("Choose an App type");
+          throw new ActionError("Choose an Artifact type");
         }
         const app = artifactStore.create({
           conceptId,
@@ -3880,7 +3880,7 @@ export async function createCollabApp({
           actionAllowed([grant], action.name)
         )
       )
-    ) throw new ActionError("Choose available app capabilities");
+    ) throw new ActionError("Choose available Artifact capabilities");
     return grants;
   }
 
@@ -5245,7 +5245,7 @@ export async function createCollabApp({
         return new Response(file.body as BodyInit, { headers });
       } catch (error) {
         return new Response(
-          error instanceof Error ? error.message : "App file unavailable",
+          error instanceof Error ? error.message : "Artifact file unavailable",
           {
             status: error instanceof ActionError ? error.status : 400,
             headers: cors(request),
@@ -5286,7 +5286,9 @@ export async function createCollabApp({
         }, { headers: cors(request) });
       } catch (error) {
         return Response.json({
-          error: error instanceof Error ? error.message : "App unavailable",
+          error: error instanceof Error
+            ? error.message
+            : "Artifact unavailable",
         }, {
           status: error instanceof ActionError ? error.status : 400,
           headers: cors(request),
@@ -5585,7 +5587,9 @@ export async function createCollabApp({
           return Response.json(app, { headers: cors(request) });
         } catch (error) {
           return Response.json({
-            error: error instanceof Error ? error.message : "App update failed",
+            error: error instanceof Error
+              ? error.message
+              : "Artifact update failed",
           }, {
             status: error instanceof ActionError
               ? error.status

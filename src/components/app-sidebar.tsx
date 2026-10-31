@@ -474,7 +474,7 @@ export function AppSidebar({
                         disabled={!currentConceptId}
                         onClick={onCreateApp}
                       >
-                        <AppWindow /> App
+                        <AppWindow /> Artifact
                         {!currentConceptId && (
                           <span className="ml-auto text-xs text-muted-foreground">
                             Open a document
