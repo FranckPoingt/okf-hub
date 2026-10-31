@@ -291,7 +291,7 @@ export function artifactSaveAction(
     tag: "Apps",
     title: "Save static artifact with context",
     description:
-      "Save or revise a static App and its working OKF context. Retain the returned receipt for revisions. Requires artifact.save and the component action scopes. Draft by default; publication requires documents.publish and apps.activate plus owner access.",
+      "Save or revise a static App and its working OKF context. Retain the returned receipt for revisions. Requires artifact.save and the component action scopes. Draft by default; publication requires documents.publish and apps.activate plus owner or space manager access.",
     mode: "mutation",
     approval: "confirm",
     requiredScopes: ARTIFACT_SAVE_SCOPES,
