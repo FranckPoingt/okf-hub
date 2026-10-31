@@ -2322,6 +2322,8 @@ export default function App() {
                 connectors={connectors}
                 imports={imports}
                 canManage={bootstrap.access === "owner"}
+                members={bootstrap.members ?? []}
+                groups={bootstrap.groups ?? []}
                 sourceBusy={sourceBusy}
                 sharedBusy={sharedBusy}
                 notionBusy={notionBusy}

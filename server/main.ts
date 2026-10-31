@@ -59,6 +59,7 @@ import { retrieveKnowledge } from "./knowledge-retrieval.ts";
 import { buildKnowledgeGraph, definitionContent } from "./knowledge-graph.ts";
 import { createDefinitionComparison } from "./compare-definitions.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
+import { createSourceAccessRoutes } from "./source-access.ts";
 import { createChangeProposalRoutes } from "./change-proposals.ts";
 import { createObjectStore } from "./object-store.ts";
 import { type NotionSourceConfig, syncNotionSource } from "./notion-source.ts";
@@ -1506,6 +1507,20 @@ export async function createCollabApp({
     responder: respondWithDraftAI,
     model: aiModel ?? "configured-model",
     app: githubApp,
+  });
+  const sourceAccessRoutes = createSourceAccessRoutes({
+    security,
+    sourceExists: (id) =>
+      Boolean(
+        id === "shared"
+          ? sharedSource()
+          : id === "notion"
+          ? notionSource()
+          : repositorySource(id),
+      ),
+    conceptIds: (id) =>
+      importedConcepts(id, ["current", "invalid", "deleted", "renamed"])
+        .map((item) => item.id),
   });
   const changeProposals = createChangeProposalRoutes({
     db,
@@ -4963,6 +4978,15 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
+    }
+    const sourceAccessPath = url.pathname.match(
+      /^\/api\/sources\/([a-z0-9-]+)\/access$/,
+    );
+    if (sourceAccessPath && ["GET", "PUT"].includes(request.method)) {
+      return withCors(
+        await sourceAccessRoutes(request, sourceAccessPath[1]),
+        request,
+      );
     }
     const sourceSchedulePath = url.pathname.match(
       /^\/api\/sources\/([a-z0-9-]+)\/schedule$/,

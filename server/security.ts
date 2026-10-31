@@ -13,6 +13,15 @@ type Session = Awaited<
   ReturnType<ReturnType<typeof betterAuth>["api"]["getSession"]>
 >;
 type Row = Record<string, unknown>;
+export type SourceGrant = {
+  type: "user" | "group";
+  id: string;
+  role: "viewer" | "editor";
+};
+export type SourceAccess = {
+  mode: "workspace" | "restricted";
+  grants: SourceGrant[];
+};
 export type AuthActor = {
   user: { id: string; name: string; email: string };
   scopes: string[];
@@ -28,7 +37,7 @@ const IMPORTED_SPACE = "imported";
 export const CONCEPT = "incident-communication";
 
 // Bump when `model` changes; existing stores get a new model version.
-const MODEL_VERSION = 2;
+const MODEL_VERSION = 3;
 
 const model = {
   schema_version: "1.1",
@@ -86,6 +95,8 @@ const model = {
       type: "space",
       relations: {
         parent: { this: {} },
+        // Restricted sources drop `parent` and keep only workspace owners.
+        workspace: { this: {} },
         manager: { this: {} },
         editor: { this: {} },
         viewer: { this: {} },
@@ -98,6 +109,11 @@ const model = {
               tupleToUserset: {
                 tupleset: { relation: "parent" },
                 computedUserset: { relation: "edit" },
+              },
+            }, {
+              tupleToUserset: {
+                tupleset: { relation: "workspace" },
+                computedUserset: { relation: "owner" },
               },
             }],
           },
@@ -113,6 +129,11 @@ const model = {
                 tupleset: { relation: "parent" },
                 computedUserset: { relation: "view" },
               },
+            }, {
+              tupleToUserset: {
+                tupleset: { relation: "workspace" },
+                computedUserset: { relation: "owner" },
+              },
             }],
           },
         },
@@ -120,15 +141,16 @@ const model = {
       metadata: {
         relations: {
           parent: { directly_related_user_types: [{ type: "source" }] },
+          workspace: { directly_related_user_types: [{ type: "source" }] },
           manager: { directly_related_user_types: [{ type: "user" }] },
           editor: {
-            directly_related_user_types: [{
+            directly_related_user_types: [{ type: "user" }, {
               type: "group",
               relation: "member",
             }],
           },
           viewer: {
-            directly_related_user_types: [{
+            directly_related_user_types: [{ type: "user" }, {
               type: "group",
               relation: "member",
             }],
@@ -1009,6 +1031,133 @@ export async function createSecurity({
     set(key, "1");
   }
 
+  function sourceAccess(sourceId: string): SourceAccess {
+    const prefix = `source_grant:${sourceId}:`;
+    const grants = (db.prepare(
+      "SELECT key, value FROM okf_config WHERE substr(key, 1, ?) = ? ORDER BY key",
+    ).all(prefix.length, prefix) as Row[]).map((row) => {
+      const subject = String(row.key).slice(prefix.length);
+      const split = subject.indexOf(":");
+      return {
+        type: subject.slice(0, split) as SourceGrant["type"],
+        id: subject.slice(split + 1),
+        role: String(row.value) as SourceGrant["role"],
+      };
+    });
+    return get(`source_access:${sourceId}`) === "restricted"
+      ? { mode: "restricted", grants }
+      : { mode: "workspace", grants: [] };
+  }
+
+  // The imported space's access tuples are a pure function of stored access.
+  function sourceAccessTuples(sourceId: string, access: SourceAccess) {
+    const object = `space:${IMPORTED_SPACE}-${sourceId}`;
+    if (access.mode === "workspace") {
+      const viewerTeamId = get("viewer_team_id");
+      return [
+        { user: `source:${SOURCE}`, relation: "parent", object },
+        ...viewerTeamId
+          ? [{
+            user: `group:${viewerTeamId}#member`,
+            relation: "viewer",
+            object,
+          }]
+          : [],
+      ];
+    }
+    return [
+      { user: `source:${SOURCE}`, relation: "workspace", object },
+      ...access.grants.map((grant) => ({
+        user: grant.type === "user"
+          ? `user:${grant.id}`
+          : `group:${grant.id}#member`,
+        relation: grant.role,
+        object,
+      })),
+    ];
+  }
+
+  function isAccessGroup(groupId: string) {
+    const access = get(`group_access:${groupId}`);
+    return access === "editor" || access === "viewer";
+  }
+
+  // Idempotent: only tuples that differ from the stored access are written.
+  async function setSourceAccess(
+    actorUserId: string,
+    sourceId: string,
+    requested: SourceAccess,
+  ) {
+    const grants = requested.mode === "workspace" ? [] : [
+      ...new Map(
+        requested.grants.map((grant) => [`${grant.type}:${grant.id}`, grant]),
+      ).values(),
+    ];
+    for (const grant of grants) {
+      if (
+        !["viewer", "editor"].includes(grant.role) ||
+        !(grant.type === "user"
+          ? hasMember(grant.id)
+          : grant.type === "group" && isAccessGroup(grant.id))
+      ) throw new Error("Choose workspace members or groups");
+    }
+    const next: SourceAccess = { mode: requested.mode, grants };
+    await ensureImportedSource(sourceId);
+    const previous = sourceAccess(sourceId);
+    const key = (tuple: { user: string; relation: string }) =>
+      `${tuple.user} ${tuple.relation}`;
+    const before = sourceAccessTuples(sourceId, previous);
+    const after = sourceAccessTuples(sourceId, next);
+    const writes = after.filter((tuple) =>
+      !before.some((item) => key(item) === key(tuple))
+    );
+    const deletes = before.filter((tuple) =>
+      !after.some((item) => key(item) === key(tuple))
+    );
+    if (writes.length || deletes.length) {
+      // shortcut: one atomic write fits OpenFGA's 100-tuple limit only because routes cap grants at 45; batch if that cap grows.
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...writes.length ? { writes: { tuple_keys: writes } } : {},
+          ...deletes.length ? { deletes: { tuple_keys: deletes } } : {},
+          authorization_model_id: modelId,
+        }),
+      });
+    }
+    const prefix = `source_grant:${sourceId}:`;
+    db.prepare(
+      "DELETE FROM okf_config WHERE substr(key, 1, ?) = ?",
+    ).run(prefix.length, prefix);
+    for (const grant of grants) {
+      set(`${prefix}${grant.type}:${grant.id}`, grant.role);
+    }
+    next.mode === "restricted"
+      ? set(`source_access:${sourceId}`, "restricted")
+      : unset(`source_access:${sourceId}`);
+    if (previous.mode !== next.mode) {
+      audit(
+        actorUserId,
+        next.mode === "restricted"
+          ? "source.access_restricted"
+          : "source.access_opened",
+        `source:${sourceId}`,
+      );
+    }
+    const label = (grant: SourceGrant) =>
+      `source:${sourceId}:${grant.type}:${grant.id}:${grant.role}`;
+    const was = new Set(previous.grants.map(label));
+    const now = new Set(grants.map(label));
+    for (const item of now) {
+      if (!was.has(item)) audit(actorUserId, "source.access_granted", item);
+    }
+    for (const item of was) {
+      if (!now.has(item)) audit(actorUserId, "source.access_revoked", item);
+    }
+    return next;
+  }
+
   async function deleteImportedSource(sourceId: string, conceptIds: string[]) {
     const deletes = [];
     const settings = [];
@@ -1035,20 +1184,14 @@ export async function createSecurity({
     }
     const spaceKey = `openfga_imported_space:${sourceId}`;
     if (get(spaceKey)) {
-      const viewerTeamId = get("viewer_team_id");
-      deletes.push({
-        user: `source:${SOURCE}`,
-        relation: "parent",
-        object: `space:${importedSpace}`,
-      });
-      if (viewerTeamId) {
-        deletes.push({
-          user: `group:${viewerTeamId}#member`,
-          relation: "viewer",
-          object: `space:${importedSpace}`,
-        });
-      }
-      settings.push(spaceKey);
+      deletes.push(...sourceAccessTuples(sourceId, sourceAccess(sourceId)));
+      settings.push(spaceKey, `source_access:${sourceId}`);
+      const prefix = `source_grant:${sourceId}:`;
+      settings.push(
+        ...(db.prepare(
+          "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ?",
+        ).all(prefix.length, prefix) as Row[]).map((row) => String(row.key)),
+      );
     }
     if (!deletes.length) return;
     const { storeId, modelId } = await authorization();
@@ -1570,6 +1713,8 @@ export async function createSecurity({
     ensureImportedConcept,
     ensureImportedSource,
     deleteImportedSource,
+    sourceAccess,
+    setSourceAccess,
     close: () => db.close(),
   };
 }

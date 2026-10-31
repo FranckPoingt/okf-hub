@@ -80,6 +80,8 @@ Organisation
 
 Spaces and sources are the normal permission boundary. Individual document
 restrictions are supported as exceptions and inherit down the page hierarchy.
+Owners can restrict a source to selected members and groups; its imported
+documents inherit that access through the source's imported space.
 
 ## Technical direction
 
