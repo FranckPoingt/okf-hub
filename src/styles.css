@@ -338,9 +338,9 @@ a {
   font: 9px Arial,sans-serif;
   white-space: nowrap;
 }
-button:focus-visible,
-a:focus-visible {
-  outline: 3px solid rgba(231,111,81,.35);
+/* Solid ring token: >= 3:1 against page and card surfaces in both themes. */
+:where(button, a, summary, [role="tab"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 .primary {
