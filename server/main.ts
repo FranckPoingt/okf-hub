@@ -11,6 +11,15 @@ import { artifactSaveAction } from "./artifact-save.ts";
 import { createMcpHandler } from "./mcp.ts";
 
 import * as Y from "yjs";
+import { renderTemplate, templateVariables } from "../src/lib/templates.ts";
+import {
+  deriveFreshness,
+  type Freshness,
+  type GovernanceSummary,
+  isReviewDate,
+  type KnowledgePerson,
+  utcReviewDay,
+} from "../src/lib/governance.ts";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
 import { type AIRequest, type AIResponder, createAIResponder } from "./ai.ts";
@@ -78,6 +87,7 @@ type WorkTraceKind = typeof TRACE_KINDS[number];
 
 class MarkdownTooLarge extends Error {}
 class DocumentLocked extends Error {}
+class DocumentCheckpointChanged extends Error {}
 
 export const DEFAULT_MARKDOWN = `# Incident communication
 
@@ -209,6 +219,11 @@ type ConceptRow = {
   intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
+  ownerUserId: string | null;
+  reviewDueDate: string | null;
+  reviewedRevision: number | null;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
   lockedAt: string | null;
   lockedBy: string | null;
   updatedAt: string;
@@ -265,6 +280,8 @@ type LiveDocument = {
   clients: Set<WebSocket>;
   markdown: string;
   stateWrite: Promise<void>;
+  markdownWrite: Promise<void>;
+  resetting?: Promise<void>;
 };
 
 type RevisionRow = {
@@ -352,9 +369,18 @@ type SearchDocument = {
   type: string;
   tags: string[];
   owner: string;
+  ownerResolved?: boolean;
   status: "active" | "archived" | "current";
   trust: "current" | "stale" | "sync_failed";
   trustReason?: string;
+  freshness?: Freshness;
+  ownerUserId?: string | null;
+  reviewDueDate?: string | null;
+  reviewedRevision?: number | null;
+  reviewedAt?: string | null;
+  reviewer?: KnowledgePerson | null;
+  publishedRevision?: number | null;
+  hasUnpublishedChanges?: boolean;
   searchText: string;
   path?: string;
   sourceRevision?: string;
@@ -431,30 +457,6 @@ function markdownHrefs(markdown: string) {
   );
 }
 
-function templateVariables(markdown: string) {
-  return Array.from(
-    new Set(
-      Array.from(markdown.matchAll(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g))
-        .map((match) => match[1]),
-    ),
-  );
-}
-
-function renderTemplate(
-  markdown: string,
-  values: Record<string, unknown>,
-): { error: string } | { body: string } {
-  const missing = templateVariables(markdown).filter((name) =>
-    !Object.hasOwn(values, name) || typeof values[name] !== "string"
-  );
-  if (missing.length) return { error: `Fill in ${missing.join(", ")}` };
-  const body = markdown.replace(
-    /{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g,
-    (_match, name: string) => String(values[name]),
-  );
-  return { body };
-}
-
 function searchSnippet(
   text: string,
   query: string,
@@ -510,13 +512,13 @@ export function publishedMarkdown(
   type = "Policy",
   stableId?: string,
   fields: Record<string, unknown> = {},
-  intent?: string,
+  intent: DocumentIntent = "canonical",
 ) {
   return `---\n${typeYaml(type)}title: ${JSON.stringify(title)}\n${
     stableId ? `id: ${JSON.stringify(stableId)}\n` : ""
   }status: stable\ngenerated: { by: "human:${actorUserId}", at: "${publishedAt}" }\n${
     extensionYaml(fields)
-  }${intent ? `intent: ${intent}\n` : ""}---\n\n${bodyOnly(body).trimEnd()}\n`;
+  }intent: ${intent}\n---\n\n${bodyOnly(body).trimEnd()}\n`;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -555,7 +557,7 @@ function cors(request: Request) {
   return {
     "access-control-allow-origin": request.headers.get("origin") ?? "*",
     "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type, x-okf-collab-epoch",
     "access-control-allow-credentials": "true",
   };
 }
@@ -664,6 +666,11 @@ export async function createCollabApp({
       intent TEXT NOT NULL DEFAULT 'canonical' CHECK (intent IN ('canonical', 'working', 'evidence', 'ephemeral')),
       status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
       publishedRevision INTEGER,
+      ownerUserId TEXT,
+      reviewDueDate TEXT,
+      reviewedRevision INTEGER,
+      reviewedAt TEXT,
+      reviewedBy TEXT,
       lockedAt TEXT,
       lockedBy TEXT,
       createdAt TEXT NOT NULL,
@@ -878,6 +885,19 @@ export async function createCollabApp({
   }
   if (!conceptColumns.some(({ name }) => name === "lockedBy")) {
     db.exec("ALTER TABLE okf_concept ADD COLUMN lockedBy TEXT");
+  }
+  for (
+    const [name, definition] of [
+      ["ownerUserId", "TEXT"],
+      ["reviewDueDate", "TEXT"],
+      ["reviewedRevision", "INTEGER"],
+      ["reviewedAt", "TEXT"],
+      ["reviewedBy", "TEXT"],
+    ]
+  ) {
+    if (!conceptColumns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE okf_concept ADD COLUMN ${name} ${definition}`);
+    }
   }
   const repositoryColumns = db.prepare(
     "PRAGMA table_info(okf_repository_source)",
@@ -1888,9 +1908,31 @@ export async function createCollabApp({
       ? legacyStatePath
       : `${dataDir}/concepts/${encodeURIComponent(id)}.yjs`;
 
+  function createLiveDocument(row: ConceptRow, markdown: string, doc: Y.Doc) {
+    const live: LiveDocument = {
+      doc,
+      clients: new Set(),
+      markdown,
+      stateWrite: Promise.resolve(),
+      markdownWrite: Promise.resolve(),
+    };
+    doc.on("update", () => {
+      if (documents.get(row.id) !== live || live.resetting) return;
+      const snapshot = Y.encodeStateAsUpdate(doc);
+      live.stateWrite = live.stateWrite.then(() =>
+        Deno.writeFile(statePath(row.id), snapshot)
+      );
+    });
+    documents.set(row.id, live);
+    return live;
+  }
+
   async function loadDocument(row: ConceptRow, fallback?: string) {
     const loaded = documents.get(row.id);
-    if (loaded) return loaded;
+    if (loaded) {
+      await loaded.resetting;
+      return documents.get(row.id)!;
+    }
     let markdown: string;
     try {
       markdown = await Deno.readTextFile(markdownPath(row.id));
@@ -1920,47 +1962,82 @@ export async function createCollabApp({
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
-    const live: LiveDocument = {
-      doc,
-      clients: new Set(),
-      markdown,
-      stateWrite: Promise.resolve(),
-    };
-    doc.on("update", () => {
-      const snapshot = Y.encodeStateAsUpdate(doc);
-      live.stateWrite = live.stateWrite.then(() =>
-        Deno.writeFile(statePath(row.id), snapshot)
+    return createLiveDocument(row, markdown, doc);
+  }
+
+  async function resetCollaboration(conceptId: string, restored: string) {
+    const live = documents.get(conceptId)!;
+    const markdown = `${bodyOnly(restored).trimEnd()}\n`;
+    db.prepare(
+      "UPDATE okf_concept SET collabEpoch = collabEpoch + 1 WHERE id = ?",
+    ).run(conceptId);
+    live.resetting = (async () => {
+      live.clients.forEach((client) =>
+        client.close(4009, "Document checkpoint changed")
       );
-    });
-    documents.set(row.id, live);
-    return live;
+      live.doc.destroy();
+      // Drain earlier writes, including rejected stale saves, before replacing
+      // both persisted forms of the document with the restored checkpoint.
+      await Promise.all([
+        live.stateWrite.catch(() => {}),
+        live.markdownWrite.catch(() => {}),
+      ]);
+      await Deno.writeTextFile(markdownPath(conceptId), markdown);
+      await Deno.remove(statePath(conceptId)).catch((error) => {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      });
+      createLiveDocument(concept(conceptId)!, markdown, new Y.Doc());
+    })();
+    await live.resetting;
   }
 
   for (const row of concepts()) {
     await loadDocument(row, row.id === CONCEPT ? DEFAULT_MARKDOWN : undefined);
   }
 
-  async function saveDraft(conceptId: string, next: string) {
+  async function saveDraft(
+    conceptId: string,
+    next: string,
+    expectedEpoch?: number,
+  ) {
     if (new TextEncoder().encode(next).byteLength > MAX_MARKDOWN_BYTES) {
       throw new MarkdownTooLarge("Markdown is too large");
     }
     const row = concept(conceptId);
     if (!row) throw new Error("Concept not found");
-    if (row.lockedAt) {
-      throw new DocumentLocked("Unlock the document to edit it");
-    }
     const live = await loadDocument(row);
-    const fields = extensionFields(next);
-    if (fields) frontmatter.set(conceptId, fields);
-    const sources = documentSources(next);
-    if (sources) freshness.setSources(conceptId, sources);
-    live.markdown = `${bodyOnly(next).trimEnd()}\n`;
-    const now = new Date().toISOString();
-    db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
-      now,
-      conceptId,
-    );
-    await Deno.writeTextFile(markdownPath(conceptId), live.markdown);
+    const validateCheckpoint = () => {
+      const current = concept(conceptId);
+      if (
+        live.resetting || documents.get(conceptId) !== live ||
+        (expectedEpoch !== undefined && expectedEpoch !== current?.collabEpoch)
+      ) {
+        throw new DocumentCheckpointChanged(
+          "This document was restored in another session. Reload it before saving your changes.",
+        );
+      }
+      if (current?.lockedAt) {
+        throw new DocumentLocked("Unlock the document to edit it");
+      }
+    };
+    validateCheckpoint();
+    const markdown = `${bodyOnly(next).trimEnd()}\n`;
+    const write = live.markdownWrite.catch(() => {}).then(async () => {
+      validateCheckpoint();
+      const fields = extensionFields(next);
+      if (fields) frontmatter.set(conceptId, fields);
+      const sources = documentSources(next);
+      if (sources) freshness.setSources(conceptId, sources);
+      live.markdown = markdown;
+      const now = new Date().toISOString();
+      db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
+        now,
+        conceptId,
+      );
+      await Deno.writeTextFile(markdownPath(conceptId), markdown);
+    });
+    live.markdownWrite = write;
+    await write;
   }
 
   async function visibleWorkTraces(conceptId: string, userId: string) {
@@ -1975,11 +2052,17 @@ export async function createCollabApp({
       if (await security.check(userId, "view", trace.conceptId)) {
         const targetVisible = !trace.foldedIntoConceptId ||
           await security.check(userId, "view", trace.foldedIntoConceptId);
+        const labels = {
+          conceptTitle: await publishedLabelFor(userId, trace.conceptId),
+          foldedIntoTitle: targetVisible && trace.foldedIntoConceptId
+            ? await publishedLabelFor(userId, trace.foldedIntoConceptId)
+            : null,
+        };
         visible.push(
-          targetVisible ? trace : {
+          targetVisible ? { ...trace, ...labels } : {
             ...trace,
+            ...labels,
             foldedIntoConceptId: null,
-            foldedIntoTitle: null,
             foldedAt: null,
             foldedKnowledge: null,
           },
@@ -2105,26 +2188,319 @@ export async function createCollabApp({
       : { trust: "current" as const };
   }
 
+  function changedSincePublication(
+    row: ConceptRow,
+    draft: string,
+    published: string | null,
+  ) {
+    if (!published) return true;
+    const metadata = published.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1] ??
+      "";
+    return bodyOnly(published).trimEnd() !== draft.trimEnd() ||
+      extensionYaml(extensionFields(published) ?? {}) !==
+        extensionYaml(frontmatter.get(row.id)) ||
+      metadata.match(/^type:\s*(.+)$/m)?.[1] !==
+        typeYaml(row.type).slice(6).trimEnd() ||
+      metadata.match(/^title:\s*(.+)$/m)?.[1] !== JSON.stringify(row.title) ||
+      publishedMetadata(published).intent !== row.intent;
+  }
+
+  // Published revisions are immutable; coalesce reads and keep a bounded per-app cache.
+  const publishedRevisionCache = new Map<string, Promise<string>>();
+  function publishedRevisionMarkdown(objectKey: string) {
+    const cached = publishedRevisionCache.get(objectKey);
+    if (cached) {
+      publishedRevisionCache.delete(objectKey);
+      publishedRevisionCache.set(objectKey, cached);
+      return cached;
+    }
+    const reading = store.get(objectKey);
+    publishedRevisionCache.set(objectKey, reading);
+    if (publishedRevisionCache.size > 128) {
+      publishedRevisionCache.delete(
+        publishedRevisionCache.keys().next().value!,
+      );
+    }
+    void reading.catch(() => {
+      if (publishedRevisionCache.get(objectKey) === reading) {
+        publishedRevisionCache.delete(objectKey);
+      }
+    });
+    return reading;
+  }
+
+  const unavailablePublishedMetadata = () => ({
+    title: "Published document",
+    type: "Document",
+    intent: "canonical" as DocumentIntent,
+  });
+
+  function publishedMetadata(markdown: string) {
+    const frontmatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1];
+    const metadata = unavailablePublishedMetadata();
+    const rawTitle = frontmatter?.match(/^title:\s*(.+)$/m)?.[1];
+    if (rawTitle) {
+      try {
+        const title: unknown = JSON.parse(rawTitle);
+        if (typeof title === "string" && title.trim()) metadata.title = title;
+      } catch {
+        // Never substitute a private working title for malformed publication data.
+      }
+    }
+    const type = frontmatter?.match(/^type:\s*(.+)$/m)?.[1]?.trim();
+    if (type && /^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type)) {
+      metadata.type = type;
+    }
+    const intent = frontmatter?.match(/^intent:\s*(.+)$/m)?.[1]?.trim();
+    if (intent && DOCUMENT_INTENTS.includes(intent as DocumentIntent)) {
+      metadata.intent = intent as DocumentIntent;
+    }
+    return metadata;
+  }
+
+  async function currentPublication(row: ConceptRow) {
+    const revision = revisions(row.id).find((item) =>
+      item.number === row.publishedRevision
+    );
+    if (!revision) return null;
+    const markdown = await publishedRevisionMarkdown(revision.objectKey);
+    return { markdown, metadata: publishedMetadata(markdown) };
+  }
+
+  async function publishedLabelFor(userId: string, conceptId: string) {
+    const row = concept(conceptId);
+    if (row && await security.check(userId, "edit", conceptId)) {
+      return row.title;
+    }
+    try {
+      return row && (await currentPublication(row))?.metadata.title ||
+        unavailablePublishedMetadata().title;
+    } catch {
+      return unavailablePublishedMetadata().title;
+    }
+  }
+
+  async function hasUnpublishedChanges(row: ConceptRow) {
+    const [live, publication] = await Promise.all([
+      loadDocument(row),
+      currentPublication(row),
+    ]);
+    return changedSincePublication(
+      row,
+      live.markdown,
+      publication?.markdown ?? null,
+    );
+  }
+
+  function workspaceMember(userId: string): KnowledgePerson | null {
+    const person = db.prepare(
+      `SELECT u.id, u.name FROM member m JOIN "user" u ON u.id = m.userId
+       WHERE m.userId = ? AND m.organizationId =
+         (SELECT value FROM okf_config WHERE key = 'organization_id') LIMIT 1`,
+    ).get(userId) as KnowledgePerson | undefined;
+    return person ? { id: person.id, name: person.name } : null;
+  }
+
+  async function activeOwner(row: ConceptRow) {
+    const person = row.ownerUserId ? workspaceMember(row.ownerUserId) : null;
+    if (!person || !await security.check(person.id, "edit", row.id)) {
+      return null;
+    }
+    return workspaceMember(person.id);
+  }
+
+  async function governanceSummary(
+    row: ConceptRow,
+  ): Promise<GovernanceSummary> {
+    return {
+      ownerUserId: row.ownerUserId,
+      owner: await activeOwner(row),
+      reviewDueDate: row.reviewDueDate,
+      reviewedRevision: row.reviewedRevision,
+      reviewedAt: row.reviewedAt,
+      reviewedBy: row.reviewedBy,
+      reviewer: row.reviewedBy
+        ? workspaceMember(row.reviewedBy) ??
+          { id: row.reviewedBy, name: "Former member" }
+        : null,
+      freshness: deriveFreshness(row),
+    };
+  }
+
+  async function eligibleOwners(conceptId: string) {
+    const members = db.prepare(
+      `SELECT DISTINCT u.id, u.name FROM member m JOIN "user" u ON u.id = m.userId
+       WHERE m.organizationId = (SELECT value FROM okf_config WHERE key = 'organization_id')
+       ORDER BY u.name, u.id`,
+    ).all() as KnowledgePerson[];
+    const eligible = await Promise.all(
+      members.map(async (person) =>
+        await security.check(person.id, "edit", conceptId)
+          ? workspaceMember(person.id)
+          : null
+      ),
+    );
+    return eligible.filter((person) => person !== null);
+  }
+
+  function requestedReviewDate(body: Record<string, unknown>) {
+    const date = body.reviewDueDate;
+    if (date !== null && !isReviewDate(date)) {
+      throw new ActionError(
+        "Choose a valid review date (YYYY-MM-DD), or clear it",
+      );
+    }
+    return date as string | null;
+  }
+
+  async function updateGovernance(
+    userId: string,
+    conceptId: string,
+    body: Record<string, unknown>,
+  ) {
+    const fields: Record<string, string | null> = {};
+    if (
+      Object.keys(body).some((key) =>
+        !["ownerUserId", "reviewDueDate"].includes(key)
+      )
+    ) {
+      throw new ActionError("Only owner and review date can be changed here");
+    }
+    if (Object.hasOwn(body, "ownerUserId")) {
+      const id = body.ownerUserId;
+      if (id !== null) {
+        if (
+          typeof id !== "string" || !id || !workspaceMember(id) ||
+          !await security.check(id, "edit", conceptId) || !workspaceMember(id)
+        ) {
+          throw new ActionError("Choose an eligible document owner");
+        }
+      }
+      fields.ownerUserId = id as string | null;
+    }
+    if (Object.hasOwn(body, "reviewDueDate")) {
+      fields.reviewDueDate = requestedReviewDate(body);
+    }
+    // Re-read after owner authorization; write only supplied fields so concurrent patches compose.
+    const latest = concept(conceptId);
+    if (!latest || latest.status !== "active") {
+      throw new ActionError("Restore the document first", 409);
+    }
+    if (Object.keys(fields).length) {
+      const result = db.prepare(
+        `UPDATE okf_concept SET ${
+          Object.keys(fields).map((key) => `${key} = ?`).join(", ")
+        } WHERE id = ? AND status = 'active'`,
+      )
+        .run(...Object.values(fields), conceptId);
+      if (!result.changes) {
+        throw new ActionError("Restore the document first", 409);
+      }
+      security.audit(
+        userId,
+        "concept.governance.updated",
+        `concept:${conceptId}`,
+      );
+    }
+  }
+
+  function markReviewed(
+    userId: string,
+    conceptId: string,
+    body: Record<string, unknown>,
+  ) {
+    if (
+      Object.keys(body).some((key) =>
+        !["publishedRevision", "reviewDueDate"].includes(key)
+      )
+    ) {
+      throw new ActionError(
+        "Choose the published revision and optional next review date",
+      );
+    }
+    const expected = body.publishedRevision;
+    if (
+      typeof expected !== "number" || !Number.isSafeInteger(expected) ||
+      expected < 1
+    ) {
+      throw new ActionError("Choose the exact published revision to review");
+    }
+    const latest = concept(conceptId);
+    if (!latest || latest.status !== "active" || !latest.publishedRevision) {
+      throw new ActionError(
+        "Publish an active document before reviewing it",
+        409,
+      );
+    }
+    if (latest.publishedRevision !== expected) {
+      throw new ActionError(
+        "The published revision changed. Review the latest version",
+        409,
+      );
+    }
+    const hasDate = Object.hasOwn(body, "reviewDueDate");
+    const date = hasDate ? requestedReviewDate(body) : latest.reviewDueDate;
+    if (date && date < utcReviewDay()) {
+      throw new ActionError(
+        "Choose today or a future review date, or clear the date",
+      );
+    }
+    // Compare the exact publication again in SQL; review never mutates draft or content lifecycle.
+    const result = db.prepare(
+      `UPDATE okf_concept SET reviewedRevision = ?, reviewedAt = ?, reviewedBy = ?${
+        hasDate ? ", reviewDueDate = ?" : ""
+      } WHERE id = ? AND status = 'active' AND publishedRevision = ?`,
+    )
+      .run(
+        expected,
+        new Date().toISOString(),
+        userId,
+        ...(hasDate ? [date] : []),
+        conceptId,
+        expected,
+      );
+    if (!result.changes) {
+      throw new ActionError(
+        "The published revision changed. Review the latest version",
+        409,
+      );
+    }
+    security.audit(
+      userId,
+      "concept.reviewed",
+      `concept:${conceptId}:revision:${expected}`,
+    );
+  }
+
   async function payload(row: ConceptRow, canEdit: boolean, userId: string) {
     const live = await loadDocument(row);
     const history = revisions(row.id);
     const traces = await visibleWorkTraces(row.id, userId);
-    const published = row.publishedRevision
-      ? await store.get(
-        history.find((item) => item.number === row.publishedRevision)!
-          .objectKey,
-      )
-      : null;
+    const publication = await currentPublication(row);
     return {
       ...row,
+      ...await governanceSummary(row),
+      ...(!canEdit
+        ? publication?.metadata ?? unavailablePublishedMetadata()
+        : {}),
+      publishedMetadata: publication?.metadata ?? null,
       sources: editableSources(
-        canEdit ? frontmatter.get(row.id) : extensionFields(published ?? ""),
+        canEdit
+          ? frontmatter.get(row.id)
+          : extensionFields(publication?.markdown ?? ""),
       ),
       openCommentCount: openCommentCount(row.id),
       ...await dependencyTrust(row.id, userId),
       space: space(row.spaceId)?.name ?? row.spaceId,
+      hasUnpublishedChanges: canEdit
+        ? changedSincePublication(
+          row,
+          live.markdown,
+          publication?.markdown ?? null,
+        )
+        : false,
       draft: canEdit ? live.markdown : null,
-      published: published ? bodyOnly(published) : null,
+      published: publication ? bodyOnly(publication.markdown) : null,
       revisions: canEdit ? history : [],
       activity: security.activity(`concept:${row.id}`),
       workTraces: canEdit
@@ -2311,7 +2687,7 @@ export async function createCollabApp({
       await security.ensureHubConcept(id, spaceId);
       const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO okf_concept (id, spaceId, parentId, sortOrder, title, type, intent, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)",
+        "INSERT INTO okf_concept (id, spaceId, parentId, sortOrder, title, type, intent, status, ownerUserId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
       ).run(
         id,
         spaceId,
@@ -2320,6 +2696,7 @@ export async function createCollabApp({
         title,
         type,
         intent,
+        userId,
         now,
         now,
       );
@@ -2399,7 +2776,6 @@ export async function createCollabApp({
 
   async function visibleSearchDocuments(
     userId: string,
-    userName: string,
     includeArchived: boolean,
   ) {
     const documents: SearchDocument[] = [];
@@ -2417,16 +2793,27 @@ export async function createCollabApp({
         let content = canEditHub && row.status === "active"
           ? (await loadDocument(row)).markdown
           : "";
-        if (!content && row.publishedRevision) {
-          const revision = revisions(row.id).find((item) =>
-            item.number === row.publishedRevision
-          );
-          if (revision) {
-            try {
-              content = bodyOnly(await store.get(revision.objectKey));
-            } catch {
-              // The title remains discoverable while its stored body is unavailable.
+        let metadata = canEditHub
+          ? { title: row.title, type: row.type }
+          : unavailablePublishedMetadata();
+        if ((!content || !canEditHub) && row.publishedRevision) {
+          try {
+            const publication = await currentPublication(row);
+            if (publication) {
+              if (!content) content = bodyOnly(publication.markdown);
+              if (!canEditHub) metadata = publication.metadata;
             }
+          } catch {
+            // Keep only a generic label when publication storage is unavailable.
+          }
+        }
+        const governance = await governanceSummary(row);
+        let unpublishedChanges: boolean | undefined;
+        if (canEditHub && row.status === "active") {
+          try {
+            unpublishedChanges = await hasUnpublishedChanges(row);
+          } catch {
+            // Keep draft search available when the saved publication cannot be compared.
           }
         }
         documents.push({
@@ -2435,15 +2822,24 @@ export async function createCollabApp({
           sourceId: "hub",
           sourceLabel: "OKF Hub",
           sourceStatus: "current",
-          title: row.title,
-          type: row.type,
+          title: metadata.title,
+          type: metadata.type,
           tags: [],
-          owner: canEditHub && !row.publishedRevision
-            ? userName
-            : "OKF Hub authors",
+          owner: governance.owner?.name ?? "",
+          ownerResolved: governance.owner !== null,
+          ownerUserId: governance.ownerUserId,
+          reviewDueDate: governance.reviewDueDate,
+          reviewedRevision: governance.reviewedRevision,
+          reviewedAt: governance.reviewedAt,
+          reviewer: governance.reviewer,
+          publishedRevision: row.publishedRevision,
+          ...(unpublishedChanges === undefined
+            ? {}
+            : { hasUnpublishedChanges: unpublishedChanges }),
+          freshness: governance.freshness,
           status: row.status,
           ...await dependencyTrust(row.id, userId),
-          searchText: [row.title, row.type, content].join("\n"),
+          searchText: [metadata.title, metadata.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
           stableId: row.id,
           body: content || undefined,
@@ -2523,7 +2919,6 @@ export async function createCollabApp({
 
   async function searchKnowledge(
     userId: string,
-    userName: string,
     input: Record<string, unknown>,
   ) {
     const query = String(input.query ?? "").trim();
@@ -2532,14 +2927,34 @@ export async function createCollabApp({
     }
     const type = String(input.type ?? "").trim().toLocaleLowerCase();
     const tag = String(input.tag ?? "").trim().toLocaleLowerCase();
+    const attention = input.attention;
+    if (
+      attention !== undefined &&
+      !["unowned", "overdue", "unreviewed"].includes(String(attention))
+    ) {
+      throw new ActionError("Choose a supported attention filter");
+    }
     const { documents, canIncludeArchived } = await visibleSearchDocuments(
       userId,
-      userName,
       input.includeArchived === true,
     );
     const graph = buildKnowledgeGraph(documents);
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     const results = documents.filter((item) => {
+      if (attention) {
+        if (
+          item.kind !== "hub-native" || item.status !== "active" ||
+          !item.publishedRevision
+        ) return false;
+        if (attention === "unowned" && item.ownerResolved) return false;
+        if (attention === "overdue" && item.freshness?.status !== "overdue") {
+          return false;
+        }
+        if (
+          attention === "unreviewed" && (!item.publishedRevision ||
+            item.reviewedRevision === item.publishedRevision && item.reviewedAt)
+        ) return false;
+      }
       if (type && item.type.toLocaleLowerCase() !== type) return false;
       if (
         tag &&
@@ -2564,6 +2979,7 @@ export async function createCollabApp({
         linkHrefs: _linkHrefs,
         stableId: _stableId,
         body: _body,
+        ownerResolved: _ownerResolved,
         ...visible
       } = item;
       return {
@@ -2682,11 +3098,11 @@ export async function createCollabApp({
           type: { type: "string" },
           tag: { type: "string" },
           includeArchived: { type: "boolean" },
+          attention: { enum: ["unowned", "overdue", "unreviewed"] },
         },
         additionalProperties: false,
       },
-      run: (context, input) =>
-        searchKnowledge(context.userId, context.userName, input),
+      run: (context, input) => searchKnowledge(context.userId, input),
     },
     {
       name: "templates.list",
@@ -3258,7 +3674,7 @@ export async function createCollabApp({
           const { context, citations } = await retrieveKnowledge(
             messages.at(-1)!.content,
             async (query) =>
-              (await searchKnowledge(current.user.id, current.user.name, {
+              (await searchKnowledge(current.user.id, {
                 query,
               })).results.map((item) => {
                 const row = item.kind === "hub-native"
@@ -3377,7 +3793,10 @@ export async function createCollabApp({
           });
         }
         document = {
-          title: row.title,
+          title: state === "published"
+            ? payloadDocument.publishedMetadata?.title ??
+              unavailablePublishedMetadata().title
+            : row.title,
           space: space(row.spaceId)?.name ?? row.spaceId,
           state,
           markdown,
@@ -4922,9 +5341,11 @@ export async function createCollabApp({
         return Response.json(
           await searchKnowledge(
             current.user.id,
-            current.user.name,
             {
               query: url.searchParams.get("q") ?? "",
+              ...(url.searchParams.has("attention")
+                ? { attention: url.searchParams.get("attention") }
+                : {}),
               type: url.searchParams.get("type") ?? "",
               tag: url.searchParams.get("tag") ?? "",
               includeArchived:
@@ -4963,7 +5384,11 @@ export async function createCollabApp({
       );
     }
 
-    if (url.pathname === "/api/templates" && request.method === "POST") {
+    const templateRoute = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
+    if (
+      (url.pathname === "/api/templates" && request.method === "POST") ||
+      (templateRoute && request.method === "PUT")
+    ) {
       const current = await security.session(request);
       if (!current) {
         return Response.json({ error: "Sign in required" }, {
@@ -4977,15 +5402,35 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const body = await request.json().catch(() => ({})) as Record<
-        string,
-        unknown
-      >;
-      const name = String(body.name ?? "").trim();
-      const description = String(body.description ?? "").trim();
-      const markdown = String(body.body ?? "");
+      const existing = templateRoute ? template(templateRoute[1]) : null;
+      if (templateRoute && !existing) {
+        return Response.json({ error: "Template not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (existing?.id === UNDERSTANDING_BRIEF_TEMPLATE.id) {
+        return Response.json({
+          error: "Duplicate a built-in template to edit it",
+        }, {
+          status: 400,
+          headers: cors(request),
+        });
+      }
+      const parsed: unknown = await request.json().catch(() => null);
+      const body =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : {};
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const description = typeof body.description === "string"
+        ? body.description.trim()
+        : "";
+      const markdown = typeof body.body === "string" ? body.body : "";
       if (
         !name || name.length > 80 || description.length > 240 ||
+        (body.description !== undefined &&
+          typeof body.description !== "string") ||
         !markdown.trim() ||
         new TextEncoder().encode(markdown).byteLength > MAX_MARKDOWN_BYTES
       ) {
@@ -4998,6 +5443,7 @@ export async function createCollabApp({
       }
       if (
         templates().some((item) =>
+          item.id !== existing?.id &&
           item.name.toLocaleLowerCase() === name.toLocaleLowerCase()
         )
       ) {
@@ -5006,9 +5452,20 @@ export async function createCollabApp({
           headers: cors(request),
         });
       }
-      const id = crypto.randomUUID();
+      const id = existing?.id ?? crypto.randomUUID();
       const now = new Date().toISOString();
-      try {
+      if (existing) {
+        db.prepare(
+          "UPDATE okf_template SET name = ?, description = ?, body = ?, variables = ?, updatedAt = ? WHERE id = ?",
+        ).run(
+          name,
+          description,
+          markdown,
+          JSON.stringify(templateVariables(markdown)),
+          now,
+          id,
+        );
+      } else {
         db.prepare(
           "INSERT INTO okf_template (id, name, description, body, variables, createdBy, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ).run(
@@ -5021,20 +5478,18 @@ export async function createCollabApp({
           now,
           now,
         );
-        security.audit(current.user.id, "template.created", `template:${id}`);
-        return Response.json(templatePayload(template(id)!), {
-          status: 201,
-          headers: cors(request),
-        });
-      } catch {
-        return Response.json({ error: "Template name already exists" }, {
-          status: 409,
-          headers: cors(request),
-        });
       }
+      security.audit(
+        current.user.id,
+        existing ? "template.updated" : "template.created",
+        `template:${id}`,
+      );
+      return Response.json(templatePayload(template(id)!), {
+        status: existing ? 200 : 201,
+        headers: cors(request),
+      });
     }
 
-    const templateRoute = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
     if (templateRoute && request.method === "DELETE") {
       const current = await security.session(request);
       if (!current) {
@@ -5315,23 +5770,34 @@ export async function createCollabApp({
         });
       }
       const archived = url.searchParams.get("include") === "archived";
-      const visible = [];
-      for (const row of concepts()) {
-        if (!await security.check(current.user.id, "view", row.id)) continue;
-        const canEdit = await security.check(current.user.id, "edit", row.id);
-        if (
-          row.status === "active"
-            ? canEdit || row.publishedRevision
-            : canEdit && archived
-        ) {
-          visible.push({
+      const visible = await Promise.all(
+        concepts().map(async (row) => {
+          if (!await security.check(current.user.id, "view", row.id)) {
+            return null;
+          }
+          const canEdit = await security.check(current.user.id, "edit", row.id);
+          if (
+            !(row.status === "active"
+              ? canEdit || row.publishedRevision
+              : canEdit && archived)
+          ) return null;
+          const publication = await currentPublication(row);
+          return {
             ...row,
+            ...await governanceSummary(row),
+            ...(!canEdit
+              ? publication?.metadata ?? unavailablePublishedMetadata()
+              : {}),
+            publishedMetadata: publication?.metadata ?? null,
             space: space(row.spaceId)?.name ?? row.spaceId,
             openCommentCount: openCommentCount(row.id),
-          });
-        }
-      }
-      return Response.json(visible, {
+            hasUnpublishedChanges: canEdit
+              ? await hasUnpublishedChanges(row)
+              : false,
+          };
+        }),
+      );
+      return Response.json(visible.filter((row) => row !== null), {
         headers: cors(request),
       });
     }
@@ -5544,6 +6010,63 @@ export async function createCollabApp({
     const conceptRoute = url.pathname.match(
       /^\/api\/concepts\/([^/]+)(?:\/(.+))?$/,
     );
+    if (
+      conceptRoute && (
+        request.method === "GET" && conceptRoute[2] === "owners" ||
+        request.method === "PUT" && conceptRoute[2] === "governance" ||
+        request.method === "POST" && conceptRoute[2] === "review"
+      )
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const id = conceptRoute[1];
+      if (!concept(id) || !await security.check(current.user.id, "edit", id)) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      try {
+        if (request.method === "GET") {
+          return Response.json(await eligibleOwners(id), {
+            headers: cors(request),
+          });
+        }
+        const body: unknown = await request.json().catch(() => null);
+        if (!body || Array.isArray(body) || typeof body !== "object") {
+          throw new ActionError("Enter valid review settings");
+        }
+        if (conceptRoute[2] === "governance") {
+          await updateGovernance(
+            current.user.id,
+            id,
+            body as Record<string, unknown>,
+          );
+        } else {markReviewed(
+            current.user.id,
+            id,
+            body as Record<string, unknown>,
+          );}
+        return Response.json(
+          await payload(concept(id)!, true, current.user.id),
+          { headers: cors(request) },
+        );
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error
+            ? error.message
+            : "Review update failed",
+        }, {
+          status: error instanceof ActionError ? error.status : 503,
+          headers: cors(request),
+        });
+      }
+    }
     if (
       conceptRoute && request.method === "POST" && conceptRoute[2] === "move"
     ) {
@@ -5989,13 +6512,14 @@ export async function createCollabApp({
           error: "Sources must be a list of at most 50 citations",
         }, { status: 400, headers: cors(request) });
       }
-      const title = String(body.title ?? "").trim();
-      const type = String(body.type ?? "").trim();
-      const spaceId = String(body.spaceId ?? "");
-      const intent = String(body.intent ?? row.intent) as DocumentIntent;
+      const latest = concept(conceptId)!;
+      const title = String(body.title ?? latest.title).trim();
+      const type = String(body.type ?? latest.type).trim();
+      const spaceId = String(body.spaceId ?? latest.spaceId);
+      const intent = String(body.intent ?? latest.intent) as DocumentIntent;
       const parentId = Object.hasOwn(body, "parentId")
         ? body.parentId ? String(body.parentId) : null
-        : row.parentId;
+        : latest.parentId;
       if (
         !title || title.length > 100 ||
         !/^[A-Za-z][A-Za-z0-9 _-]{0,49}$/.test(type) ||
@@ -6044,26 +6568,28 @@ export async function createCollabApp({
       try {
         await security.moveHubConcept(conceptId, row.spaceId, spaceId);
         if (Object.hasOwn(body, "sources")) {
-          const fields = {
+          const extension = {
             ...frontmatter.get(conceptId),
             sources: body.sources,
           };
-          frontmatter.set(conceptId, fields);
+          frontmatter.set(conceptId, extension);
           freshness.setSources(
             conceptId,
             documentSources(`---
-${extensionYaml(fields)}---
+${extensionYaml(extension)}---
 `) ?? [],
           );
         }
+        const fields = { title, type, intent, spaceId, parentId };
+        const changedFields = Object.entries(fields).filter(([key]) =>
+          Object.hasOwn(body, key)
+        );
         db.prepare(
-          "UPDATE okf_concept SET title = ?, type = ?, intent = ?, spaceId = ?, parentId = ?, updatedAt = ? WHERE id = ?",
+          `UPDATE okf_concept SET ${
+            changedFields.map(([key]) => `${key} = ?, `).join("")
+          }updatedAt = ? WHERE id = ?`,
         ).run(
-          title,
-          type,
-          intent,
-          spaceId,
-          parentId,
+          ...changedFields.map(([, value]) => value),
           new Date().toISOString(),
           conceptId,
         );
@@ -6124,8 +6650,21 @@ ${extensionYaml(fields)}---
         });
       }
       try {
-        await saveDraft(conceptId, await request.text());
-        return new Response(null, { status: 204, headers: cors(request) });
+        const epoch = request.headers.get("x-okf-collab-epoch");
+        await saveDraft(
+          conceptId,
+          await request.text(),
+          epoch === null ? undefined : Number(epoch),
+        );
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...cors(request),
+            "x-okf-unpublished-changes": String(
+              await hasUnpublishedChanges(concept(conceptId)!),
+            ),
+          },
+        });
       } catch (error) {
         if (error instanceof MarkdownTooLarge) {
           return new Response(error.message, {
@@ -6136,6 +6675,12 @@ ${extensionYaml(fields)}---
         if (error instanceof DocumentLocked) {
           return new Response(error.message, {
             status: 423,
+            headers: cors(request),
+          });
+        }
+        if (error instanceof DocumentCheckpointChanged) {
+          return new Response(error.message, {
+            status: 409,
             headers: cors(request),
           });
         }
@@ -6271,7 +6816,10 @@ ${extensionYaml(fields)}---
               headers: cors(request),
             });
           }
-          await saveDraft(conceptId, await store.get(item.objectKey));
+          // Keep the stored frontmatter so preserved extension fields are restored too.
+          const stored = await store.get(item.objectKey);
+          await saveDraft(conceptId, stored);
+          await resetCollaboration(conceptId, stored);
           return Response.json(
             await payload(concept(conceptId)!, true, current.user.id),
             {
@@ -6327,7 +6875,14 @@ ${extensionYaml(fields)}---
       const live = await loadDocument(row);
       const { socket, response } = Deno.upgradeWebSocket(request);
       socket.binaryType = "arraybuffer";
+      const staleClient = () =>
+        live.resetting || documents.get(conceptId) !== live ||
+        concept(conceptId)?.collabEpoch !== row.collabEpoch;
       socket.addEventListener("open", () => {
+        if (staleClient()) {
+          socket.close(4009, "Document checkpoint changed");
+          return;
+        }
         live.clients.add(socket);
         socket.send(frame(DOCUMENT_UPDATE, Y.encodeStateAsUpdate(live.doc)));
         socket.send("synced");
@@ -6335,6 +6890,12 @@ ${extensionYaml(fields)}---
       socket.addEventListener("message", async (event) => {
         if (typeof event.data === "string") return;
         const message = await bytes(event.data);
+        if (staleClient()) {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close(4009, "Document checkpoint changed");
+          }
+          return;
+        }
         if (!message?.length) return;
         if (message[0] === DOCUMENT_UPDATE && canEdit) {
           Y.applyUpdate(live.doc, message.subarray(1), socket);
@@ -6398,7 +6959,10 @@ ${extensionYaml(fields)}---
       await activeAutomation;
       for (const live of documents.values()) {
         live.clients.forEach((client) => client.close());
-        await live.stateWrite;
+        await Promise.all([
+          live.stateWrite,
+          live.markdownWrite.catch(() => {}),
+        ]);
         live.doc.destroy();
       }
       db.close();

@@ -128,6 +128,9 @@ Deno.test("cascades stale imported knowledge to dependent artifacts, never on fa
       markdown:
         "---\ntype: Artifact\nsources:\n  - id: billing\n    resource: billing.md\n---\n\n# Calculator\n",
     });
+    // A reviewed publication must still surface dependency staleness.
+    await json(`/api/concepts/${artifact.id}/publish`, {});
+    await json(`/api/concepts/${artifact.id}/review`, { publishedRevision: 1 });
 
     await commit("src/billing/tax.ts", "export const rate = 2;\n");
     failSync = true;
@@ -151,6 +154,7 @@ Deno.test("cascades stale imported knowledge to dependent artifacts, never on fa
     assert.match(result(stale.id).trustReason, /src\/billing\/tax\.ts/);
     assert.equal(result(artifact.id).trust, "stale");
     assert.match(result(artifact.id).trustReason, /^Depends on billing\.md: /);
+    assert.equal(result(artifact.id).freshness.status, "current");
 
     const document = (await json("/api/v1/actions/documents.get", {
       id: artifact.id,

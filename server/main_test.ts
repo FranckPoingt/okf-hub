@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { extensionFields } from "./document-frontmatter.ts";
 import { DatabaseSync } from "node:sqlite";
+import * as Y from "yjs";
 import type { AIRequest } from "./ai.ts";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
@@ -3815,6 +3816,685 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
     assert.equal(exported.status, 200);
     assert.match(await exported.text(), /\nid: "active-customer"\n/);
   } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
+Deno.test("tracks unpublished body and metadata changes while hiding draft state from viewers", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const fga = fakeOpenFga();
+  const objects = new Map<string, string>();
+  let revisionReads = 0;
+  let failNextRevisionRead = false;
+  let malformedPublication = false;
+  const aiRequests: AIRequest[] = [];
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "a-secure-test-secret-with-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    objectStore: {
+      put(key, markdown) {
+        objects.set(
+          key,
+          malformedPublication && key.includes("/revisions/")
+            ? markdown.replace(
+              /^---\n[\s\S]*?\n---\n/,
+              "---\ntitle: { invalid: true }\ntype: [Invalid]\n---\n",
+            )
+            : markdown,
+        );
+        return Promise.resolve();
+      },
+      get(key) {
+        if (key.includes("/revisions/")) {
+          revisionReads++;
+          if (failNextRevisionRead && key.endsWith("/revisions/4.md")) {
+            failNextRevisionRead = false;
+            return Promise.reject(new Error("Temporary storage failure"));
+          }
+        }
+        return objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Object not found"));
+      },
+      remove(key) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    automationIntervalMs: 0,
+    aiProvider: "ollama",
+    aiModel: "test-model",
+    aiResponder(request) {
+      aiRequests.push(request);
+      return Promise.resolve("Mocked published answer");
+    },
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const editor = new Client(base);
+  const viewer = new Client(base);
+  try {
+    await owner.signUp("Owner", "draft-owner@example.com");
+    const setup = await owner.request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ name: "Draft status test" }),
+    });
+    assert.equal(setup.status, 200, await setup.text());
+    for (
+      const [client, access] of [[editor, "editor"], [
+        viewer,
+        "viewer",
+      ]] as const
+    ) {
+      const email = `draft-${access}@example.com`;
+      const invitation = await owner.request("/api/invitations", {
+        method: "POST",
+        body: JSON.stringify({ email, access }),
+      });
+      assert.equal(invitation.status, 200, await invitation.clone().text());
+      const invitationId = (await invitation.json()).id;
+      await client.signUp(access, email, invitationId);
+      const accepted = await client.request("/api/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ invitationId }),
+      });
+      assert.equal(accepted.status, 200, await accepted.text());
+    }
+    const parentResponse = await editor.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Parent",
+        type: "Guide",
+        spaceId: "policies",
+      }),
+    });
+    assert.equal(
+      parentResponse.status,
+      201,
+      await parentResponse.clone().text(),
+    );
+    const parent = await parentResponse.json();
+    const title = 'Team "alpha": guide';
+    const createdResponse = await editor.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        type: "Guide",
+        intent: "working",
+        spaceId: "policies",
+        parentId: parent.id,
+      }),
+    });
+    assert.equal(
+      createdResponse.status,
+      201,
+      await createdResponse.clone().text(),
+    );
+    const created = await createdResponse.json();
+    const path = `/api/concepts/${created.id}`;
+    assert.equal(created.hasUnpublishedChanges, true);
+    assert.equal((await viewer.request(path)).status, 404);
+    assert.deepEqual(await (await viewer.request("/api/concepts")).json(), []);
+    const publishedBody = "## Shared policy\n\nEveryone may read this.\n";
+    let expectedMetadata = { title, type: "Guide", intent: "working" };
+    let parentPublished = false;
+    const checkpoint = async (markdown: string, changed: boolean) => {
+      const response = await editor.request(path, {
+        method: "PUT",
+        body: markdown,
+      });
+      assert.equal(response.status, 204, await response.text());
+      assert.equal(
+        response.headers.get("x-okf-unpublished-changes"),
+        String(changed),
+      );
+    };
+    const state = async (client: Client) => {
+      const response = await client.request(path);
+      assert.equal(response.status, 200, await response.clone().text());
+      return await response.json();
+    };
+    const listed = async (client: Client) => {
+      const response = await client.request("/api/concepts");
+      assert.equal(response.status, 200, await response.clone().text());
+      return (await response.json()).find((item: { id: string }) =>
+        item.id === created.id
+      );
+    };
+    const publish = async () => {
+      const response = await editor.request(`${path}/publish`, {
+        method: "POST",
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const result = await response.json();
+      assert.equal(result.hasUnpublishedChanges, false);
+      assert.equal((await listed(editor)).hasUnpublishedChanges, false);
+      expectedMetadata = {
+        title: result.title,
+        type: result.type,
+        intent: result.intent,
+      };
+      assert.deepEqual(result.publishedMetadata, expectedMetadata);
+      return result;
+    };
+    const viewerSeesPublishedOnly = async () => {
+      const result = await state(viewer);
+      assert.equal(result.hasUnpublishedChanges, false);
+      assert.equal(result.draft, null);
+      assert.equal(result.published, publishedBody);
+      assert.deepEqual(result.revisions, []);
+      const summary = await listed(viewer);
+      assert.equal(summary.hasUnpublishedChanges, false);
+      assert.equal(summary.draft, undefined);
+      assert.equal(summary.published, undefined);
+      assert.equal(result.title, expectedMetadata.title);
+      assert.equal(result.type, expectedMetadata.type);
+      assert.deepEqual(result.publishedMetadata, expectedMetadata);
+      assert.equal(summary.title, expectedMetadata.title);
+      assert.equal(summary.type, expectedMetadata.type);
+      const action = await viewer.request("/api/v1/actions/documents.get", {
+        method: "POST",
+        body: JSON.stringify({ id: created.id }),
+      });
+      assert.equal(action.status, 200, await action.clone().text());
+      const agentDocument = (await action.json()).result;
+      assert.equal(agentDocument.title, expectedMetadata.title);
+      assert.equal(agentDocument.type, expectedMetadata.type);
+      const search = await viewer.request("/api/search");
+      assert.equal(search.status, 200, await search.clone().text());
+      const searched = await search.json();
+      const found = searched.results.find((item: { id: string }) =>
+        item.id === created.id
+      );
+      assert.equal(found.title, expectedMetadata.title);
+      assert.equal(found.type, expectedMetadata.type);
+      const working = await state(editor);
+      assert.deepEqual(working.publishedMetadata, expectedMetadata);
+      if (working.type !== expectedMetadata.type) {
+        assert.ok(!searched.facets.types.includes(working.type));
+      }
+      if (working.title !== expectedMetadata.title) {
+        const privateSearch = await viewer.request(
+          `/api/search?q=${encodeURIComponent(working.title)}`,
+        );
+        assert.ok(
+          !(await privateSearch.json()).results.some((item: { id: string }) =>
+            item.id === created.id
+          ),
+        );
+      }
+      for (const client of [viewer, editor]) {
+        const answer = await client.request("/api/ai/chat", {
+          method: "POST",
+          body: JSON.stringify({
+            conceptId: created.id,
+            state: "published",
+            messages: [{ role: "user", content: "Explain the document" }],
+          }),
+        });
+        assert.equal(answer.status, 200, await answer.text());
+        assert.equal(aiRequests.at(-1)!.document.title, expectedMetadata.title);
+        assert.equal(aiRequests.at(-1)!.document.markdown, publishedBody);
+      }
+      if (parentPublished) {
+        assert.equal(result.workTraces[0].conceptTitle, expectedMetadata.title);
+        assert.equal(result.workTraces[0].foldedIntoTitle, "Parent");
+        assert.ok(
+          found.backlinks.some((item: { title: string }) =>
+            item.title === "Parent"
+          ),
+        );
+        const parentResult = searched.results.find((item: { id: string }) =>
+          item.id === parent.id
+        );
+        assert.equal(parentResult.title, "Parent");
+        assert.ok(
+          parentResult.links.some((item: { title: string }) =>
+            item.title === expectedMetadata.title
+          ),
+        );
+      }
+    };
+    await checkpoint(publishedBody, true);
+    assert.equal((await publish()).publishedRevision, 1);
+    await viewerSeesPublishedOnly();
+    const readsAfterPublication = revisionReads;
+    await Promise.all([listed(editor), listed(editor)]);
+    await listed(editor);
+    assert.equal(
+      revisionReads,
+      readsAfterPublication,
+      "repeated/concurrent listings reuse immutable published content",
+    );
+    const parentPublication = await editor.request(
+      `/api/concepts/${parent.id}/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          markdown: `## Parent\n\n[Shared page](/knowledge/${created.id})\n`,
+        }),
+      },
+    );
+    assert.equal(parentPublication.status, 200, await parentPublication.text());
+    const recorded = await editor.request(`${path}/traces`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "change",
+        title: "Recorded change",
+        summary: "A lasting explanation",
+        occurredAt: "2026-10-04",
+      }),
+    });
+    assert.equal(recorded.status, 201, await recorded.clone().text());
+    const traceId = (await state(editor)).workTraces[0].id;
+    const folded = await editor.request(`${path}/traces/${traceId}/fold`, {
+      method: "POST",
+      body: JSON.stringify({
+        targetConceptId: parent.id,
+        knowledge: "Lasting knowledge",
+      }),
+    });
+    assert.equal(folded.status, 200, await folded.text());
+    const parentRename = await editor.request(
+      `/api/concepts/${parent.id}/metadata`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ title: "Private parent title" }),
+      },
+    );
+    assert.equal(parentRename.status, 200, await parentRename.text());
+    parentPublished = true;
+    const privateBody = "## Private next draft\n\nA secret draft detail.\n";
+    await checkpoint(privateBody, true);
+    assert.equal((await state(editor)).hasUnpublishedChanges, true);
+    assert.equal((await listed(editor)).hasUnpublishedChanges, true);
+    await viewerSeesPublishedOnly();
+    await checkpoint(`${publishedBody}\n\n`, false);
+    assert.equal((await state(editor)).hasUnpublishedChanges, false);
+    assert.equal((await listed(editor)).hasUnpublishedChanges, false);
+    const patch = async (fields: Record<string, string>) => {
+      const response = await editor.request(`${path}/metadata`, {
+        method: "PUT",
+        body: JSON.stringify(fields),
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      return await response.json();
+    };
+    const changedType = await patch({ type: "Runbook" });
+    assert.equal(changedType.hasUnpublishedChanges, true);
+    assert.equal(changedType.title, title);
+    assert.equal(changedType.intent, "working");
+    assert.equal(changedType.spaceId, "policies");
+    assert.equal(changedType.parentId, parent.id);
+    assert.equal((await listed(editor)).hasUnpublishedChanges, true);
+    await viewerSeesPublishedOnly();
+    const changedTitle = await patch({ title: "Renamed guide" });
+    assert.equal(changedTitle.hasUnpublishedChanges, true);
+    assert.equal(changedTitle.type, "Runbook");
+    assert.equal(changedTitle.intent, "working");
+    assert.equal(changedTitle.parentId, parent.id);
+    await viewerSeesPublishedOnly();
+    assert.equal((await publish()).publishedRevision, 2);
+    const unchangedTitle = await patch({ title: "Renamed guide" });
+    assert.equal(unchangedTitle.hasUnpublishedChanges, false);
+    await viewerSeesPublishedOnly();
+
+    await Promise.all([
+      patch({ title: "Concurrently renamed" }),
+      patch({ type: "Decision" }),
+    ]);
+    const concurrent = await state(editor);
+    assert.equal(concurrent.title, "Concurrently renamed");
+    assert.equal(concurrent.type, "Decision");
+    assert.equal(concurrent.intent, "working");
+    assert.equal(concurrent.parentId, parent.id);
+    assert.equal(concurrent.hasUnpublishedChanges, true);
+    await viewerSeesPublishedOnly();
+    assert.equal((await publish()).publishedRevision, 3);
+    await viewerSeesPublishedOnly();
+    const readsAfterRepublishing = revisionReads;
+    await listed(editor);
+    assert.equal(
+      revisionReads,
+      readsAfterRepublishing,
+      "the new publication also becomes cached",
+    );
+
+    await checkpoint("## Fourth publication\n", true);
+    failNextRevisionRead = true;
+    const failedPublicationRead = await editor.request(`${path}/publish`, {
+      method: "POST",
+    });
+    assert.equal(
+      failedPublicationRead.status,
+      503,
+      await failedPublicationRead.text(),
+    );
+    const readsAfterFailure = revisionReads;
+    const recoveredListings = await Promise.all([
+      listed(editor),
+      listed(editor),
+    ]);
+    assert.ok(
+      recoveredListings.every((item) => item.hasUnpublishedChanges === false),
+    );
+    assert.equal(
+      revisionReads,
+      readsAfterFailure + 1,
+      "a failed revision read is retried instead of remaining cached",
+    );
+    const fourth = await state(editor);
+    assert.equal(fourth.publishedRevision, 4);
+    assert.equal(fourth.published, "## Fourth publication\n");
+    assert.equal(fourth.hasUnpublishedChanges, false);
+    assert.equal(revisionReads, readsAfterFailure + 1);
+    malformedPublication = true;
+    await checkpoint("## Malformed publication metadata\n", true);
+    const corrupted = await editor.request(`${path}/publish`, {
+      method: "POST",
+    });
+    assert.equal(corrupted.status, 200, await corrupted.clone().text());
+    const corruptedEditor = await corrupted.json();
+    assert.equal(corruptedEditor.title, "Concurrently renamed");
+    assert.deepEqual(corruptedEditor.publishedMetadata, {
+      title: "Published document",
+      type: "Document",
+      intent: "canonical",
+    });
+    const genericViewer = await state(viewer);
+    assert.equal(genericViewer.title, "Published document");
+    assert.equal(genericViewer.type, "Document");
+    assert.equal((await listed(viewer)).title, "Published document");
+    assert.equal(
+      genericViewer.workTraces[0].conceptTitle,
+      "Published document",
+    );
+    const genericSearch = await viewer.request("/api/search");
+    const genericResults = await genericSearch.json();
+    assert.equal(
+      genericResults.results.find((item: { id: string }) =>
+        item.id === created.id
+      ).type,
+      "Document",
+    );
+    assert.ok(!genericResults.facets.types.includes("Decision"));
+  } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
+Deno.test("revision restore resets stale collaboration state and rejects old epochs", async () => {
+  const dataDir = await Deno.makeTempDir();
+  const fga = fakeOpenFga();
+  const objects = new Map<string, string>();
+  const options = {
+    dataDir,
+    authSecret: "a-secure-test-secret-with-at-least-32-characters",
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    automationIntervalMs: 0,
+    objectStore: {
+      put(key: string, markdown: string) {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get(key: string) {
+        return objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Object not found"));
+      },
+      remove(key: string) {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+  };
+  let app = await createCollabApp(options);
+  let cookie = "";
+  let delayedRequestEntered = () => {};
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    (request) => {
+      if (request.headers.get("x-test-delayed") === "true") {
+        delayedRequestEntered();
+      }
+      if (request.headers.get("upgrade") === "websocket") {
+        const headers = new Headers(request.headers);
+        headers.set("cookie", cookie);
+        // Keep Deno's upgrade metadata on the original request while supplying
+        // the test owner's cookie to the same session check used by browsers.
+        Object.defineProperty(request, "headers", { value: headers });
+      }
+      return app.fetch(request);
+    },
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const sockets: WebSocket[] = [];
+  const docs: Y.Doc[] = [];
+  let releaseDelayedBody = () => {};
+  const bounded = async <T>(promise: Promise<T>) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("Collaboration timed out")),
+        3000,
+      );
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      clearTimeout(timer!);
+    }
+  };
+  const connect = (id: string, epoch: number) => {
+    const doc = new Y.Doc();
+    docs.push(doc);
+    const socket = new WebSocket(
+      `${base.replace("http", "ws")}/collab?conceptId=${id}&epoch=${epoch}`,
+    );
+    sockets.push(socket);
+    socket.binaryType = "arraybuffer";
+    const synced = new Promise<void>((resolve) => {
+      socket.addEventListener("message", (event) => {
+        if (event.data === "synced") return resolve();
+        if (event.data instanceof ArrayBuffer) {
+          const packet = new Uint8Array(event.data);
+          if (packet[0] === 0) Y.applyUpdate(doc, packet.subarray(1));
+        }
+      });
+    });
+    const closed = new Promise<CloseEvent>((resolve) => {
+      socket.addEventListener("close", resolve, { once: true });
+    });
+    return { socket, doc, synced, closed };
+  };
+  try {
+    await owner.signUp("Owner", "restore-owner@example.com");
+    cookie = owner.cookie;
+    const setup = await owner.request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ name: "Restore test" }),
+    });
+    assert.equal(setup.status, 200, await setup.text());
+    const createdResponse = await owner.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Restored page",
+        type: "Guide",
+        spaceId: "policies",
+      }),
+    });
+    assert.equal(
+      createdResponse.status,
+      201,
+      await createdResponse.clone().text(),
+    );
+    const created = await createdResponse.json();
+    const path = `/api/concepts/${created.id}`;
+    const restoredMarkdown = "## Published checkpoint\n\nKeep this version.\n";
+    const checkpoint = await owner.request(path, {
+      method: "PUT",
+      body: restoredMarkdown,
+    });
+    assert.equal(checkpoint.status, 204, await checkpoint.text());
+    const published = await owner.request(`${path}/publish`, {
+      method: "POST",
+    });
+    assert.equal(published.status, 200, await published.text());
+    const old = connect(created.id, created.collabEpoch);
+    const observer = connect(created.id, created.collabEpoch);
+    await bounded(Promise.all([old.synced, observer.synced]));
+    const observed = new Promise<void>((resolve) => {
+      observer.doc.on("update", () => {
+        if (
+          observer.doc.getXmlFragment("prosemirror").toString().includes(
+            "Old draft",
+          )
+        ) resolve();
+      });
+    });
+    const paragraph = new Y.XmlElement("paragraph");
+    const text = new Y.XmlText();
+    text.insert(0, "Old draft that must never return");
+    paragraph.insert(0, [text]);
+    old.doc.getXmlFragment("prosemirror").insert(0, [paragraph]);
+    const update = Y.encodeStateAsUpdate(old.doc);
+    const packet = new Uint8Array(update.length + 1);
+    packet.set(update, 1);
+    old.socket.send(packet);
+    await bounded(observed);
+    const edited = await owner.request(path, {
+      method: "PUT",
+      body: "Old draft that must never return\n",
+    });
+    assert.equal(edited.status, 204, await edited.text());
+    let delayedReleased = false;
+    const delayedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseDelayedBody = () => {
+          if (delayedReleased) return;
+          delayedReleased = true;
+          controller.enqueue(new TextEncoder().encode("Late old draft\n"));
+          controller.close();
+        };
+      },
+      cancel() {
+        delayedReleased = true;
+      },
+    });
+    const entered = new Promise<void>((resolve) =>
+      delayedRequestEntered = resolve
+    );
+    const delayedSave = owner.request(path, {
+      method: "PUT",
+      headers: {
+        "x-okf-collab-epoch": String(created.collabEpoch),
+        "x-test-delayed": "true",
+      },
+      body: delayedBody,
+    });
+    await bounded(entered);
+    const restored = await owner.request(`${path}/revisions/1/restore`, {
+      method: "POST",
+    });
+    assert.equal(restored.status, 200, await restored.clone().text());
+    const result = await restored.json();
+    assert.equal(result.draft, restoredMarkdown);
+    assert.equal(
+      result.collabEpoch,
+      created.collabEpoch + 1,
+      "restoring a revision must invalidate old collaboration clients",
+    );
+    releaseDelayedBody();
+    const delayedResult = await bounded(delayedSave);
+    assert.equal(delayedResult.status, 409, await delayedResult.clone().text());
+    assert.match(await delayedResult.text(), /restored in another session/);
+    const staleCheckpoint = await owner.request(path, {
+      method: "PUT",
+      headers: { "x-okf-collab-epoch": String(created.collabEpoch) },
+      body: "Old epoch must not overwrite the restored checkpoint\n",
+    });
+    assert.equal(staleCheckpoint.status, 409, await staleCheckpoint.text());
+    assert.equal(
+      (await (await owner.request(path)).json()).draft,
+      restoredMarkdown,
+    );
+    const currentCheckpoint = await owner.request(path, {
+      method: "PUT",
+      headers: { "x-okf-collab-epoch": String(result.collabEpoch) },
+      body: restoredMarkdown,
+    });
+    assert.equal(currentCheckpoint.status, 204, await currentCheckpoint.text());
+    const legacyCheckpoint = await owner.request(path, {
+      method: "PUT",
+      body: restoredMarkdown,
+    });
+    assert.equal(legacyCheckpoint.status, 204, await legacyCheckpoint.text());
+    const preflight = await owner.request(path, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "x-okf-collab-epoch",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.match(
+      preflight.headers.get("access-control-allow-headers") ?? "",
+      /x-okf-collab-epoch/,
+    );
+    assert.equal((await bounded(old.closed)).code, 4009);
+    assert.equal((await bounded(observer.closed)).code, 4009);
+    const stale = connect(created.id, created.collabEpoch);
+    assert.equal((await bounded(stale.closed)).code, 4009);
+    const fresh = connect(created.id, result.collabEpoch);
+    await bounded(fresh.synced);
+    assert.equal(
+      fresh.doc.getXmlFragment("prosemirror").length,
+      0,
+      "fresh sync must allow the restored Markdown template instead of applying the old draft",
+    );
+    await assert.rejects(
+      Deno.stat(`${dataDir}/concepts/${created.id}.yjs`),
+      Deno.errors.NotFound,
+    );
+    fresh.socket.close();
+    await bounded(fresh.closed);
+    await app.close();
+    app = await createCollabApp(options);
+    const reopened = connect(created.id, result.collabEpoch);
+    await bounded(reopened.synced);
+    assert.equal(
+      reopened.doc.getXmlFragment("prosemirror").length,
+      0,
+      "the old Yjs draft must also stay gone after server restart",
+    );
+    assert.equal(
+      (await (await owner.request(path)).json()).draft,
+      restoredMarkdown,
+    );
+    reopened.socket.close();
+    await bounded(reopened.closed);
+  } finally {
+    releaseDelayedBody();
+    for (const socket of sockets) {
+      if (
+        socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING
+      ) socket.close();
+    }
+    for (const doc of docs) doc.destroy();
     await server.shutdown();
     await app.close();
     await fga.server.shutdown();

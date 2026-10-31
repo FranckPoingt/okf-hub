@@ -1,3 +1,9 @@
+import type {
+  Freshness,
+  GovernanceSummary,
+  KnowledgePerson,
+} from "./governance.ts";
+
 export type Invitation = {
   invitationId: string;
   email: string;
@@ -65,7 +71,7 @@ export type WorkTrace = {
   foldedAt: string | null;
   foldedKnowledge: string | null;
 };
-export type Concept = {
+export type Concept = GovernanceSummary & {
   sources?: Array<string | Record<string, unknown>>;
   id: string;
   spaceId: string;
@@ -78,6 +84,10 @@ export type Concept = {
   intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
+  hasUnpublishedChanges: boolean;
+  publishedMetadata?:
+    | { title: string; type: string; intent?: DocumentIntent }
+    | null;
   lockedAt: string | null;
   lockedBy: string | null;
   updatedAt: string;
@@ -220,9 +230,18 @@ export type SearchRelationship = {
   path?: string;
   trust: Trust;
   trustReason?: string;
+  // Advisory review state; independent of dependency/source `trust`.
+  freshness?: Freshness;
   sourceLabel: string;
 };
 export type SearchResult = SearchRelationship & {
+  ownerUserId?: string | null;
+  reviewDueDate?: string | null;
+  reviewedRevision?: number | null;
+  reviewedAt?: string | null;
+  reviewer?: KnowledgePerson | null;
+  publishedRevision?: number | null;
+  hasUnpublishedChanges?: boolean;
   type: string;
   tags: string[];
   owner: string;

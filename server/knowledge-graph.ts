@@ -1,4 +1,5 @@
 import { parse } from "@std/yaml";
+import type { Freshness } from "../src/lib/governance.ts";
 import {
   type LinkDocument,
   resolveKnowledgeLink,
@@ -10,6 +11,7 @@ export type GraphDocument = LinkDocument & {
   sourceLabel: string;
   trust: "current" | "stale" | "sync_failed";
   trustReason?: string;
+  freshness?: Freshness;
   stableId?: string;
   body?: string;
   linkHrefs: string[];
@@ -79,6 +81,7 @@ function relationship(item: GraphDocument) {
     path: item.path,
     trust: item.trust,
     trustReason: item.trustReason,
+    freshness: item.freshness,
     sourceLabel: item.sourceLabel,
   };
 }

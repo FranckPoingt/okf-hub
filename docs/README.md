@@ -41,8 +41,8 @@ product overview and roadmap live in [README.md](../README.md) and
 ## Navigation
 
 - **Home**: quick overview of recent documents, drafts, and source health.
-- **Search**: permission-aware search with filters for type, tag, and archived
-  content.
+- **Search**: permission-aware search with filters for type, tag, ownership,
+  review status, and archived content.
 - **Spaces**: grouped knowledge with inherited access rules.
 - **Sources**: connected imports, sync status, schedules, and source issues.
 - **Workspace settings**: workspace identity, spaces, members, templates,
@@ -75,6 +75,52 @@ later.
 Published revisions are what readers see. Drafts stay editable until you publish
 the next revision.
 
+### Ownership and review
+
+Each hub-native document can have a responsible workspace editor and an optional
+next review date. New documents belong to their creator; existing documents stay
+unassigned until an editor chooses an owner. Assigning responsibility does not
+grant access to the document.
+
+Open the document's ownership and review settings to assign an owner, set a
+calendar deadline, or clear it. These settings are shared immediately with
+people who can read the document and remain separate from unpublished writing.
+
+To record a review, open **Published** and choose **Mark revision N reviewed**.
+The hub records who checked that exact revision and when. Choose today or a
+future review date or clear an expired deadline before marking the revision
+reviewed. Reviews are advisory and do not block publication or publish draft
+changes.
+
+A reviewed revision stays reviewed while its draft changes. Publishing a new
+revision requires another review. A review deadline lasts through its UTC
+calendar day; the following day it becomes overdue. With no deadline, the hub
+shows the recorded review date without inventing an expiry.
+
+**Home → Needs attention** collects maintained, published documents that need an
+owner or review. Search also exposes ownership and review filters. Editors see a
+separate **Draft changes** label when search shows unpublished writing beside
+the review status of its publication. Drafts and source connection failures
+remain separately identifiable.
+
+Review status and trust are separate signals. The review badge (current, due,
+overdue, needs review) comes from the ownership and review settings above. The
+trust badge (**stale**, **sync failed**) comes from sources and dependencies,
+described in [Freshness and ownership](#freshness-and-ownership). A reviewed
+document still shows **stale** when a document in its `sources:` goes stale, and
+a stale reason never names a source you cannot view.
+
+Which owner is shown:
+
+- **Hub-native documents**: the responsible member chosen in the hub. This
+  setting is the only owner the hub uses for search, filters, and **Needs
+  attention**. An `owner:` key in the document's frontmatter is kept unchanged
+  through drafts, publishing, and export as an OKF extension field. The hub does
+  not read it as the responsible member.
+- **Imported concepts**: the source's own `owner:` frontmatter, or, if it has
+  none, the owners that `CODEOWNERS` gives for the file (see below). Imported
+  concepts have no responsible member in the hub.
+
 ### Source-owned knowledge
 
 Imported knowledge stays read-only in the hub. Current source types are:
@@ -85,7 +131,10 @@ Imported knowledge stays read-only in the hub. Current source types are:
 
 Imported content keeps provenance, revision history, and sync status. If a
 source changes or fails, the hub keeps the last healthy import and shows the
-source issue instead of silently overwriting local knowledge.
+source issue instead of silently overwriting local knowledge. **Snapshot
+updated** shows when imported content changed; **Source checked** shows the last
+successful source check. A successful source check is separate from a human
+review.
 
 ### Company relationships and disagreements
 

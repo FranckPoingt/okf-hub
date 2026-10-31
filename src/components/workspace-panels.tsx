@@ -6,6 +6,11 @@ import type {
   SearchResponse,
   WorkTrace,
 } from "../lib/models.ts";
+import {
+  formatReviewDate,
+  FreshnessBadge,
+  freshnessExplanation,
+} from "./knowledge-freshness.tsx";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { TrustBadge } from "./trust-badge.tsx";
@@ -30,6 +35,13 @@ import {
 import { Textarea } from "./ui/textarea.tsx";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 
+const attentionFilterLabels: Record<string, string> = {
+  "": "Any ownership or review status",
+  unowned: "Unassigned owner",
+  overdue: "Review overdue",
+  unreviewed: "Needs review",
+};
+
 export function SearchPanel(
   { onOpenHub, onOpenImported, onAsk }: {
     onAsk: () => void;
@@ -43,6 +55,7 @@ export function SearchPanel(
   const [query, setQuery] = useState("");
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
+  const [attention, setAttention] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [conflictsOnly, setConflictsOnly] = useState(false);
@@ -71,6 +84,7 @@ export function SearchPanel(
     if (query.trim()) params.set("q", query.trim());
     if (type) params.set("type", type);
     if (tag) params.set("tag", tag);
+    if (attention) params.set("attention", attention);
     if (includeArchived) params.set("includeArchived", "true");
     void load(params);
   };
@@ -83,7 +97,7 @@ export function SearchPanel(
       !conflictsOnly || (item.canReviewConflicts && item.conflicts.length > 0)
     ) ?? [];
   const activeFilters = Number(Boolean(type)) + Number(Boolean(tag)) +
-    Number(includeArchived);
+    Number(includeArchived) + Number(Boolean(attention));
   const open = (item: SearchRelationship) => {
     if (item.kind === "hub-native") return onOpenHub(item.id);
     if (item.sourceId !== "hub" && item.path) {
@@ -106,7 +120,11 @@ export function SearchPanel(
               size="xs"
               key={item.id}
               type="button"
-              title={item.sourceLabel}
+              title={item.kind === "hub-native" && item.freshness
+                ? `${item.sourceLabel} · ${
+                  freshnessExplanation(item.freshness)
+                }`
+                : item.sourceLabel}
               onClick={() => open(item)}
             >
               {item.title}
@@ -183,7 +201,7 @@ export function SearchPanel(
                     setType(value === "all" ? "" : value ?? "")}
                 >
                   <SelectTrigger id="search-type" className="w-full">
-                    <SelectValue />
+                    <SelectValue>{type || "All types"}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All types</SelectItem>
@@ -201,7 +219,7 @@ export function SearchPanel(
                     setTag(value === "all" ? "" : value ?? "")}
                 >
                   <SelectTrigger id="search-tag" className="w-full">
-                    <SelectValue />
+                    <SelectValue>{tag || "All tags"}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All tags</SelectItem>
@@ -211,6 +229,32 @@ export function SearchPanel(
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="search-attention">Needs attention</Label>
+              <Select
+                value={attention || "all"}
+                onValueChange={(value) =>
+                  setAttention(value === "all" ? "" : value ?? "")}
+              >
+                <SelectTrigger id="search-attention" className="w-full">
+                  <SelectValue>{attentionFilterLabels[attention]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    {attentionFilterLabels[""]}
+                  </SelectItem>
+                  <SelectItem value="unowned">Unassigned owner</SelectItem>
+                  <SelectItem value="overdue">Review overdue</SelectItem>
+                  <SelectItem value="unreviewed">Needs review</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Ownership and review filters apply to active published workspace
+                knowledge.
+                {attention === "unreviewed" &&
+                  " Needs review finds published revisions that haven’t been reviewed."}
+              </p>
             </div>
             {result?.canIncludeArchived && (
               <Label className="rounded-lg border px-3 py-2.5">
@@ -231,6 +275,7 @@ export function SearchPanel(
                 onClick={() => {
                   setType("");
                   setTag("");
+                  setAttention("");
                   setIncludeArchived(false);
                 }}
               >
@@ -278,7 +323,7 @@ export function SearchPanel(
                   >
                     {item.title}
                   </Button>
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <div className="flex max-w-[55%] shrink-0 flex-wrap justify-end gap-1.5">
                     <Badge variant="outline">{item.type}</Badge>
                     {item.conflicts.length > 0 && (
                       <Badge variant="destructive">Potential conflict</Badge>
@@ -287,6 +332,22 @@ export function SearchPanel(
                       trust={item.trust}
                       reason={item.trustReason}
                     />
+                    {item.kind === "hub-native" &&
+                      Boolean(item.publishedRevision) &&
+                      item.hasUnpublishedChanges === true && (
+                      <Badge
+                        variant="outline"
+                        title="Editors see unpublished writing. Review status refers to the published revision."
+                      >
+                        Draft changes
+                      </Badge>
+                    )}
+                    {item.kind === "hub-native" && item.freshness && (
+                      <FreshnessBadge
+                        freshness={item.freshness}
+                        reviewDueDate={item.reviewDueDate}
+                      />
+                    )}
                     {item.status === "archived" && (
                       <Badge variant="secondary">Archived</Badge>
                     )}
@@ -297,7 +358,7 @@ export function SearchPanel(
                     {item.snippet}
                   </p>
                 )}
-                <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                   <span>
                     {item.kind === "hub-native" ? "Workspace" : "Imported"}
                   </span>
@@ -306,7 +367,31 @@ export function SearchPanel(
                     {item.sourceLabel}
                   </span>
                   <span aria-hidden="true">·</span>
-                  <span className="shrink-0">{item.owner}</span>
+                  <span className="min-w-0 break-words">
+                    {item.kind === "hub-native"
+                      ? `Owner: ${item.owner || "Unassigned"}`
+                      : item.owner}
+                  </span>
+                  {item.kind === "hub-native" && item.reviewDueDate && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        Review due {formatReviewDate(item.reviewDueDate)}
+                      </span>
+                    </>
+                  )}
+                  {item.kind === "imported" && item.importedAt && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <time
+                        dateTime={item.importedAt}
+                        title={new Date(item.importedAt).toLocaleString()}
+                      >
+                        Snapshot updated{" "}
+                        {new Date(item.importedAt).toLocaleDateString()}
+                      </time>
+                    </>
+                  )}
                 </div>
               </div>
               {detailCount > 0 && (

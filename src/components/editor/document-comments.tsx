@@ -109,47 +109,62 @@ export function DocumentComments({
 
   const createThread = async (event: FormEvent) => {
     event.preventDefault();
-    if (!body.trim()) return;
+    if (!body.trim() || busy) return;
     setBusy(true);
     setError("");
-    const response = await api(`${conceptPath(conceptId)}/comments`, {
-      method: "POST",
-      body: JSON.stringify({
-        body,
-        anchorText: anchor?.text,
-        anchorStart: anchor?.from,
-        anchorEnd: anchor?.to,
-        revisionNumber,
-      }),
-    });
-    const result = await response.json() as { error?: string };
-    setBusy(false);
-    if (!response.ok) return setError(result.error ?? "Comment failed");
-    setBody("");
-    onAnchorChange(null);
-    announceChange();
-    if (status === "open") await load();
-    else setStatus("open");
-    await refreshCount();
+    try {
+      const response = await api(`${conceptPath(conceptId)}/comments`, {
+        method: "POST",
+        body: JSON.stringify({
+          body,
+          anchorText: anchor?.text,
+          anchorStart: anchor?.from,
+          anchorEnd: anchor?.to,
+          revisionNumber,
+        }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Comment failed");
+      setBody("");
+      onAnchorChange(null);
+      announceChange();
+      if (status === "open") await load();
+      else setStatus("open");
+      await refreshCount();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Comment failed. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const reply = async (threadId: string) => {
     const message = replies[threadId]?.trim();
-    if (!message) return;
+    if (!message || busy) return;
     setBusy(true);
     setError("");
-    const response = await api(`/api/comment-threads/${threadId}/replies`, {
-      method: "POST",
-      body: JSON.stringify({ body: message }),
-    });
-    const result = await response.json() as { error?: string };
-    setBusy(false);
-    if (!response.ok) return setError(result.error ?? "Reply failed");
-    setReplies((current) => ({ ...current, [threadId]: "" }));
-    await load();
+    try {
+      const response = await api(`/api/comment-threads/${threadId}/replies`, {
+        method: "POST",
+        body: JSON.stringify({ body: message }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Reply failed");
+      setReplies((current) => ({ ...current, [threadId]: "" }));
+      await load();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Reply failed. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const setResolved = async (threadId: string, resolved: boolean) => {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -259,14 +274,10 @@ export function DocumentComments({
                 }`}
               >
                 {thread.anchorText && (
-                  <button
-                    type="button"
-                    className="mb-3 flex w-full gap-2 rounded-md bg-muted/55 p-2 text-left text-xs text-muted-foreground hover:bg-muted"
-                    title="Quoted selection"
-                  >
+                  <blockquote className="mb-3 flex w-full gap-2 rounded-md bg-muted/55 p-2 text-left text-xs text-muted-foreground">
                     <Quote className="mt-0.5 size-3 shrink-0" />
                     <span className="line-clamp-2">{thread.anchorText}</span>
-                  </button>
+                  </blockquote>
                 )}
                 <div className="space-y-3">
                   {thread.comments.map((comment) => (

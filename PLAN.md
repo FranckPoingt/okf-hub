@@ -234,8 +234,9 @@ verification. `AFK` means it can be implemented without a product decision;
 
 - **Type:** AFK
 - **Blocked by:** KH-05
-- **Status:** Deferred; review dates and approval gates are not needed before
-  source import.
+- **Status:** Ownership, review dates, advisory revision reviews, and freshness
+  indicators are implemented for review. Publication approval gates remain
+  deferred until a concrete team workflow needs them.
 - **What to build:** Optional approval requests, concept owners, review due
   dates, source provenance, and stale indicators.
 - **Acceptance criteria:**
@@ -243,6 +244,8 @@ verification. `AFK` means it can be implemented without a product decision;
   - [ ] Review decisions and comments are recorded against a revision.
   - [x] A concept can become stale without changing its published content state.
   - [x] A reviewer can see why a concept is stale or trustworthy.
+  - [x] Editors can assign a responsible member and an optional review deadline.
+  - [x] Advisory reviews record the actor, time, and exact published revision.
 
 ### Epic 3 — Connected sources and unified discovery
 
@@ -522,9 +525,82 @@ verification. `AFK` means it can be implemented without a product decision;
 
 ## Development order
 
-KH-02 through KH-10 and KH-12 through KH-21 are delivered. Enterprise identity
-(KH-11) remains deferred until a deployment needs SSO or directory sync. The
-first Prismatic-derived source slice adds read-only Notion pages without the
-Prismatic runtime. A shared connector catalog now drives enablement, setup
-fields, and import/embed capabilities; arbitrary runtime plugins, OAuth, and
-additional workspaces remain deferred until needed.
+KH-02 through KH-05, KH-07 through KH-10, and KH-12 through KH-21 have
+implementation foundations. KH-06 ownership and freshness indicators are
+implemented for review; publication approval gates remain deferred. Enterprise
+identity (KH-11) remains deferred until a deployment needs SSO or directory
+sync. The first Prismatic-derived source slice adds read-only Notion pages
+without the Prismatic runtime. A shared connector catalog now drives enablement,
+setup fields, and import/embed capabilities; arbitrary runtime plugins, OAuth,
+and additional workspaces remain deferred until needed.
+
+## Product UX improvement pass
+
+The next shipping priority is to make writing, reuse, and explanation dependable
+before expanding the agent's scope.
+
+Implemented for review:
+
+- Documents save checkpoints in order, retain failed saves for retry, and flush
+  the live editor and focused title before navigation or publication. Initial
+  collaboration loading is read-only so it cannot overwrite early typing.
+  Revision restore replaces collaborative state and rejects stale checkpoints.
+- Draft and Published are explicit. Authors can review the body diff before
+  publishing; Home includes changes to documents that were already published.
+- Authors can save a normal document as a template. Templates use the normal
+  writing surface in a full-page workbench, with edit, duplicate, use, sample
+  variable previews, and portable Markdown download links. Unfinished template
+  work survives app navigation in memory; save it before reloading or signing
+  out.
+- Ask OKF renders safe Markdown, explains its current-document scope and
+  version, offers suggested questions, and preserves questions after Stop or
+  failure. Conversations are separate per document and draft/published surface
+  in memory.
+- Metadata patches preserve unrelated concurrent edits. Template edits remain
+  authorized and built-in templates remain immutable. Document listings cache
+  immutable publication reads to avoid repeated storage latency. Readers and
+  published Ask answers use the published title and type, keeping draft changes
+  private until publication.
+
+Validation for this pass: 38 automated tests plus typecheck, lint, and build;
+local browser checks covered normal document creation, title saving on
+navigation, saving as a template, variable preview and document creation,
+unfinished template navigation, immediate publication review, save interruption
+and retry, revision restore, published title isolation, and Ask
+Stop/failure/retry. Reader privacy is covered by permission regression tests; a
+separate reader browser session was not validated. Browser AI responses were
+simulated; no live provider or production deployment was validated.
+
+The ownership and freshness pass below extends KH-06 with document
+responsibility and revision reviews. Approval gates and wider agent retrieval
+should follow a concrete team workflow; the current Ask surface answers from one
+document.
+
+## Ownership and freshness pass
+
+Implemented for review:
+
+- Responsible editors and optional calendar review deadlines are shared
+  metadata; assigning responsibility grants no additional permissions.
+- A human review records the exact published revision, reviewer, and time.
+  Reviewing does not publish or change writing. Draft edits preserve a review; a
+  new publication needs another review. Expired deadlines need an explicit new
+  date or clearing before a review can be recorded.
+- Readers can see why published knowledge needs review, is reviewed, is due
+  today, or is overdue. Calendar deadlines expire after their UTC day.
+- Home groups maintained published documents needing an owner or review; search
+  supports ownership and review filters, with unpublished changes labelled
+  separately for editors. Imported source check times remain separate from
+  content snapshot times and human reviews.
+
+Approval requests, required publication reviews, and automated reminders remain
+outside this pass.
+
+Validation: 43 automated tests plus typecheck, lint, formatting, and build.
+Isolated browser checks covered creator ownership, eligible owner assignment,
+review deadlines, recording an exact publication review, overdue correction,
+retained reviews during draft edits, a new publication needing review, revision
+history annotations, metadata save failure/retry and navigation protection,
+delayed title responses preserving newer ownership, discovery filters, and the
+390px layout. Reader privacy is covered by permission regression tests; a
+separate reader browser session and production deployment were not validated.
