@@ -164,12 +164,15 @@ export function DeveloperApiDocumentation() {
           <KeyRound /> {managingKeys ? "API documentation" : "Manage API keys"}
         </Button>
       </header>
-      {managingKeys ? <DeveloperSettings /> : <ApiDocumentation />}
+      {managingKeys ? <DeveloperSettings embedded /> : <ApiDocumentation />}
     </section>
   );
 }
 
-export function DeveloperSettings() {
+// `embedded` leaves the heading to a parent page that already has one.
+export function DeveloperSettings(
+  { embedded = false }: { embedded?: boolean },
+) {
   const [actions, setActions] = useState<Action[]>([]);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -260,22 +263,24 @@ export function DeveloperSettings() {
 
   return (
     <div className="settings-section developer-settings">
-      <div className="settings-section-heading">
-        <div>
-          <p className="eyebrow">Developer</p>
-          <h2>Developer API</h2>
-          <p>
-            Build integrations and agent workflows on the same
-            permission-filtered operations used by OKF Hub.
-          </p>
+      {!embedded && (
+        <div className="settings-section-heading">
+          <div>
+            <p className="eyebrow">Developer</p>
+            <h2>Developer API</h2>
+            <p>
+              Build integrations and agent workflows on the same
+              permission-filtered operations used by OKF Hub.
+            </p>
+          </div>
+          <a
+            href="/developer/api"
+            className={buttonVariants({ variant: "outline" })}
+          >
+            <BookOpen /> API documentation
+          </a>
         </div>
-        <a
-          href="/developer/api"
-          className={buttonVariants({ variant: "outline" })}
-        >
-          <BookOpen /> API documentation
-        </a>
-      </div>
+      )}
 
       <Card>
         <CardHeader>
