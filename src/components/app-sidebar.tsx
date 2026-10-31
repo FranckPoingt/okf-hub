@@ -11,19 +11,27 @@ import {
   Home,
   Lock,
   LogOut,
+  Monitor,
+  Moon,
   MoreHorizontal,
   Plus,
   Search,
   Settings,
+  Sun,
   Unlock,
 } from "lucide-react";
 import { type DragEvent, useState } from "react";
 import { Avatar, AvatarFallback } from "./ui/avatar.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
+import { setTheme, type ThemeChoice, useTheme } from "../lib/theme.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
@@ -161,6 +169,7 @@ export function AppSidebar({
   onSignOut,
 }: AppSidebarProps) {
   const { state, isMobile } = useSidebar();
+  const theme = useTheme();
   const iconOnly = !isMobile && state === "collapsed";
   const [collapsedSpaces, setCollapsedSpaces] = useState<Set<string>>(
     () => new Set(),
@@ -810,6 +819,27 @@ export function AppSidebar({
                   <Code2 />
                   Developer settings
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={theme.choice}
+                    onValueChange={(value) => setTheme(value as ThemeChoice)}
+                  >
+                    <DropdownMenuRadioItem value="light">
+                      <Sun />
+                      Light
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="dark">
+                      <Moon />
+                      Dark
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="system">
+                      <Monitor />
+                      System
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onSignOut}>
                   <LogOut />

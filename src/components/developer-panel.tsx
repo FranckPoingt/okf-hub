@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { api, SERVICE } from "../lib/api.ts";
+import { useTheme } from "../lib/theme.ts";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -101,6 +102,7 @@ body.dark-mode {
 `;
 
 function ApiDocumentation() {
+  const { resolved } = useTheme();
   return (
     <div className="scalar-reference">
       <Suspense
@@ -122,7 +124,7 @@ function ApiDocumentation() {
             mcp: { disabled: true },
             hideClientButton: true,
             hideDarkModeToggle: true,
-            forceDarkModeState: "light",
+            forceDarkModeState: resolved,
             documentDownloadType: "direct",
             defaultOpenFirstTag: true,
             hideSearch: true,
