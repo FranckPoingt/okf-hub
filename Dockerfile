@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY deno.json deno.lock package.json ./
 RUN deno ci --prod --skip-types
 COPY server ./server
-COPY src/lib/connectors.ts ./src/lib/connectors.ts
+COPY src/lib ./src/lib
+COPY src/routes.ts ./src/routes.ts
 RUN deno cache --no-check server/main.ts server/admin.ts
 COPY --from=build /app/dist ./dist
 RUN mkdir /data && chown -R deno:deno /app /data
