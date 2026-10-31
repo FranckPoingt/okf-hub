@@ -20,6 +20,11 @@
 
 ### Behavior changes
 
+- The lexical **Potential definition conflict** heuristic is removed, along with
+  its badges, the Search filter, and the `conflicts` and `canReviewConflicts`
+  fields in search results and `knowledge.relationships`. **Also defined in**
+  grouping is unchanged; use **Compare definitions** (AI) to judge disagreement
+  from that group.
 - The UI says Artifact wherever it used to say App. API routes, action names
   (`apps.*`) and MCP tools are unchanged.
 - Stale and review-due documents share one **Needs attention** badge with all
@@ -94,9 +99,8 @@
   title connect definitions across Git, shared storage, Notion, and native
   documents, with **Also defined in** and backlinks limited to what the viewer
   can access.
-- A lexical check flags **Potential definition conflicts**; editors can list
-  them workspace-wide from Search. With an AI provider, **Compare definitions**
-  adds an advisory explanation. Nothing is merged or rewritten.
+- With an AI provider, **Compare definitions** adds an advisory explanation of
+  how two grouped definitions differ. Nothing is merged or rewritten.
 - Ask OKF can answer from relevant accessible knowledge across sources
   (workspace scope) as well as from one document. Providers are configurable
   through Ax (`OKF_AI_PROVIDER`, `OKF_AI_MODEL`, `OKF_AI_API_KEY`,

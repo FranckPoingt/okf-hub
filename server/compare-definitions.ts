@@ -3,14 +3,18 @@ import { buildKnowledgeGraph, type GraphDocument } from "./knowledge-graph.ts";
 
 export const MAX_DEFINITION_CHARS = 12_000;
 
+type Visible = GraphDocument & { canEdit: boolean };
+
 // loadVisible must re-check view/publication visibility on every request.
-export function createDefinitionComparison({ responder, loadVisible, audit }: {
-  responder: AIResponder | null;
-  loadVisible: (
-    userId: string,
-  ) => Promise<(GraphDocument & { canReviewConflicts: boolean })[]>;
-  audit: (userId: string, event: string, object: string) => void;
-}) {
+export function createDefinitionComparison(
+  { responder, loadVisible, loadBody, audit }: {
+    responder: AIResponder | null;
+    loadVisible: (userId: string) => Promise<Visible[]>;
+    // Only the two compared definitions are read, never the whole workspace.
+    loadBody: (item: Visible) => Promise<string | undefined>;
+    audit: (userId: string, event: string, object: string) => void;
+  },
+) {
   return async (request: Request, userId: string) => {
     if (!responder) {
       return Response.json({ error: "AI unavailable" }, { status: 409 });
@@ -34,7 +38,7 @@ export function createDefinitionComparison({ responder, loadVisible, audit }: {
     if (!left || !right) {
       return Response.json({ error: "Not found" }, { status: 404 });
     }
-    if (!left.canReviewConflicts) {
+    if (!left.canEdit) {
       return Response.json({ error: "Editor access required" }, {
         status: 403,
       });
@@ -48,13 +52,17 @@ export function createDefinitionComparison({ responder, loadVisible, audit }: {
         status: 400,
       });
     }
-    if (left.body === undefined || right.body === undefined) {
+    const [leftBody, rightBody] = await Promise.all([
+      loadBody(left),
+      loadBody(right),
+    ]);
+    if (leftBody === undefined || rightBody === undefined) {
       return Response.json({ error: "Definition unavailable" }, {
         status: 409,
       });
     }
-    const truncated = left.body.length > MAX_DEFINITION_CHARS ||
-      right.body.length > MAX_DEFINITION_CHARS;
+    const truncated = leftBody.length > MAX_DEFINITION_CHARS ||
+      rightBody.length > MAX_DEFINITION_CHARS;
     try {
       const answer = await responder({
         task: "compare-definitions",
@@ -67,10 +75,13 @@ export function createDefinitionComparison({ responder, loadVisible, audit }: {
           title: "Definition comparison",
           space: "Visible knowledge",
           state: "source",
-          markdown: JSON.stringify([left, right].map((item) => ({
+          markdown: JSON.stringify([
+            { item: left, body: leftBody },
+            { item: right, body: rightBody },
+          ].map(({ item, body }) => ({
             title: item.title.slice(0, 200),
             source: item.sourceLabel.slice(0, 200),
-            definition: item.body!.slice(0, MAX_DEFINITION_CHARS),
+            definition: body.slice(0, MAX_DEFINITION_CHARS),
           }))),
         },
       });

@@ -89,24 +89,11 @@ export function KnowledgeDocument({
             {current.error}
           </p>
         )}
-        {Boolean(current?.result?.conflicts.length) && (
-          <div
-            className="rounded-md border border-amber-500 p-3 text-sm"
-            role="status"
-          >
-            <strong>Potential definition conflict</strong>
-            <p>
-              Definitions differ across sources. Review the originals before
-              deciding which applies.
-            </p>
-            {relationships("Compare with", current?.result?.conflicts)}
-            <CompareDefinitions
-              current={current?.result}
-              onOpenSettings={onOpenSettings}
-            />
-          </div>
-        )}
         {relationships("Also defined in", current?.result?.alsoDefinedIn)}
+        <CompareDefinitions
+          current={current?.result}
+          onOpenSettings={onOpenSettings}
+        />
         {Boolean(
           current?.result &&
             (current.result.links.length || current.result.backlinks.length),

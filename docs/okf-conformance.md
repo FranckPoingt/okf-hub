@@ -143,15 +143,9 @@ rules are combined transitively; punctuation remains significant. “Also define
 in” lists definitions in other accessible sources, preserving their provenance.
 There is no automatic merge or chosen canonical winner.
 
-Potential conflicts use a lexical heuristic: remove a leading level-one title,
-normalize case/Unicode, tokenize words and numbers, then compare multisets of
-adjacent word pairs with Dice distance (`1 - 2 * overlap / total pairs`). A
-distance **strictly greater than 0.35** flags a potential conflict. Empty
-definitions compare equal to each other and different from non-empty
-definitions. Unavailable bodies are not compared. Formatting-only differences
-are ignored, but paraphrases can produce false positives and small semantic
-changes can be missed. The signal is a review prompt, not a semantic or factual
-verdict. No AI provider is required, and no source content is edited. Readers
-see published native content; editors' graph uses the drafts they may edit.
-Grouping, comparison, backlinks, and counts all run on the viewer's accessible
-inventory, before search text/type/tag filters.
+The Hub does not detect disagreement itself; grouping only says two definitions
+describe the same entity. Editors can ask an AI provider to compare a pair on
+demand (see [Compare definitions](README.md#compare-definitions)). No source
+content is edited. Readers see published native content; editors' graph uses the
+drafts they may edit. Grouping, comparison, backlinks, and counts all run on the
+viewer's accessible inventory, before search text/type/tag filters.

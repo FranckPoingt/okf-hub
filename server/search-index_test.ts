@@ -121,13 +121,13 @@ Deno.test("startup indexes existing imports once", () => {
 Deno.test("users match the state they may see", () => {
   assert.equal(searchState({ kind: "imported" }), "source");
   assert.equal(
-    searchState({ kind: "hub-native", canReviewConflicts: false }),
+    searchState({ kind: "hub-native", canEdit: false }),
     "published",
   );
   assert.equal(
     searchState({
       kind: "hub-native",
-      canReviewConflicts: true,
+      canEdit: true,
       status: "active",
       publishedRevision: 2,
     }),
@@ -136,7 +136,7 @@ Deno.test("users match the state they may see", () => {
   assert.equal(
     searchState({
       kind: "hub-native",
-      canReviewConflicts: true,
+      canEdit: true,
       status: "archived",
       publishedRevision: 2,
     }),

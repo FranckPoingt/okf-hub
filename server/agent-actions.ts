@@ -129,7 +129,7 @@ export function agentActions(deps: {
       tag: "Knowledge",
       title: "Get knowledge relationships",
       description:
-        "Read links, backlinks, shared definitions, conflicts, trust and freshness from the caller's visible knowledge graph.",
+        "Read links, backlinks, shared definitions, trust and freshness from the caller's visible knowledge graph.",
       inputSchema: objectSchema({ id: text }),
       outputSchema: {
         type: "object",
@@ -137,7 +137,6 @@ export function agentActions(deps: {
           links: { type: "array" },
           backlinks: { type: "array" },
           alsoDefinedIn: { type: "array" },
-          conflicts: { type: "array" },
           trust: text,
           trustReason: text,
           freshness: { type: "object" },

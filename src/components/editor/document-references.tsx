@@ -106,7 +106,6 @@ export function DocumentReferences({
           {relationships("Links to", current?.links)}
           {relationships("Linked from", current?.backlinks)}
           {relationships("Also defined in", current?.alsoDefinedIn)}
-          {relationships("Potential definition conflict", current?.conflicts)}
           <CompareDefinitions
             current={current}
             onOpenSettings={onOpenSettings}

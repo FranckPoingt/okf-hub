@@ -4000,8 +4000,13 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
   const objects = new Map<string, string>();
   const definition =
     "An active customer placed an order in the last thirty days.";
+  const compared: string[] = [];
   const app = await createCollabApp({
     dataDir,
+    aiResponder: (request) => {
+      compared.push(request.document.markdown);
+      return Promise.resolve("- They differ.");
+    },
     authSecret: "company-graph-test-secret-at-least-32-characters",
     openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
     automationIntervalMs: 0,
@@ -4146,12 +4151,8 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
     );
     assert.equal(hub.linkTargets["okf://repository/secret.md"], undefined);
     assert.equal(hub.linkTargets["okf://repository/missing.md"], undefined);
-    assert.ok(
-      hub.conflicts.some((item: { id: string }) =>
-        item.id === "shared/customer"
-      ),
-    );
-    assert.equal(hub.canReviewConflicts, false);
+    assert.equal(hub.canEdit, undefined);
+    assert.equal(hub.canCompareDefinitions, false);
     assert.equal(JSON.stringify(visible).includes("Hidden definition"), false);
     assert.equal(JSON.stringify(visible).includes('"body"'), false);
     assert.equal(JSON.stringify(visible).includes('"stableId"'), false);
@@ -4159,17 +4160,28 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
     const editorHub = editorView.results.find((item: { id: string }) =>
       item.id === "active-customer"
     );
-    assert.equal(editorHub.canReviewConflicts, true);
-    // Without a provider the editor still sees Compare, disabled.
     assert.equal(editorHub.canCompareDefinitions, true);
-    assert.equal(editorHub.aiEnabled, false);
+    assert.equal(editorHub.aiEnabled, true);
+    const compare = (client: Client, rightId: string) =>
+      client.request("/api/knowledge/compare", {
+        method: "POST",
+        body: JSON.stringify({ leftId: "active-customer", rightId }),
+      });
+    assert.equal((await compare(viewer, "shared/customer")).status, 403);
+    assert.equal((await compare(owner, "repository/secret")).status, 200);
+    assert.equal((await compare(owner, "shared/customer")).status, 200);
+    const evidence = JSON.parse(compared.at(-1)!) as {
+      definition: string;
+    }[];
+    assert.match(evidence[0].definition, /placed an order/);
+    assert.match(evidence[1].definition, /even without purchases/);
     assert.ok(
       editorHub.backlinks.some((item: { id: string }) =>
         item.id === "repository/secret"
       ),
     );
     assert.ok(
-      editorHub.conflicts.some((item: { id: string }) =>
+      editorHub.alsoDefinedIn.some((item: { id: string }) =>
         item.id === "repository/secret"
       ),
     );
@@ -4183,7 +4195,7 @@ Deno.test("builds a permission-filtered company graph across published hub, Git,
     assert.equal(graphResponse.status, 200);
     const graphResult = (await graphResponse.json()).result;
     assert.ok(!JSON.stringify(graphResult).includes("repository/secret"));
-    for (const field of ["links", "backlinks", "alsoDefinedIn", "conflicts"]) {
+    for (const field of ["links", "backlinks", "alsoDefinedIn"]) {
       assert.deepEqual(graphResult[field], hub[field]);
     }
     const hidden = await viewer.request(

@@ -58,7 +58,6 @@ export function SearchPanel(
   const [attention, setAttention] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [conflictsOnly, setConflictsOnly] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -92,10 +91,7 @@ export function SearchPanel(
     event.preventDefault();
     runSearch();
   };
-  const displayedResults =
-    result?.results.filter((item) =>
-      !conflictsOnly || (item.canReviewConflicts && item.conflicts.length > 0)
-    ) ?? [];
+  const displayedResults = result?.results ?? [];
   const activeFilters = Number(Boolean(type)) + Number(Boolean(tag)) +
     Number(includeArchived) + Number(Boolean(attention));
   const open = (item: SearchRelationship) => {
@@ -141,16 +137,6 @@ export function SearchPanel(
         <p>Search every source you can access, then narrow the results.</p>
         <Button type="button" onClick={onAsk}>Ask OKF</Button>
       </div>
-      {result?.results.some((item) => item.canReviewConflicts) && (
-        <label className="my-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={conflictsOnly}
-            onChange={(event) => setConflictsOnly(event.target.checked)}
-          />
-          Potential conflicts across the workspace
-        </label>
-      )}
       <form
         className="my-7 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex"
         role="search"
@@ -308,8 +294,7 @@ export function SearchPanel(
       <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
         {displayedResults.map((item) => {
           const detailCount = item.tags.length + item.links.length +
-            item.backlinks.length + item.alsoDefinedIn.length +
-            item.conflicts.length;
+            item.backlinks.length + item.alsoDefinedIn.length;
           return (
             <article className="border-b last:border-b-0" key={item.id}>
               <div className="px-4 py-3.5">
@@ -329,9 +314,6 @@ export function SearchPanel(
                       )}
                       {item.type}
                     </Badge>
-                    {item.conflicts.length > 0 && (
-                      <Badge variant="warning">Potential conflict</Badge>
-                    )}
                     <TrustBadge
                       trust={item.trust}
                       reason={item.trustReason}
@@ -415,10 +397,6 @@ export function SearchPanel(
                     {relationships("Links to", item.links)}
                     {relationships("Linked from", item.backlinks)}
                     {relationships("Also defined in", item.alsoDefinedIn)}
-                    {relationships(
-                      "Potential definition conflict",
-                      item.conflicts,
-                    )}
                   </div>
                 </details>
               )}

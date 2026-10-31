@@ -57,7 +57,7 @@ apply. The same actions are available through HTTP and OpenAPI.
 | ------------------------- | ---------------------------------------------------------------------------- |
 | `knowledge.search`        | Permission-filtered full-text search                                         |
 | `knowledge.ask`           | Workspace answer and numbered citations; listed only with an AI provider     |
-| `knowledge.relationships` | Visible links, backlinks, shared definitions, conflicts, trust and freshness |
+| `knowledge.relationships` | Visible links, backlinks, shared definitions, trust and freshness            |
 | `documents.get`           | Read permitted context, drafts for editors and published content for readers |
 | `documents.create`        | Create a document                                                            |
 | `documents.update-draft`  | Update an editable draft                                                     |

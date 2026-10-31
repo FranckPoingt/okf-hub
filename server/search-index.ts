@@ -13,12 +13,12 @@ export type SearchFields = {
 export function searchState(
   item: {
     kind: string;
-    canReviewConflicts?: boolean;
+    canEdit?: boolean;
     status?: string;
     publishedRevision?: number | null;
   },
 ): SearchState {
-  return item.kind === "imported" ? "source" : item.canReviewConflicts &&
+  return item.kind === "imported" ? "source" : item.canEdit &&
       (item.status === "active" || !item.publishedRevision)
     ? "draft"
     : "published";

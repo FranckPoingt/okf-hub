@@ -173,24 +173,22 @@ Replace it with `PUT` and the same shape. Repeating a `PUT` changes nothing.
 
 ### Company relationships and disagreements
 
-Open a native or imported concept to see **References and backlinks**, **Also
-defined in**, and any **Potential definition conflict**. These span Git, shared
-storage, Notion, and native documents, and show only definitions you can access.
-The native **References** panel can insert a portable cross-source link.
+Open a native or imported concept to see **References and backlinks** and **Also
+defined in**. These span Git, shared storage, Notion, and native documents, and
+show only definitions you can access. The native **References** panel can insert
+a portable cross-source link.
 
-Editors can open **Search**, then select **Potential conflicts across the
-workspace** to list accessible definitions needing review. Existing search text,
-type, and tag filters still apply. Open each definition to compare the originals
-and resolve disagreements through the owning team's normal authoring workflow.
-The Hub flags possible differences; it never rewrites or merges definitions.
+The Hub does not guess whether two definitions disagree. Editors judge that with
+[Compare definitions](#compare-definitions) from the **Also defined in** group,
+then resolve disagreements through the owning team's normal authoring workflow.
+The Hub never rewrites or merges definitions.
 
 Use `[label](okf://<source-slug>/<concept-path>)` to reference another source,
 or give related concepts the same frontmatter `id` to group them. Matching types
 and normalized titles also group automatically. Read the exact link, ID,
-permission, and conflict rules in
+and permission rules in
 [OKF conformance](okf-conformance.md#cross-source-references-and-shared-entities).
-Conflicts use a cheap lexical comparison and can miss semantic disagreements or
-flag harmless rewording. A missing or inaccessible link displays only its label.
+A missing or inaccessible link displays only its label.
 
 ### Freshness and ownership
 
@@ -543,7 +541,7 @@ The owner-only `GET /api/spaces/:id/managers` endpoint returns
 ## Compare definitions
 
 With an AI provider configured, editors can choose **Compare definitions** in
-the conflict panel or References sheet. Both definitions must still be visible
+the **Also defined in** group or References sheet. Both definitions must still be visible
 to the requesting editor and belong to the same cross-source group. The
 read-only comparison sends up to 12,000 characters per definition (plus bounded
 labels) to the configured provider as untrusted evidence, and returns a short

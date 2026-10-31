@@ -3,11 +3,8 @@
 import assert from "node:assert/strict";
 import {
   buildKnowledgeGraph,
-  CONFLICT_THRESHOLD,
   definitionContent,
-  definitionDifference,
   type GraphDocument,
-  potentialConflict,
 } from "./knowledge-graph.ts";
 import {
   portableKnowledgeLink,
@@ -28,7 +25,6 @@ function document(
     type: "Glossary",
     sourceLabel: sourceId,
     trust: "current",
-    body: "A customer who placed an order in the last thirty days.",
     linkHrefs: [],
     ...extra,
   };
@@ -120,11 +116,10 @@ Deno.test("hidden and missing concepts produce identical graph output with no ba
   const secret = document("secret/customer", "secret", {
     stableId: "company.customer",
     linkHrefs: ["okf://hub/public"],
-    body: "Never used the product.",
   });
   const authorized = [publicDoc, secret];
   assert.equal(
-    buildKnowledgeGraph(authorized).get("public")!.conflicts.length,
+    buildKnowledgeGraph(authorized).get("public")!.alsoDefinedIn.length,
     1,
   );
   const permitted = authorized.filter((item) => item.sourceId !== "secret");
@@ -135,7 +130,6 @@ Deno.test("hidden and missing concepts produce identical graph output with no ba
   const graph = buildKnowledgeGraph(permitted).get("public")!;
   assert.deepEqual(graph.backlinks, []);
   assert.deepEqual(graph.alsoDefinedIn, []);
-  assert.deepEqual(graph.conflicts, []);
   assert.equal(Object.keys(graph.linkTargets).length, 0);
   assert.equal(JSON.stringify(graph).includes("secret"), false);
 });
@@ -166,36 +160,6 @@ Deno.test("groups shared ids and normalized type/title across sources, including
     c.id,
   ]);
   assert.deepEqual(graph.get(unrelated.id)!.alsoDefinedIn, []);
-});
-
-Deno.test("conflict threshold ignores formatting and identifies materially different definitions", () => {
-  assert.equal(
-    definitionDifference(
-      "# Customer\n\nAn **active** CUSTOMER.",
-      "an active customer",
-    ),
-    0,
-  );
-  assert.equal(definitionDifference("", " \n"), 0);
-  assert.equal(definitionDifference("", "customer"), 1);
-  assert.equal(potentialConflict("customer", "customer"), false);
-  assert.equal(potentialConflict("customer", "supplier"), true);
-  assert.ok(
-    definitionDifference("one two three four five", "one two three four six") <
-      CONFLICT_THRESHOLD,
-  );
-  assert.ok(
-    definitionDifference("one two three four five", "one two three six seven") >
-      CONFLICT_THRESHOLD,
-  );
-  const a = document("a/customer", "a", { title: "Customer" });
-  const b = document("b/customer", "b", {
-    title: "Customer",
-    body: "An account that has never signed in or bought anything.",
-  });
-  assert.equal(buildKnowledgeGraph([a, b]).get(a.id)!.conflicts[0].id, b.id);
-  b.body = undefined;
-  assert.deepEqual(buildKnowledgeGraph([a, b]).get(a.id)!.conflicts, []);
 });
 
 Deno.test("extracts stable frontmatter ids without confusing nested ids or leaking metadata into comparisons", () => {

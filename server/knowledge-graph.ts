@@ -13,7 +13,6 @@ export type GraphDocument = LinkDocument & {
   trustReason?: string;
   freshness?: Freshness;
   stableId?: string;
-  body?: string;
   linkHrefs: string[];
 };
 
@@ -31,42 +30,6 @@ export function definitionContent(markdown: string) {
     }
   }
   return { stableId, body: match ? markdown.slice(match[0].length) : markdown };
-}
-
-export const CONFLICT_THRESHOLD = 0.35;
-
-function definitionTokens(body: string) {
-  return (body.replace(/^#\s+[^\n]*(?:\n|$)/, "")
-    .normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
-}
-
-// Multiset Dice distance over adjacent word pairs. Linear in definition length;
-// formatting/case changes disappear, while rewritten clauses increase distance.
-export function definitionDifference(left: string, right: string) {
-  const pairs = (body: string) => {
-    const words = definitionTokens(body);
-    return words.length < 2
-      ? words
-      : words.slice(1).map((word, index) => `${words[index]} ${word}`);
-  };
-  const a = pairs(left);
-  const b = pairs(right);
-  if (!a.length && !b.length) return 0;
-  const counts = new Map<string, number>();
-  for (const pair of a) counts.set(pair, (counts.get(pair) ?? 0) + 1);
-  let overlap = 0;
-  for (const pair of b) {
-    const remaining = counts.get(pair) ?? 0;
-    if (remaining) {
-      overlap++;
-      counts.set(pair, remaining - 1);
-    }
-  }
-  return 1 - 2 * overlap / (a.length + b.length);
-}
-
-export function potentialConflict(left: string, right: string) {
-  return definitionDifference(left, right) > CONFLICT_THRESHOLD;
 }
 
 const normalized = (value: string) =>
@@ -88,7 +51,7 @@ function relationship(item: GraphDocument) {
 
 // Security boundary: documents MUST already be filtered for view access and
 // draft/publication visibility. Never group first and filter the output later:
-// even a group size or conflict bit would disclose hidden knowledge.
+// even a group size would disclose hidden knowledge.
 export function buildKnowledgeGraph(documents: readonly GraphDocument[]) {
   const byId = new Map(documents.map((item) => [item.id, item]));
   const incoming = new Map<string, Set<string>>();
@@ -145,14 +108,6 @@ export function buildKnowledgeGraph(documents: readonly GraphDocument[]) {
     const peers = groups.get(root(item.id))!.filter((peer) =>
       peer.sourceId !== item.sourceId
     );
-    const conflicts = peers.filter((peer) =>
-      item.body !== undefined && peer.body !== undefined &&
-      potentialConflict(item.body, peer.body)
-    )
-      .map((peer) => ({
-        ...relationship(peer),
-        difference: definitionDifference(item.body!, peer.body!),
-      }));
     return [item.id, {
       links: Array.from(
         outgoing.get(item.id) ?? [],
@@ -164,7 +119,6 @@ export function buildKnowledgeGraph(documents: readonly GraphDocument[]) {
       ),
       linkTargets: linkTargets.get(item.id)!,
       alsoDefinedIn: peers.map(relationship),
-      conflicts,
     }];
   }));
 }

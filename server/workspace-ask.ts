@@ -9,7 +9,7 @@ import { searchState } from "./search-index.ts";
 import type { createSemanticIndex } from "./semantic-index.ts";
 
 type VisibleDocument = RetrievalResult & {
-  canReviewConflicts?: boolean;
+  canEdit?: boolean;
   status?: string;
   publishedRevision?: number | null;
 };

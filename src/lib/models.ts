@@ -257,8 +257,6 @@ export type SearchResult = SearchRelationship & {
   backlinks: SearchRelationship[];
   linkTargets: Record<string, string>;
   alsoDefinedIn: SearchRelationship[];
-  conflicts: (SearchRelationship & { difference: number })[];
-  canReviewConflicts: boolean;
   canCompareDefinitions?: boolean;
   aiEnabled?: boolean;
 };

@@ -408,8 +408,7 @@ type SearchDocument = {
   importedAt?: string;
   linkHrefs: string[];
   stableId?: string;
-  body?: string;
-  canReviewConflicts: boolean;
+  canEdit: boolean;
 };
 
 function bodyOnly(markdown: string) {
@@ -3056,10 +3055,8 @@ export async function createCollabApp({
     return await payload(concept(conceptId)!, true, userId);
   }
 
-  const definitionCache = new Map<
-    string,
-    { stableId?: string; body?: string }
-  >();
+  // Only the frontmatter `id` is cached; imported objects change on sync.
+  const stableIdCache = new Map<string, string | undefined>();
 
   async function visibleSearchDocuments(
     userId: string,
@@ -3129,8 +3126,7 @@ export async function createCollabApp({
           searchText: [metadata.title, metadata.type, content].join("\n"),
           linkHrefs: markdownHrefs(content),
           stableId: row.id,
-          body: content || undefined,
-          canReviewConflicts: Boolean(canEditHub),
+          canEdit: Boolean(canEditHub),
         });
       }
     }
@@ -3156,20 +3152,20 @@ export async function createCollabApp({
       const failed = source?.status === "sync_failed";
       // Imported objects only change on sync, so cache by key and revision.
       const cacheKey = `${item.objectKey}@${item.sourceRevision}`;
-      let definition = definitionCache.get(cacheKey);
-      if (!definition) {
+      let stableId = stableIdCache.get(cacheKey);
+      if (stableId === undefined && !stableIdCache.has(cacheKey)) {
         try {
-          definition = definitionContent(await store.get(item.objectKey));
-          if (definitionCache.size >= 5_000) definitionCache.clear();
-          definitionCache.set(cacheKey, definition);
+          stableId = definitionContent(await store.get(item.objectKey))
+            .stableId;
+          if (stableIdCache.size >= 5_000) stableIdCache.clear();
+          stableIdCache.set(cacheKey, stableId);
         } catch {
-          // Unavailable bodies cannot produce conflict signals.
-          definition = {};
+          // An unreadable object just does not group by id.
         }
       }
       const stale = freshness.get(item.id).stale;
       documents.push({
-        ...definition,
+        stableId,
         id: item.id,
         kind: "imported",
         sourceId: item.sourceId,
@@ -3198,16 +3194,45 @@ export async function createCollabApp({
         sourceRevision: item.sourceRevision,
         importedAt: item.importedAt,
         linkHrefs: JSON.parse(item.links) as string[],
-        canReviewConflicts: access[index].edit,
+        canEdit: access[index].edit,
       });
     }
     return { documents, canIncludeArchived };
+  }
+
+  // Editors compare their draft; everyone else the published revision.
+  async function definitionBody(
+    item: { id: string; kind: string; canEdit: boolean },
+  ) {
+    try {
+      if (item.kind === "imported") {
+        const row = importedConcepts().find((entry) => entry.id === item.id);
+        return row
+          ? definitionContent(await store.get(row.objectKey)).body
+          : undefined;
+      }
+      const row = concept(item.id);
+      if (!row) return undefined;
+      const draft = item.canEdit && row.status === "active"
+        ? (await loadDocument(row)).markdown
+        : "";
+      if (draft) return draft;
+      const publication = row.publishedRevision
+        ? await currentPublication(row)
+        : null;
+      return publication
+        ? bodyOnly(publication.markdown) || undefined
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   const compareDefinitions = createDefinitionComparison({
     responder: respondWithAI,
     loadVisible: async (userId) =>
       (await visibleSearchDocuments(userId, false)).documents,
+    loadBody: definitionBody,
     audit: (userId, event, object) => security.audit(userId, event, object),
   });
 
@@ -3278,14 +3303,14 @@ export async function createCollabApp({
         searchText,
         linkHrefs: _linkHrefs,
         stableId: _stableId,
-        body: _body,
         ownerResolved: _ownerResolved,
+        canEdit: _canEdit,
         ...visible
       } = item;
       return {
         ...visible,
         score: query ? score + bm25 / (1 + bm25) : score,
-        canCompareDefinitions: item.canReviewConflicts,
+        canCompareDefinitions: item.canEdit,
         aiEnabled: Boolean(respondWithAI),
         snippet: searchSnippet(searchText, query, item.title, [
           item.type,
