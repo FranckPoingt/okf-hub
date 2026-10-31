@@ -1874,21 +1874,14 @@ export default function App() {
       : status === "syncing"
       ? "connecting"
       : status;
-  const statusLabel = searchOpen || homeOpen || artifactsOpen ||
-      activeSpaceArtifacts
-    ? "permission filtered"
-    : activeSpace
+  // Overview pages say nothing here: the page title already names them.
+  const statusLabel = activeSpace
     ? `${activeSpace.count} documents`
-    : sourceOpen
-    ? "connected sources"
-    : createOpen
-    ? "hub management"
-    : developerOpen
-    ? "developer API"
+    : searchOpen || homeOpen || artifactsOpen || activeSpaceArtifacts ||
+        sourceOpen || createOpen || developerOpen || showArtifactFirst
+    ? ""
     : imported
     ? "read only"
-    : showArtifactFirst
-    ? conceptApps.some((app) => app.liveVersion !== null) ? "artifact" : "draft"
     : concept?.status === "archived"
     ? "archived"
     : concept?.lockedAt
@@ -1896,30 +1889,16 @@ export default function App() {
     : bootstrap.canEdit && view === "draft"
     ? status
     : "published";
-  const statusDetail = homeOpen
-    ? "Knowledge overview"
-    : artifactsOpen
-    ? "Workspace artifact gallery"
-    : activeSpaceArtifacts
-    ? "Space artifact gallery"
-    : activeSpace
-    ? "Space overview"
-    : searchOpen
-    ? "Authorised results"
-    : sourceOpen
-    ? "Source overview"
-    : createOpen
-    ? "Workspace and developer settings"
-    : developerOpen
-    ? "Self-hosted API reference"
+  const statusDetail = activeSpace || homeOpen || artifactsOpen ||
+      activeSpaceArtifacts || searchOpen || sourceOpen || createOpen ||
+      developerOpen || showArtifactFirst
+    ? ""
     : imported
     ? imported.sourceId === "shared"
       ? "Shared-store owned"
       : imported.sourceId === "notion"
       ? "Notion owned"
       : "Repository owned"
-    : showArtifactFirst
-    ? "Sandboxed interactive artifact"
     : concept?.lockedAt
     ? "Read only until unlocked"
     : bootstrap.canEdit && view === "published" && concept?.publishedRevision

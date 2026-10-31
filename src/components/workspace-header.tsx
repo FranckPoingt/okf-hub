@@ -31,7 +31,7 @@ export function WorkspaceHeader({
   actions,
 }: WorkspaceHeaderProps) {
   const showConnection = status === "offline" || status === "syncing";
-  const showStatus = status !== "online";
+  const showStatus = Boolean(status) && status !== "online";
   return (
     <header
       className="workspace-header editor-workspace-header"
