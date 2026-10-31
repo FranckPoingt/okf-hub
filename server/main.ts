@@ -3462,7 +3462,14 @@ export async function createCollabApp({
         if (row.status !== "active") {
           throw new ActionError("Restore the concept first", 409);
         }
-        await saveDraft(id, String(input.markdown ?? ""));
+        const markdown = String(input.markdown ?? "");
+        const previous = (await loadDocument(row)).markdown;
+        await saveDraft(id, markdown);
+        // An editor keeps its own Yjs copy; without a reset it would keep
+        // showing, and later overwrite, the text this call just replaced.
+        if (previous !== documents.get(id)!.markdown) {
+          await resetCollaboration(id, markdown);
+        }
         security.audit(
           context.userId,
           "concept.draft.updated",

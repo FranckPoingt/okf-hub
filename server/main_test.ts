@@ -4701,6 +4701,46 @@ Deno.test("revision restore resets stale collaboration state and rejects old epo
     );
     reopened.socket.close();
     await bounded(reopened.closed);
+
+    // An API draft update must not leave an open editor on the replaced text.
+    const editing = connect(created.id, result.collabEpoch);
+    await bounded(editing.synced);
+    const typed = new Y.XmlElement("paragraph");
+    const typedText = new Y.XmlText();
+    typedText.insert(0, "Typed in the editor");
+    typed.insert(0, [typedText]);
+    editing.doc.getXmlFragment("prosemirror").insert(0, [typed]);
+    const typedUpdate = Y.encodeStateAsUpdate(editing.doc);
+    const typedPacket = new Uint8Array(typedUpdate.length + 1);
+    typedPacket.set(typedUpdate, 1);
+    editing.socket.send(typedPacket);
+    const apiMarkdown = "Replaced by an agent through the API.\n";
+    const updated = await owner.request(
+      "/api/v1/actions/documents.update-draft",
+      {
+        method: "POST",
+        body: JSON.stringify({ id: created.id, markdown: apiMarkdown }),
+      },
+    );
+    assert.equal(updated.status, 200, await updated.clone().text());
+    assert.equal((await bounded(editing.closed)).code, 4009);
+    const afterApi = await (await owner.request(path)).json();
+    assert.equal(afterApi.draft, apiMarkdown);
+    assert.equal(afterApi.collabEpoch, result.collabEpoch + 1);
+    const resynced = connect(created.id, afterApi.collabEpoch);
+    await bounded(resynced.synced);
+    assert.equal(resynced.doc.getXmlFragment("prosemirror").length, 0);
+    // Saving the same text again keeps current editors connected.
+    const same = await owner.request("/api/v1/actions/documents.update-draft", {
+      method: "POST",
+      body: JSON.stringify({ id: created.id, markdown: apiMarkdown }),
+    });
+    assert.equal(same.status, 200, await same.clone().text());
+    assert.equal(
+      (await (await owner.request(path)).json()).collabEpoch,
+      afterApi.collabEpoch,
+    );
+    assert.equal(resynced.socket.readyState, WebSocket.OPEN);
   } finally {
     releaseDelayedBody();
     for (const socket of sockets) {
