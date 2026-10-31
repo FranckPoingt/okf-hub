@@ -615,25 +615,25 @@ export function AppSidebar({
               {!collapsed && (
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        type="button"
-                        size="sm"
-                        tooltip={`${space.name} artifacts`}
-                        aria-label={`${space.name} artifacts`}
-                        isActive={spaceArtifactsActive}
-                        onClick={() => onOpenSpaceArtifacts(space.id)}
-                        className="pl-6 text-muted-foreground"
-                      >
-                        <Blocks />
-                        <span>Artifacts</span>
-                      </SidebarMenuButton>
-                      {spaceArtifacts > 0 && (
+                    {spaceArtifacts > 0 && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          type="button"
+                          size="sm"
+                          tooltip={`${space.name} artifacts`}
+                          aria-label={`${space.name} artifacts`}
+                          isActive={spaceArtifactsActive}
+                          onClick={() => onOpenSpaceArtifacts(space.id)}
+                          className="pl-6 text-muted-foreground"
+                        >
+                          <Blocks />
+                          <span>Artifacts</span>
+                        </SidebarMenuButton>
                         <SidebarMenuBadge className="font-normal text-muted-foreground">
                           {spaceArtifacts}
                         </SidebarMenuBadge>
-                      )}
-                    </SidebarMenuItem>
+                      </SidebarMenuItem>
+                    )}
                     {renderConcepts(space.id, null)}
                   </SidebarMenu>
                 </SidebarGroupContent>
