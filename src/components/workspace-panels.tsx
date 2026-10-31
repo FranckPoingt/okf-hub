@@ -318,7 +318,7 @@ export function SearchPanel(
                   <Button
                     variant="ghost"
                     type="button"
-                    className="h-auto min-w-0 justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
+                    className="h-auto min-w-0 shrink justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
                     onClick={() => open(item)}
                   >
                     {item.title}
