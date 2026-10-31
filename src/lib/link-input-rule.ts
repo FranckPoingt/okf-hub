@@ -12,8 +12,10 @@ export function markdownLinkHandler(
 ) {
   const link = state.schema.marks.link;
   const [, label, href] = match;
-  // Same scheme guard as rendered answer links: no script-bearing URLs.
-  if (!link || /^\s*(?:javascript|data|vbscript):/i.test(href)) return null;
+  // Allowlist schemes; anything else (javascript:, data:, obfuscated forms) stays text.
+  if (!link || !/^(?:https?:|mailto:|okf:|[/#.?]|[^:]*$)/i.test(href)) {
+    return null;
+  }
   return state.tr
     .replaceWith(start, end, state.schema.text(label, [link.create({ href })]))
     .removeStoredMark(link);

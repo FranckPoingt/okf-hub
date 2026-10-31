@@ -43,6 +43,17 @@ Deno.test("typing [label](url) becomes a link", () => {
 
 Deno.test("link input rule skips images and script URLs", () => {
   assert.equal(type("![alt](https://example.com/a.png)"), null);
-  assert.equal(type("[x](javascript:alert1)"), null);
+  for (
+    const href of [
+      "javascript:alert1",
+      "JaVaScRiPt:alert1",
+      "data:text/html,x",
+      "vbscript:x",
+      "file:///etc/passwd",
+    ]
+  ) assert.equal(type(`[x](${href})`), null, href);
+  for (const href of ["okf://repository/a.md", "/knowledge/a", "a.md", "#h"]) {
+    assert.ok(type(`[x](${href})`), href);
+  }
   assert.equal(type("[x](no spaces)"), null);
 });
