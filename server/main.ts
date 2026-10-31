@@ -2448,8 +2448,18 @@ export async function createCollabApp({
 
     const shared = sharedSource();
     const notion = notionSource();
-    for (const item of importedConcepts()) {
-      if (!await security.check(userId, "view", item.id)) continue;
+    // shortcut: unbounded concurrent OpenFGA checks; move to batch-check when
+    // workspaces reach thousands of imported concepts.
+    const imported = importedConcepts();
+    const access = await Promise.all(imported.map(async (item) => {
+      const view = await security.check(userId, "view", item.id);
+      return {
+        view,
+        edit: view && await security.check(userId, "edit", item.id),
+      };
+    }));
+    for (const [index, item] of imported.entries()) {
+      if (!access[index].view) continue;
       const repository = ["shared", "notion"].includes(item.sourceId)
         ? undefined
         : repositorySource(item.sourceId);
@@ -2499,7 +2509,7 @@ export async function createCollabApp({
         sourceRevision: item.sourceRevision,
         importedAt: item.importedAt,
         linkHrefs: JSON.parse(item.links) as string[],
-        canReviewConflicts: await security.check(userId, "edit", item.id),
+        canReviewConflicts: access[index].edit,
       });
     }
     return { documents, canIncludeArchived };
