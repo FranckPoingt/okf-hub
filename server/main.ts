@@ -472,7 +472,7 @@ function markdownHrefs(markdown: string) {
   );
 }
 
-function searchSnippet(
+export function searchSnippet(
   text: string,
   query: string,
   title: string,
@@ -482,8 +482,9 @@ function searchSnippet(
   for (const value of [title, ...metadata].filter(Boolean)) {
     if (body.startsWith(`${value}\n`)) body = body.slice(value.length + 1);
   }
-  let plain = body.replace(/[`*_>#|[\]()~-]/g, " ").replace(/\s+/g, " ")
-    .trim();
+  // Keep link labels only; targets can name documents the reader cannot open.
+  let plain = body.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_>#|[\]()~-]/g, " ").replace(/\s+/g, " ").trim();
   if (plain.toLocaleLowerCase().startsWith(title.toLocaleLowerCase())) {
     plain = plain.slice(title.length).replace(/^[:\s-]+/, "");
   }

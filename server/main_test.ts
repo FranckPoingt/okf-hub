@@ -8,6 +8,7 @@ import type { AIRequest } from "./ai.ts";
 import {
   createCollabApp,
   DEFAULT_MARKDOWN,
+  searchSnippet,
   uniqueArchiveNames,
 } from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
@@ -149,6 +150,18 @@ async function archiveEntries(response: Response) {
   }
   return entries;
 }
+
+Deno.test("search snippets keep link labels and drop link targets", () => {
+  assert.equal(
+    searchSnippet(
+      "See the [codename](okf://repo/launch-codename.md) and ![chart](a.png).",
+      "",
+      "Plan",
+      [],
+    ),
+    "See the codename and chart.",
+  );
+});
 
 Deno.test("saves, revises, discovers, and exports a Codex artifact with its context", async () => {
   const dataDir = await Deno.makeTempDir();
