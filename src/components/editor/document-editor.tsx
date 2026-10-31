@@ -9,6 +9,7 @@ import {
 import { diffComponent } from "@milkdown/kit/component/diff";
 import { diff, startDiffReviewCmd } from "@milkdown/kit/plugin/diff";
 import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
+import { inputRules } from "@milkdown/kit/prose/inputrules";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
 import {
@@ -27,6 +28,7 @@ import {
 import { api, conceptPath, SERVICE } from "../../lib/api.ts";
 import { embedPreview } from "../../lib/embeds.ts";
 import { insertReference } from "../../lib/insert-reference.ts";
+import { markdownLinkRule } from "../../lib/link-input-rule.ts";
 import { resolvePreviewLinks } from "../../lib/knowledge-preview.ts";
 import type { CommentThread } from "../../lib/models.ts";
 import type { CommentSelection } from "./document-comments.tsx";
@@ -567,6 +569,7 @@ export function DocumentEditor({
       ctx.update(prosePluginsCtx, (plugins) => [
         ...plugins,
         embedPlugin(canEdit),
+        inputRules({ rules: [markdownLinkRule] }),
         commentPlugin(onCommentSelection, onCommentOpen),
       ]);
     });
