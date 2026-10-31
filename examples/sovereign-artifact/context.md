@@ -3,7 +3,7 @@ id: okf-hub-artifact-loop
 title: Work becomes shared knowledge
 subject: OKF Hub product direction
 type: interactive-explanation
-owner: Franck
+owner: Product owner
 status: working-hypothesis
 created: 2026-10-04
 artifact: index.html
@@ -18,12 +18,13 @@ the explanation is itself an example of the thing we want teams to retain.
 
 ## Evidence and accepted direction
 
-- In the product discussion on 4 October 2026, Franck reported strong workplace
-  adoption of Claude artifacts for interactive explanations, dashboards, and
-  slides. He described the resulting outputs as useful but scattered. This is a
-  first-hand qualitative observation, not quantified adoption research.
-- Franck agreed with the direction: “work happens, knowledge improves,
-  subsequent work gets better.”
+- In the product discussion on 4 October 2026, the product owner reported strong
+  workplace adoption of Claude artifacts for interactive explanations,
+  dashboards, and slides. They described the resulting outputs as useful but
+  scattered. This is a first-hand qualitative observation, not quantified
+  adoption research.
+- The product owner agreed with the direction: “work happens, knowledge
+  improves, subsequent work gets better.”
 - The requested next step was to dogfood the direction with the Codex equivalent
   of artifacts. This explanation was created in response and can run both in the
   conversation and as a standalone HTML file.
@@ -89,9 +90,9 @@ been implemented or validated.
 
 ## Ownership and revision
 
-Franck owns the product direction. Codex authored this explanation and its
-context from the discussion. The first revision turns the accepted loop into a
-concrete, inspectable example. Subsequent changes should preserve the
+The product owner owns the product direction. Codex authored this explanation
+and its context from the discussion. The first revision turns the accepted loop
+into a concrete, inspectable example. Subsequent changes should preserve the
 qualitative source observation, distinguish accepted direction from hypotheses,
 and record the reason for material changes.
 

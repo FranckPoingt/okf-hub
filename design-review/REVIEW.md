@@ -3,11 +3,11 @@
 Review of the UI at `99b0be3`, taken from real screenshots of a seeded stack,
 followed by a focused polish pass on this branch.
 
-- **Before:** `design-review/before/` (production Docker build of `99b0be3`)
-- **After:** `design-review/after/` (production Docker build of `d969662`)
+- **Before:** production Docker build of `99b0be3`; **after:** `d969662`.
+- Screenshots are not committed. Regenerate them with `tools/shoot.mjs` (outputs
+  `design-review/before/` and `design-review/after/`, both ignored).
 - File names are `<screen>-<desktop|mobile>-<light|dark>.png`. Desktop is
-  1440×900 and mobile is 390×844.
-- 22 screens × 4 variants = 88 shots per set. The PNGs are palette-compressed.
+  1440×900 and mobile is 390×844; 22 screens × 4 variants = 88 shots per set.
 
 ## Overall rating
 
