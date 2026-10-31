@@ -5,7 +5,11 @@ import { extensionFields } from "./document-frontmatter.ts";
 import { DatabaseSync } from "node:sqlite";
 import * as Y from "yjs";
 import type { AIRequest } from "./ai.ts";
-import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
+import {
+  createCollabApp,
+  DEFAULT_MARKDOWN,
+  uniqueArchiveNames,
+} from "./main.ts";
 import { inspectOkf, type RepositoryCredentials } from "./repository-source.ts";
 import { parseSSOConfig } from "./sso-config.ts";
 import { saveArtifact } from "../scripts/save-artifact.ts";
@@ -4620,4 +4624,14 @@ Deno.test("revision restore resets stale collaboration state and rejects old epo
     await fga.server.shutdown();
     await Deno.remove(dataDir, { recursive: true });
   }
+});
+
+Deno.test("archive names stay unique when generated ids share a long prefix", () => {
+  const names = uniqueArchiveNames([
+    { id: "mcp-saved-artifact", label: "MCP saved artifact" },
+    { id: "mcp-saved-artifact-937c29", label: "MCP saved artifact" },
+    { id: "mcp-saved-artifact-a1b2c3", label: "MCP saved artifact" },
+  ]);
+  const values = [...names.values()].map((name) => name.toLowerCase());
+  assert.equal(new Set(values).size, 3);
 });

@@ -423,7 +423,7 @@ function markdownLabel(value: string) {
   return value.replace(/[\\[\]]/g, "\\$&").replace(/\r?\n/g, " ");
 }
 
-function uniqueArchiveNames(
+export function uniqueArchiveNames(
   items: { id: string; label: string }[],
 ) {
   const bases = new Map(
@@ -434,15 +434,24 @@ function uniqueArchiveNames(
     const key = base.toLocaleLowerCase();
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
+  const used = new Set<string>();
   return new Map(
     items.map((item) => {
       const base = bases.get(item.id)!;
-      return [
-        item.id,
-        counts.get(base.toLocaleLowerCase()) === 1
-          ? base
-          : `${base} (${archiveSegment(item.id, "item").slice(0, 12)})`,
-      ];
+      if (counts.get(base.toLocaleLowerCase()) === 1) {
+        used.add(base.toLocaleLowerCase());
+        return [item.id, base];
+      }
+      // Generated ids share long prefixes, so lengthen the tag until unique.
+      const tag = archiveSegment(item.id, "item");
+      let length = 12;
+      let name = `${base} (${tag.slice(0, length)})`;
+      while (used.has(name.toLocaleLowerCase()) && length < tag.length) {
+        length += 6;
+        name = `${base} (${tag.slice(0, length)})`;
+      }
+      used.add(name.toLocaleLowerCase());
+      return [item.id, name];
     }),
   );
 }
