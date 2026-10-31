@@ -268,7 +268,7 @@ export function AppSidebar({
           {hasChildren && (
             <button
               type="button"
-              className="absolute top-1.5 left-0.5 z-10 flex size-5 items-center justify-center rounded text-sidebar-foreground/55 hover:bg-sidebar-accent"
+              className="absolute top-1.5 left-0.5 z-10 flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent"
               aria-label={`${
                 collapsed ? "Expand" : "Collapse"
               } ${concept.title}`}
@@ -380,7 +380,7 @@ export function AppSidebar({
                 )}
               <span className="grid min-w-0 flex-1 text-left leading-tight">
                 <span className="truncate">{workspace.name}</span>
-                <span className="truncate text-xs font-normal text-sidebar-foreground/60">
+                <span className="truncate text-xs font-normal text-muted-foreground">
                   {workspace.tagline}
                 </span>
               </span>
@@ -415,7 +415,7 @@ export function AppSidebar({
                   <Search />
                   <span>Search</span>
                 </SidebarMenuButton>
-                <SidebarMenuBadge className="font-normal text-sidebar-foreground/45">
+                <SidebarMenuBadge className="font-normal text-muted-foreground">
                   ⌘K
                 </SidebarMenuBadge>
               </SidebarMenuItem>
@@ -430,7 +430,7 @@ export function AppSidebar({
                   <span>Artifacts</span>
                 </SidebarMenuButton>
                 {totalArtifacts > 0 && (
-                  <SidebarMenuBadge className="font-normal text-sidebar-foreground/60">
+                  <SidebarMenuBadge className="font-normal text-muted-foreground">
                     {totalArtifacts}
                   </SidebarMenuBadge>
                 )}
@@ -548,7 +548,7 @@ export function AppSidebar({
               <div className="relative">
                 <button
                   type="button"
-                  className="absolute top-1.5 left-2 z-10 flex size-5 items-center justify-center rounded text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  className="absolute top-1.5 left-2 z-10 flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   aria-label={`${
                     collapsed ? "Expand" : "Collapse"
                   } ${space.name}`}
@@ -596,7 +596,7 @@ export function AppSidebar({
                     <SpaceIcon value={space.icon} />
                   </span>
                   <span className="truncate font-medium">{space.name}</span>
-                  <span className="ml-auto tabular-nums text-sidebar-foreground/60">
+                  <span className="ml-auto tabular-nums text-muted-foreground">
                     {space.count}
                   </span>
                 </SidebarGroupLabel>
@@ -623,13 +623,13 @@ export function AppSidebar({
                         aria-label={`${space.name} artifacts`}
                         isActive={spaceArtifactsActive}
                         onClick={() => onOpenSpaceArtifacts(space.id)}
-                        className="pl-6 text-sidebar-foreground/75"
+                        className="pl-6 text-muted-foreground"
                       >
                         <Blocks />
                         <span>Artifacts</span>
                       </SidebarMenuButton>
                       {spaceArtifacts > 0 && (
-                        <SidebarMenuBadge className="font-normal text-sidebar-foreground/55">
+                        <SidebarMenuBadge className="font-normal text-muted-foreground">
                           {spaceArtifacts}
                         </SidebarMenuBadge>
                       )}
@@ -788,7 +788,7 @@ export function AppSidebar({
                 </Avatar>
                 <span className="grid min-w-0 flex-1 text-left leading-tight">
                   <span className="truncate font-medium">{user.name}</span>
-                  <span className="truncate text-xs text-sidebar-foreground/60">
+                  <span className="truncate text-xs text-muted-foreground">
                     {access} · {user.email}
                   </span>
                 </span>

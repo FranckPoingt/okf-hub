@@ -87,9 +87,9 @@ a {
 .lifecycle-actions button,
 .view-switch button {
   padding: 8px 11px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   font-size: 12px;
   cursor: pointer;
 }
@@ -106,23 +106,23 @@ a {
 .view-switch {
   display: flex;
   padding: 2px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #eeece5;
+  background: var(--muted-surface);
 }
 .view-switch button {
   border: 0;
   background: transparent;
 }
 .view-switch button.active {
-  background: white;
+  background: var(--card);
   box-shadow: 0 1px 3px rgba(30,40,35,.1);
 }
 .action-error {
   margin: 0;
   padding: 9px 24px;
-  background: #fff1ed;
-  color: #a44f3f;
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
   font-size: 12px;
 }
 .empty-state,
@@ -135,7 +135,7 @@ a {
 .empty-state h1,
 .lifecycle-empty h1 {
   margin: 8px 0 12px;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 38px;
   font-weight: 400;
   letter-spacing: -.04em;
@@ -155,9 +155,9 @@ a {
 }
 .export-link {
   padding: 8px 10px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--green);
   font-size: 10px;
   text-decoration: none;
@@ -165,7 +165,7 @@ a {
 .document-settings {
   padding: 14px 24px;
   border-bottom: 1px solid var(--line);
-  background: #fffdfa;
+  background: var(--card);
 }
 .document-settings form {
   display: grid;
@@ -180,7 +180,7 @@ a {
 .document-settings label {
   display: grid;
   gap: 5px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 9px;
   font-weight: 700;
 }
@@ -189,9 +189,9 @@ a {
   min-width: 0;
   width: 100%;
   padding: 8px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -205,19 +205,19 @@ a {
   min-height: 0;
   overflow: auto;
   padding: 34px max(25px,7vw) 80px;
-  background: #faf9f5;
+  background: var(--card);
 }
 .editor-context {
   max-width: 850px;
   margin: 0 auto 14px;
   display: flex;
   justify-content: space-between;
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 9px;
   letter-spacing: .04em;
 }
 .draft-label {
-  color: #9b5545;
+  color: var(--destructive);
   font-weight: 800;
   letter-spacing: .1em;
 }
@@ -225,9 +225,9 @@ a {
   max-width: 850px;
   min-height: 720px;
   margin: 0 auto;
-  border: 1px solid #e2e1db;
+  border: 1px solid var(--border);
   border-radius: 9px;
-  background: #fff;
+  background: var(--card);
   box-shadow: 0 15px 50px rgba(45,48,43,.08);
 }
 .editor-frame .milkdown .editor {
@@ -237,8 +237,8 @@ a {
 }
 .editor-frame .milkdown .ProseMirror {
   min-height: 580px;
-  color: #34413c;
-  font-family: Georgia,'Times New Roman',serif;
+  color: var(--secondary-foreground);
+  font-family: var(--font-ui);
   font-size: 17px;
   line-height: 1.75;
 }
@@ -260,7 +260,7 @@ a {
   border-left: 3px solid var(--coral);
   margin-left: 0;
   padding-left: 18px;
-  color: #596660;
+  color: var(--muted-foreground);
 }
 .editor-frame .milkdown .ProseMirror code {
   font-family: ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -282,7 +282,7 @@ a {
 .editor-frame .milkdown .ProseMirror th,
 .editor-frame .milkdown .ProseMirror td {
   padding: 9px;
-  border: 1px solid #dadcd6;
+  border: 1px solid var(--border);
   text-align: left;
 }
 .editor-loading,
@@ -292,10 +292,10 @@ a {
   text-align: center;
 }
 .editor-loading {
-  color: #7c8782;
+  color: var(--muted-foreground);
 }
 .service-error span {
-  color: #a44f3f;
+  color: var(--destructive);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .1em;
@@ -303,12 +303,12 @@ a {
 }
 .service-error h1 {
   margin: 12px 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 38px;
   font-weight: 400;
 }
 .service-error p {
-  color: #6d7873;
+  color: var(--muted-foreground);
 }
 .service-error button {
   margin-top: 15px;
@@ -356,14 +356,14 @@ a:focus-visible {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: linear-gradient(145deg,#eeece5,#faf9f5);
+  background: linear-gradient(145deg, var(--muted-surface), var(--card));
 }
 .auth-card {
   width: min(430px,100%);
   padding: 42px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fffdfa;
+  background: var(--card);
   box-shadow: 0 18px 60px rgba(45,48,43,.1);
 }
 .auth-card .brand {
@@ -371,7 +371,7 @@ a:focus-visible {
 }
 .eyebrow {
   margin: 0 0 8px;
-  color: #9b5545;
+  color: var(--destructive);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .12em;
@@ -380,7 +380,7 @@ a:focus-visible {
 .auth-card h1,
 .access-panel h2 {
   margin: 0 0 12px;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 38px;
   font-weight: 400;
   letter-spacing: -.04em;
@@ -399,7 +399,7 @@ a:focus-visible {
 .access-panel label {
   display: grid;
   gap: 6px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 700;
 }
@@ -408,9 +408,9 @@ a:focus-visible {
 .access-panel select {
   width: 100%;
   padding: 10px 11px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: white;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -430,7 +430,7 @@ a:focus-visible {
 }
 .form-error {
   margin: 0!important;
-  color: #a44f3f!important;
+  color: var(--destructive) !important;
   font-size: 11px;
 }
 .access-badge {
@@ -438,7 +438,7 @@ a:focus-visible {
   padding: 5px 7px;
   border: 1px solid var(--line);
   border-radius: 20px;
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 9px;
   text-transform: uppercase;
 }
@@ -449,7 +449,7 @@ a:focus-visible {
   max-height: 390px;
   padding: 24px;
   border-bottom: 1px solid var(--line);
-  background: #fffdfa;
+  background: var(--card);
   overflow: auto;
   display: grid;
   grid-template-columns: 220px minmax(300px,1fr) minmax(260px,1fr);
@@ -857,7 +857,7 @@ details[open] > summary .source-details-chevron {
 }
 .source-page-heading h1 {
   margin: 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 42px;
   font-weight: 400;
   letter-spacing: -.04em;
@@ -880,7 +880,7 @@ details[open] > summary .source-details-chevron {
 }
 .source-heading h2 {
   margin: 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 30px;
   font-weight: 400;
   letter-spacing: -.04em;
@@ -901,7 +901,7 @@ details[open] > summary .source-details-chevron {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: 2fr 1fr 1fr 1fr auto;
   align-items: end;
@@ -910,14 +910,14 @@ details[open] > summary .source-details-chevron {
 .hub-create-panel h2 {
   grid-column: 1/-1;
   margin: 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 24px;
   font-weight: 400;
 }
 .hub-create-panel label {
   display: grid;
   gap: 6px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 700;
 }
@@ -926,9 +926,9 @@ details[open] > summary .source-details-chevron {
   min-width: 0;
   width: 100%;
   padding: 10px 11px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -957,9 +957,9 @@ details[open] > summary .source-details-chevron {
 }
 .space-management button {
   padding: 9px 10px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   font-size: 9px;
   cursor: pointer;
 }
@@ -972,7 +972,7 @@ details[open] > summary .source-details-chevron {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: minmax(280px,2fr) minmax(150px,1fr) auto;
   align-items: end;
@@ -984,16 +984,16 @@ details[open] > summary .source-details-chevron {
 .source-form label {
   display: grid;
   gap: 6px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 700;
 }
 .source-form input {
   width: 100%;
   padding: 10px 11px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -1002,7 +1002,7 @@ details[open] > summary .source-details-chevron {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: repeat(auto-fit,minmax(140px,1fr));
   gap: 18px;
@@ -1012,7 +1012,7 @@ details[open] > summary .source-details-chevron {
 }
 .source-provenance dt {
   margin-bottom: 5px;
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .08em;
@@ -1028,23 +1028,23 @@ details[open] > summary .source-details-chevron {
   text-transform: capitalize;
 }
 .source-status.current {
-  color: #32745e;
+  color: var(--success);
 }
 .source-status.sync_failed {
-  color: #a44f3f;
+  color: var(--destructive);
 }
 .source-error {
   padding: 10px 12px;
   border-radius: 5px;
-  background: #fff1ed;
-  color: #a44f3f;
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
   font-size: 11px;
 }
 .source-issues {
   margin: 20px 0;
 }
 .source-issues h3 {
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 22px;
   font-weight: 400;
 }
@@ -1053,14 +1053,14 @@ details[open] > summary .source-details-chevron {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: 70px minmax(160px,1fr) 2fr;
   gap: 12px;
   font-size: 12px;
 }
 .source-issues strong {
-  color: #a44f3f;
+  color: var(--destructive);
   text-transform: uppercase;
 }
 .source-issues span {
@@ -1077,7 +1077,7 @@ details[open] > summary .source-details-chevron {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1087,17 +1087,17 @@ details[open] > summary .source-details-chevron {
   cursor: pointer;
 }
 .import-grid button:hover {
-  border-color: #aeb7b2;
+  border-color: var(--input);
 }
 .import-grid span {
-  color: #9b5545;
+  color: var(--destructive);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: .09em;
   text-transform: uppercase;
 }
 .import-grid strong {
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 20px;
   font-weight: 400;
 }
@@ -1123,16 +1123,16 @@ details[open] > summary .source-details-chevron {
 }
 .imported-bar > button {
   padding: 8px 11px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   font-size: 10px;
   cursor: pointer;
 }
 .import-provenance {
   padding: 10px 24px;
   border-bottom: 1px solid var(--line);
-  background: #fffdfa;
+  background: var(--card);
   display: flex;
   flex-wrap: wrap;
   gap: 12px 24px;
@@ -1207,7 +1207,7 @@ details[open] > summary .source-details-chevron {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: minmax(260px,2fr) minmax(130px,1fr) minmax(130px,1fr)
     auto auto;
@@ -1217,7 +1217,7 @@ details[open] > summary .source-details-chevron {
 .search-form label {
   display: grid;
   gap: 6px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 700;
 }
@@ -1225,9 +1225,9 @@ details[open] > summary .source-details-chevron {
 .search-form select {
   min-width: 0;
   padding: 10px 11px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -1255,7 +1255,7 @@ details[open] > summary .source-details-chevron {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
 }
 .search-result-heading > div {
   display: flex;
@@ -1271,20 +1271,20 @@ details[open] > summary .source-details-chevron {
   text-transform: uppercase;
 }
 .knowledge-kind {
-  background: #edf0eb;
+  background: var(--muted-surface);
   color: var(--green);
 }
 .knowledge-kind.imported {
-  background: #fff0eb;
-  color: #9b5545;
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
 }
 .trust-status {
-  border: 1px solid #cfd7d2;
-  color: #32745e;
+  border: 1px solid var(--border);
+  color: var(--success);
 }
 .trust-status.sync_failed {
-  border-color: #efc3b9;
-  color: #a44f3f;
+  border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
+  color: var(--destructive);
 }
 .search-result-heading > button {
   margin: 10px 0 6px;
@@ -1292,7 +1292,7 @@ details[open] > summary .source-details-chevron {
   border: 0;
   background: transparent;
   color: var(--ink);
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 24px;
   text-align: left;
   cursor: pointer;
@@ -1312,7 +1312,7 @@ details[open] > summary .source-details-chevron {
   gap: 12px;
 }
 .search-metadata dt {
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: .08em;
@@ -1332,8 +1332,8 @@ details[open] > summary .source-details-chevron {
 .search-tags span {
   padding: 4px 7px;
   border-radius: 20px;
-  background: #eeece5;
-  color: #596660;
+  background: var(--muted-surface);
+  color: var(--muted-foreground);
   font-size: 9px;
 }
 .search-relationships {
@@ -1344,7 +1344,7 @@ details[open] > summary .source-details-chevron {
   gap: 7px;
 }
 .search-relationships > strong {
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 8px;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -1353,7 +1353,7 @@ details[open] > summary .source-details-chevron {
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   font-size: 9px;
   cursor: pointer;
 }
@@ -1364,7 +1364,7 @@ details[open] > summary .source-details-chevron {
 }
 .search-empty {
   padding: 35px;
-  border: 1px dashed #cfd1ca;
+  border: 1px dashed var(--border);
   border-radius: 8px;
   color: var(--muted-foreground);
   text-align: center;
@@ -1381,7 +1381,7 @@ details[open] > summary .source-details-chevron {
 .automation-runs details {
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fffdfa;
+  background: var(--card);
 }
 .automation-runs summary {
   padding: 12px 14px;
@@ -1396,11 +1396,11 @@ details[open] > summary .source-details-chevron {
   color: var(--muted-foreground);
 }
 .automation-status {
-  color: #32745e;
+  color: var(--success);
   text-transform: capitalize;
 }
 .automation-status.partial {
-  color: #a44f3f;
+  color: var(--destructive);
 }
 .automation-attempts {
   padding: 0 14px 14px;
@@ -1425,13 +1425,13 @@ details[open] > summary .source-details-chevron {
   margin-top: 8px;
   padding: 9px;
   border-radius: 5px;
-  background: #fff3e8;
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
   display: grid;
   grid-template-columns: 110px minmax(140px,1fr) 2fr;
   gap: 10px;
 }
 .automation-proposal strong {
-  color: #9b5545;
+  color: var(--destructive);
 }
 .automation-proposal span {
   color: var(--muted-foreground);
@@ -1440,14 +1440,14 @@ details[open] > summary .source-details-chevron {
 .artifact-panel {
   padding: 28px clamp(24px,7vw,100px);
   border-top: 1px solid var(--line);
-  background: #f1efe8;
+  background: var(--card);
 }
 .artifact-loading {
   color: var(--muted-foreground);
 }
 .artifact-heading h2 {
   margin: 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 28px;
   font-weight: 400;
 }
@@ -1459,7 +1459,7 @@ details[open] > summary .source-details-chevron {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: 2fr 1fr auto;
   align-items: end;
@@ -1469,7 +1469,7 @@ details[open] > summary .source-details-chevron {
 .artifact-revision-form label {
   display: grid;
   gap: 6px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 700;
 }
@@ -1479,9 +1479,9 @@ details[open] > summary .source-details-chevron {
 .artifact-revision-form textarea {
   width: 100%;
   padding: 10px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -1504,7 +1504,7 @@ details[open] > summary .source-details-chevron {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
 }
 .artifact-grid header > div {
   display: flex;
@@ -1517,7 +1517,7 @@ details[open] > summary .source-details-chevron {
 }
 .artifact-grid h3 {
   margin: 8px 0 4px;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 22px;
   font-weight: 400;
 }
@@ -1527,18 +1527,18 @@ details[open] > summary .source-details-chevron {
   font-size: 10px;
 }
 .artifact-status.live {
-  color: #32745e;
+  color: var(--success);
 }
 .artifact-status.draft,
 .artifact-status.changes_pending {
-  color: #9b5545;
+  color: var(--destructive);
 }
 .artifact-frame {
   width: 100%;
   min-height: 300px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: white;
+  background: var(--card);
 }
 .artifact-revision-form {
   margin-top: 14px;
@@ -1551,9 +1551,9 @@ details[open] > summary .source-details-chevron {
 }
 .artifact-revision-form button {
   padding: 8px 11px;
-  border: 1px solid #d8dad4;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   font-size: 10px;
   cursor: pointer;
 }
@@ -1701,10 +1701,10 @@ details[open] > summary .source-details-chevron {
 .disconnect-source {
   margin-top: -18px;
   padding: 9px 11px;
-  border: 1px solid #dfb5ab;
+  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
   border-radius: 5px;
-  background: #fff;
-  color: #a44f3f;
+  background: var(--card);
+  color: var(--destructive);
   font-size: 10px;
   cursor: pointer;
 }
@@ -1715,11 +1715,11 @@ details[open] > summary .source-details-chevron {
 .work-trace-panel {
   padding: 34px clamp(24px,7vw,100px) 50px;
   border-top: 1px solid var(--line);
-  background: #f8f6ef;
+  background: var(--card);
 }
 .work-trace-panel > header h2 {
   margin: 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 28px;
   font-weight: 400;
 }
@@ -1742,7 +1742,7 @@ details[open] > summary .source-details-chevron {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fffdfa;
+  background: var(--card);
   display: grid;
   grid-template-columns: 120px 150px minmax(180px,1fr) auto;
   align-items: end;
@@ -1752,7 +1752,7 @@ details[open] > summary .source-details-chevron {
 .trace-fold label {
   display: grid;
   gap: 5px;
-  color: #596660;
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 700;
 }
@@ -1764,9 +1764,9 @@ details[open] > summary .source-details-chevron {
   width: 100%;
   min-width: 0;
   padding: 9px;
-  border: 1px solid #d5d8d1;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
 }
@@ -1785,13 +1785,13 @@ details[open] > summary .source-details-chevron {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffdfa;
+  background: var(--card);
 }
 .trace-heading {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  color: #8a938f;
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .08em;
@@ -1799,7 +1799,7 @@ details[open] > summary .source-details-chevron {
 }
 .work-trace-list h3 {
   margin: 8px 0;
-  font-family: Georgia,serif;
+  font-family: var(--font-ui);
   font-size: 21px;
   font-weight: 400;
 }
@@ -1819,8 +1819,8 @@ details[open] > summary .source-details-chevron {
   margin-top: 14px;
   padding: 12px;
   border-radius: 6px;
-  background: #edf0eb;
-  color: #496159;
+  background: var(--muted-surface);
+  color: var(--muted-foreground);
   font-size: 12px;
 }
 .trace-folded p {
@@ -1835,7 +1835,7 @@ details[open] > summary .source-details-chevron {
 }
 .trace-empty {
   padding: 20px;
-  border: 1px dashed #cfd1ca;
+  border: 1px dashed var(--border);
   border-radius: 7px;
   color: var(--muted-foreground);
   text-align: center;
@@ -1914,14 +1914,14 @@ details[open] > summary .source-details-chevron {
   --secondary: #eeece5;
   --secondary-foreground: #34413c;
   --muted-surface: #eeece5;
-  --muted-foreground: #68746f;
+  --muted-foreground: #5d6964;
   --accent: #e5eee9;
   --accent-foreground: #193d33;
   --destructive: #a8432f;
   --destructive-foreground: #ffffff;
   /* Status tones: AA (>= 4.5:1) as text on their own 10% tint. */
   --success: #1d6a46;
-  --warning: #8a5300;
+  --warning: #7d4a00;
   --border: #dedfd9;
   --input: #ced2cb;
   --ring: #52796f;
@@ -1935,14 +1935,39 @@ details[open] > summary .source-details-chevron {
   --sidebar-ring: #52796f;
   --radius: .625rem;
   --shadow-card: 0 1px 2px rgb(23 37 33 / .04), 0 8px 28px rgb(23 37 33 / .05);
+  --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+/* Milkdown Crepe ships its own grey palette and serif headings; map them to
+   app tokens so documents, diffs and dark mode match the rest of the UI. */
+.milkdown {
+  --crepe-color-background: var(--card);
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: var(--muted-surface);
+  --crepe-color-surface-low: var(--muted-surface);
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-outline: var(--input);
+  --crepe-color-primary: var(--primary);
+  --crepe-color-secondary: var(--secondary);
+  --crepe-color-on-secondary: var(--secondary-foreground);
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+  --crepe-color-inline-code: var(--destructive);
+  --crepe-color-error: var(--destructive);
+  --crepe-color-hover: var(--accent);
+  --crepe-color-selected: var(--accent);
+  --crepe-color-inline-area: var(--muted-surface);
+  --crepe-font-title: var(--font-ui);
+  --crepe-font-default: var(--font-ui);
 }
 
 html,
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
   line-height: 1.5;
 }
 
@@ -2064,7 +2089,7 @@ label {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  background: #fbfaf8;
+  background: var(--card);
 }
 
 .workspace-bar {
@@ -2088,7 +2113,7 @@ label {
 .people > span {
   width: 28px;
   height: 28px;
-  border-color: #f8f7f3;
+  border-color: var(--card);
 }
 .people small {
   font-size: .75rem;
@@ -2283,7 +2308,7 @@ label {
   padding: 8px 11px;
   border-color: var(--input);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--card);
   font-size: .8125rem;
 }
 
@@ -2293,7 +2318,7 @@ label {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #faf9f6;
+  background: var(--card);
 }
 
 .source-provenance > div,
@@ -2325,7 +2350,7 @@ label {
 .automation-runs details {
   border-color: var(--border);
   border-radius: var(--radius-md);
-  background: #faf9f6;
+  background: var(--card);
   box-shadow: none;
 }
 
@@ -2393,7 +2418,7 @@ label {
 }
 .editor-frame {
   padding: 0 0 80px;
-  background: #fbfaf8;
+  background: var(--card);
 }
 
 .revision-diff .milkdown {
@@ -2428,7 +2453,7 @@ label {
   padding: 16px 64px 96px;
 }
 .editor-frame .milkdown .ProseMirror {
-  color: #34413c;
+  color: var(--secondary-foreground);
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.75;
@@ -2503,7 +2528,7 @@ label {
 .artifact-panel,
 .work-trace-panel {
   border-top: 1px solid var(--border);
-  background: #f8f7f3;
+  background: var(--card);
 }
 
 .artifact-form {
@@ -2614,10 +2639,10 @@ label {
 .form-error,
 .source-error,
 .action-error {
-  border: 1px solid #ecc8c0;
+  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
   border-radius: var(--radius-sm);
-  background: #fff1ed;
-  color: #934533;
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
   font-size: .8125rem;
 }
 
@@ -3231,39 +3256,49 @@ label {
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  color-scheme: dark;
+  /* Brand palette: green-tinted neutrals; text >= 6.5:1, primary 8.8:1. */
+  --background: #121915;
+  --foreground: #e8ede9;
+  --card: #18211d;
+  --card-foreground: #e8ede9;
+  --popover: #1b2520;
+  --popover-foreground: #e8ede9;
+  --primary: #7cc4a4;
+  --primary-foreground: #0f1f18;
+  --secondary: #24302a;
+  --secondary-foreground: #d6dfd9;
+  --muted: #24302a;
+  --muted-surface: #24302a;
+  --muted-foreground: #9aa8a1;
+  --accent: #22362d;
+  --accent-foreground: #cfe7da;
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: #1d0f0c;
   --success: #6fcf97;
   --warning: #f2b35b;
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: rgb(255 255 255 / 10%);
+  --input: #33413a;
+  --ring: #5f9c82;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: #0f1612;
+  --sidebar-foreground: #d6dfd9;
+  --sidebar-primary: #7cc4a4;
+  --sidebar-primary-foreground: #0f1f18;
+  --sidebar-accent: #1f2a25;
+  --sidebar-accent-foreground: #e8ede9;
+  --sidebar-border: #24302a;
+  --sidebar-ring: #5f9c82;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / .3), 0 8px 28px rgb(0 0 0 / .25);
+  /* Legacy aliases used by older page styles. */
+  --ink: var(--foreground);
+  --paper: var(--background);
+  --line: var(--border);
+  --green: var(--primary);
 }
 
 @layer base {
@@ -4635,7 +4670,7 @@ button.artifact-source-link {
 
 .artifact-gallery-card-title {
   margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-ui);
   font-size: 1.25rem;
   font-weight: 400;
   line-height: 1.25;
