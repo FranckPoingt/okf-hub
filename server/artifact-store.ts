@@ -130,9 +130,12 @@ function bundleBytes(file: BundleFile) {
   }
 }
 
+export const BUNDLE_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
 function bundleDocument(source: string) {
   const security =
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'"><meta name="referrer" content="no-referrer">${APP_BRIDGE}`;
+    `<meta http-equiv="Content-Security-Policy" content="${BUNDLE_CSP}"><meta name="referrer" content="no-referrer">${APP_BRIDGE}`;
   return /<head(?:\s[^>]*)?>/i.test(source)
     ? source.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${security}`)
     : `${security}${source}`;
@@ -456,10 +459,12 @@ export function createArtifactStore(
       const item = artifact(id);
       return item ? JSON.parse(item.grants) as string[] : null;
     },
-    file(id: string, requestedPath: string, canEdit: boolean) {
+    file(id: string, requestedPath: string, canEdit: boolean, pin?: number) {
       const item = artifact(id);
       const number = item && (canEdit ? item.draftVersion : item.liveVersion);
-      if (!item || !number) return null;
+      if (!item || !number || (pin !== undefined && pin !== number)) {
+        return null;
+      }
       const selected = version(id, number);
       const bundle = selected ? parseBundle(selected.content) : null;
       if (!bundle) return null;

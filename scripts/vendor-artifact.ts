@@ -116,11 +116,10 @@ export async function vendorDependencies(
         if (ref.target.startsWith("data:") || ref.target.startsWith("#")) {
           continue;
         }
-        if (ext === "js") {
+        // Browsers cannot resolve bare specifiers without an import map.
+        if (ext === "js" && !/^(?:\.{0,2}\/|https:)/.test(ref.target)) {
           throw new Error(
-            `Nested import in vendored file ${url}: ${
-              new URL(ref.target, result.url).href
-            }. Supply a single-file ESM bundle (esm.sh ?bundle or jsdelivr /+esm).`,
+            `Bare import in vendored file ${url}: ${ref.target}. Use a browser ESM build such as esm.sh with target=es2022.`,
           );
         }
         const target = await vendor(new URL(ref.target, result.url).href);
@@ -152,9 +151,16 @@ export async function vendorDependencies(
     let text = fileText(file);
     for (const ref of dependencies(text, file.type)) {
       if (!/^(?:https?:)?\/\//i.test(ref.target)) continue;
-      const target = await vendor(
-        ref.target.startsWith("//") ? `https:${ref.target}` : ref.target,
-      );
+      let source = ref.target.startsWith("//")
+        ? `https:${ref.target}`
+        : ref.target;
+      // esm.sh serves Deno builds with node: imports to the CLI's user agent.
+      if (
+        new URL(source).hostname === "esm.sh" && !/[?&]target=/.test(source)
+      ) {
+        source += `${source.includes("?") ? "&" : "?"}target=es2022`;
+      }
+      const target = await vendor(source);
       text = text.split(ref.target).join(relativeReference(file.path, target));
     }
     Object.assign(

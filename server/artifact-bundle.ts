@@ -108,23 +108,12 @@ export function validateDependencies(files: BundleFile[]) {
         `Network APIs and dynamic imports are unsupported in this static artifact: ${file.path}. Use the CLI to bundle dependencies locally.`,
       );
     }
-    // The sandbox has an opaque origin; the Hub rejects its CORS module fetches.
-    if (/<script\b[^>]*\btype\s*=\s*["']?module\b/i.test(text)) {
-      throw new Error(
-        `Module scripts can't load in the Hub sandbox yet: ${file.path}. Use a classic (UMD/IIFE) build.`,
-      );
-    }
     for (
       const ref of dependencies(
         text,
         MIME[posix.extname(file.path).toLowerCase()] ?? file.type,
       )
     ) {
-      if (ref.module) {
-        throw new Error(
-          `ES module imports can't load in the Hub sandbox yet: ${file.path} (${ref.target}). Use a classic (UMD/IIFE) build.`,
-        );
-      }
       if (ref.target.startsWith("data:") || ref.target.startsWith("#")) {
         continue;
       }
@@ -132,6 +121,7 @@ export function validateDependencies(files: BundleFile[]) {
       if (
         url.origin !== "https://bundle.invalid" ||
         !paths.has(decodeURIComponent(url.pathname.slice(1))) ||
+        // Module specifiers must be relative: bare or root paths escape the bundle URL.
         (ref.module && !ref.target.startsWith("."))
       ) {
         throw new Error(

@@ -3280,9 +3280,18 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
   const dataDir = await Deno.makeTempDir();
   const folder = `${dataDir}/artifact`;
   await Deno.mkdir(folder);
-  await Deno.writeTextFile(`${folder}/index.html`, "<p>Reusable</p>");
+  await Deno.writeTextFile(
+    `${folder}/index.html`,
+    '<p>Reusable</p><script type="module" src="./app.js"></script>',
+  );
+  await Deno.writeTextFile(
+    `${folder}/app.js`,
+    'import { ready } from "./lib.js"; document.body.dataset.ready = ready;',
+  );
+  await Deno.writeTextFile(`${folder}/lib.js`, 'export const ready = "yes";');
   await Deno.writeTextFile(`${folder}/context.md`, "# Reusable\n\nContext.\n");
-  const fga = fakeOpenFga();
+  let revokedUserId = "";
+  const fga = fakeOpenFga((tuple) => tuple.user === `user:${revokedUserId}`);
   const objects = new Map<string, string>();
   const app = await createCollabApp({
     dataDir,
@@ -3466,6 +3475,71 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
     assert.equal(
       (await clients.manager.request("/api/artifact-usage")).status,
       403,
+    );
+
+    // Opaque-origin sandboxes load module bundles through a capability URL.
+    const mint = (client: Client) =>
+      client.request(`/api/apps/${saved.appId}/capability`, {
+        method: "POST",
+      });
+    const sandboxGet = (path: string) =>
+      fetch(`${base}${path}`, { headers: { origin: "null" } });
+    assert.equal((await mint(new Client(base))).status, 401);
+    const viewerUrl = (await (await mint(clients.viewer)).json()).url;
+    assert.match(viewerUrl, /^\/app-files\/[A-Za-z0-9_-]{43}\/index\.html$/);
+    const entry = await sandboxGet(viewerUrl);
+    assert.equal(entry.status, 200);
+    assert.equal(entry.headers.get("access-control-allow-origin"), "*");
+    assert.equal(entry.headers.get("access-control-allow-credentials"), null);
+    assert.match(
+      entry.headers.get("content-security-policy") ?? "",
+      /connect-src 'none'/,
+    );
+    assert.match(await entry.text(), /type="module"/);
+    const moduleFile = await sandboxGet(
+      viewerUrl.replace("index.html", "lib.js"),
+    );
+    assert.equal(moduleFile.headers.get("content-type"), "text/javascript");
+    assert.equal(moduleFile.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(await moduleFile.text(), 'export const ready = "yes";');
+    // A session cookie is not a capability, and the cookie route still refuses null.
+    assert.equal(
+      (await clients.viewer.request(`/app-files/${"A".repeat(43)}/index.html`))
+        .status,
+      404,
+    );
+    assert.equal(
+      (await clients.viewer.request(file, { headers: { origin: "null" } }))
+        .status,
+      403,
+    );
+
+    const otherUrl = (await (await mint(clients.otherManager)).json()).url;
+    assert.equal((await sandboxGet(otherUrl)).status, 200);
+    assert.equal((await usageOf(owner)).viewers30d, 3);
+
+    revokedUserId = userIds.viewer;
+    assert.equal((await sandboxGet(viewerUrl)).status, 404);
+    assert.equal((await mint(clients.viewer)).status, 404);
+    revokedUserId = "";
+    assert.equal((await sandboxGet(viewerUrl)).status, 200);
+
+    await Deno.writeTextFile(`${folder}/lib.js`, 'export const ready = "v2";');
+    assert.equal(
+      (await saveArtifact({
+        folder,
+        hubUrl: base,
+        spaceId: spaceA,
+        title: "Reusable artifact",
+        publish: true,
+      })).version,
+      2,
+    );
+    assert.equal((await sandboxGet(otherUrl)).status, 404);
+    const renewed = (await (await mint(clients.otherManager)).json()).url;
+    assert.equal(
+      await (await sandboxGet(renewed.replace("index.html", "lib.js"))).text(),
+      'export const ready = "v2";',
     );
   } finally {
     if (previousToken === undefined) Deno.env.delete("OKF_HUB_TOKEN");
