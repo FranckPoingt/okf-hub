@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import * as Y from "yjs";
+import { parse as parseYaml } from "@std/yaml";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
 import { type AIRequest, type AIResponder, createAIResponder } from "./ai.ts";
@@ -181,6 +182,8 @@ type ConceptRow = {
   publishedRevision: number | null;
   lockedAt: string | null;
   lockedBy: string | null;
+  draftFrontmatter: string;
+  publishedFrontmatter: string;
   updatedAt: string;
 };
 
@@ -381,6 +384,82 @@ function uniqueArchiveNames(
       ];
     }),
   );
+}
+
+type ArtifactFrontmatter = {
+  description?: string;
+  subject?: string;
+  owner?: string;
+  status?: string;
+  sources?: string[];
+};
+
+function publicConceptRow(row: ConceptRow) {
+  const {
+    draftFrontmatter: _draftFrontmatter,
+    publishedFrontmatter: _publishedFrontmatter,
+    ...rest
+  } = row;
+  return rest;
+}
+
+function extractFrontmatterMeta(markdown: string): ArtifactFrontmatter | null {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n(?:\r?\n)?/);
+  if (!match?.[1] || !match[1].match(/^[A-Za-z][A-Za-z0-9_-]*\s*:/m)) {
+    return null;
+  }
+  try {
+    const parsed = parseYaml(match[1]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const cleanString = (value: unknown, max: number) =>
+      typeof value === "string" && value.trim()
+        ? value.trim().replace(/\s+/g, " ").slice(0, max)
+        : undefined;
+    const rawSources = Array.isArray(record.sources)
+      ? record.sources
+      : typeof record.sources === "string"
+      ? [record.sources]
+      : typeof record.source === "string"
+      ? [record.source]
+      : [];
+    const sources = Array.from(
+      new Set(
+        rawSources
+          .map((item) =>
+            typeof item === "string" ? item.trim().slice(0, 300) : ""
+          )
+          .filter(Boolean),
+      ),
+    ).slice(0, 12);
+    const meta: ArtifactFrontmatter = {};
+    const description = cleanString(record.description ?? record.summary, 300);
+    const subject = cleanString(record.subject, 200);
+    const owner = cleanString(record.owner, 120);
+    const status = cleanString(record.status, 80);
+    if (description) meta.description = description;
+    if (subject) meta.subject = subject;
+    if (owner) meta.owner = owner;
+    if (status) meta.status = status;
+    if (sources.length) meta.sources = sources;
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredFrontmatter(raw: string | undefined): ArtifactFrontmatter {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as ArtifactFrontmatter
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function withoutFrontmatter(markdown: string) {
@@ -829,6 +908,16 @@ export async function createCollabApp({
   }
   if (!conceptColumns.some(({ name }) => name === "lockedBy")) {
     db.exec("ALTER TABLE okf_concept ADD COLUMN lockedBy TEXT");
+  }
+  if (!conceptColumns.some(({ name }) => name === "draftFrontmatter")) {
+    db.exec(
+      "ALTER TABLE okf_concept ADD COLUMN draftFrontmatter TEXT NOT NULL DEFAULT '{}'",
+    );
+  }
+  if (!conceptColumns.some(({ name }) => name === "publishedFrontmatter")) {
+    db.exec(
+      "ALTER TABLE okf_concept ADD COLUMN publishedFrontmatter TEXT NOT NULL DEFAULT '{}'",
+    );
   }
   const repositoryColumns = db.prepare(
     "PRAGMA table_info(okf_repository_source)",
@@ -1853,10 +1942,17 @@ export async function createCollabApp({
     const live = await loadDocument(row);
     live.markdown = `${bodyOnly(next).trimEnd()}\n`;
     const now = new Date().toISOString();
-    db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
-      now,
-      conceptId,
-    );
+    const extracted = extractFrontmatterMeta(next);
+    if (extracted) {
+      db.prepare(
+        "UPDATE okf_concept SET updatedAt = ?, draftFrontmatter = ? WHERE id = ?",
+      ).run(now, JSON.stringify(extracted), conceptId);
+    } else {
+      db.prepare("UPDATE okf_concept SET updatedAt = ? WHERE id = ?").run(
+        now,
+        conceptId,
+      );
+    }
     await Deno.writeTextFile(markdownPath(conceptId), live.markdown);
   }
 
@@ -1907,6 +2003,195 @@ export async function createCollabApp({
     return visible;
   }
 
+  function resolveArtifactFrontmatter(
+    row: ConceptRow,
+    useDraft: boolean,
+  ): ArtifactFrontmatter {
+    const primary = parseStoredFrontmatter(
+      useDraft ? row.draftFrontmatter : row.publishedFrontmatter,
+    );
+    if (Object.keys(primary).length > 0) return primary;
+    if (useDraft && row.publishedRevision) {
+      const publishedFm = parseStoredFrontmatter(row.publishedFrontmatter);
+      if (Object.keys(publishedFm).length > 0) return publishedFm;
+    }
+    for (const app of artifactStore.list(row.id, useDraft)) {
+      if (!app?.bundle) continue;
+      const bundledContext = artifactStore.textFile(
+        app.id,
+        "context.md",
+        useDraft,
+      );
+      if (!bundledContext) continue;
+      const parsed = extractFrontmatterMeta(bundledContext);
+      if (parsed && Object.keys(parsed).length > 0) return parsed;
+    }
+    return {};
+  }
+
+  function conceptCreatorInfo(conceptId: string) {
+    const events = security.activity(`concept:${conceptId}`) as {
+      actorUserId?: string;
+      actorName?: string | null;
+      action?: string;
+    }[];
+    const created = events.find((item) => item.action === "concept.created") ??
+      events.at(-1);
+    return {
+      creatorId: created?.actorUserId ? String(created.actorUserId) : null,
+      creatorName: created?.actorName ? String(created.actorName) : null,
+    };
+  }
+
+  async function conceptArtifactMeta(
+    row: ConceptRow,
+    canEdit: boolean,
+    userId: string,
+    bodyMarkdown: string,
+    traces: { title: string; sourceUrl: string }[],
+  ) {
+    const fm = resolveArtifactFrontmatter(row, canEdit);
+    const publishedFm = row.publishedRevision
+      ? resolveArtifactFrontmatter(row, false)
+      : {};
+    const { creatorId, creatorName } = conceptCreatorInfo(row.id);
+    const apps = artifactStore.list(row.id, canEdit).filter(
+      (app): app is NonNullable<typeof app> => Boolean(app),
+    );
+    const isCreator = Boolean(
+      creatorId === userId || apps.some((app) => app.createdBy === userId),
+    );
+    const sources: {
+      kind: "frontmatter" | "hub" | "external" | "trace";
+      label: string;
+      href?: string;
+      conceptId?: string;
+    }[] = [];
+    const seen = new Set<string>();
+    const pushSource = (item: typeof sources[number]) => {
+      const key = item.href ?? item.label;
+      if (!key || seen.has(key) || sources.length >= 12) return;
+      seen.add(key);
+      sources.push(item);
+    };
+    const pushHubHref = async (href: string): Promise<boolean> => {
+      const hubMatch = href.split(/[?#]/, 1)[0].match(/^\/knowledge\/([^/]+)$/);
+      if (!hubMatch) return false;
+      let targetId = "";
+      try {
+        targetId = decodeURIComponent(hubMatch[1]);
+      } catch {
+        targetId = "";
+      }
+      const target = targetId && targetId !== row.id
+        ? concept(targetId)
+        : undefined;
+      if (
+        target &&
+        await security.check(userId, "view", target.id) &&
+        (await security.check(userId, "edit", target.id) ||
+          (target.status === "active" && target.publishedRevision))
+      ) {
+        pushSource({
+          kind: "hub",
+          label: target.title,
+          conceptId: target.id,
+          href: `/knowledge/${encodeURIComponent(target.id)}`,
+        });
+      }
+      return true;
+    };
+    for (const entry of fm.sources ?? []) {
+      if (await pushHubHref(entry)) continue;
+      if (/^https:\/\//i.test(entry)) {
+        pushSource({
+          kind: "external",
+          label: entry.replace(/^https:\/\//i, "").replace(/\/$/, ""),
+          href: entry,
+        });
+      } else {
+        pushSource({ kind: "frontmatter", label: entry });
+      }
+    }
+    for (const href of markdownHrefs(bodyMarkdown)) {
+      if (await pushHubHref(href)) continue;
+      if (/^https:\/\//i.test(href)) {
+        pushSource({
+          kind: "external",
+          label: href.replace(/^https:\/\//i, "").replace(/\/$/, ""),
+          href,
+        });
+      }
+    }
+    for (const trace of traces) {
+      if (trace.sourceUrl) {
+        pushSource({
+          kind: "trace",
+          label: trace.title,
+          href: trace.sourceUrl,
+        });
+      }
+    }
+    return {
+      description: fm.description || fm.subject || "",
+      publishedDescription: publishedFm.description || publishedFm.subject ||
+        "",
+      owner: fm.owner || creatorName || "Workspace owner",
+      publishedOwner: publishedFm.owner || creatorName || "Workspace owner",
+      frontmatterStatus: fm.status ?? null,
+      publishedFrontmatterStatus: publishedFm.status ?? null,
+      isCreator,
+      sources,
+    };
+  }
+
+  async function artifactGallery(userId: string, spaceIdFilter: string) {
+    if (spaceIdFilter) {
+      if (
+        !space(spaceIdFilter) ||
+        !await security.checkSpace(userId, "view", spaceIdFilter)
+      ) {
+        throw new ActionError("Not found", 404);
+      }
+    }
+    const items = [];
+    for (const row of concepts()) {
+      if (row.status !== "active") continue;
+      if (row.type.toLocaleLowerCase() !== "artifact") continue;
+      if (spaceIdFilter && row.spaceId !== spaceIdFilter) continue;
+      if (!await security.check(userId, "view", row.id)) continue;
+      const canEdit = await security.check(userId, "edit", row.id);
+      if (!canEdit && !row.publishedRevision) continue;
+      const fm = resolveArtifactFrontmatter(row, canEdit);
+      const { creatorName } = conceptCreatorInfo(row.id);
+      const apps = artifactStore.list(row.id, canEdit).filter(
+        (app): app is NonNullable<typeof app> => Boolean(app),
+      );
+      const primaryApp = apps.find((app) => app.liveVersion !== null) ??
+        apps[0] ?? null;
+      const spaceRow = space(row.spaceId);
+      items.push({
+        id: row.id,
+        title: row.title,
+        description: fm.description || fm.subject || "",
+        frontmatterStatus: fm.status ?? null,
+        owner: fm.owner || creatorName || "Workspace owner",
+        updatedAt: row.updatedAt,
+        spaceId: row.spaceId,
+        space: spaceRow?.name ?? row.spaceId,
+        spaceIcon: spaceRow?.icon ?? "",
+        publishedRevision: row.publishedRevision,
+        appCount: apps.length,
+        appStatus: primaryApp?.status ?? null,
+        liveVersion: primaryApp?.liveVersion ?? null,
+        version: primaryApp?.version ?? null,
+        grants: primaryApp?.grants ?? [],
+      });
+    }
+    items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return { artifacts: items };
+  }
+
   async function publishConceptForUser(
     userId: string,
     conceptId: string,
@@ -1925,6 +2210,7 @@ export async function createCollabApp({
     }
     const live = await loadDocument(row);
     await saveDraft(conceptId, markdown ?? live.markdown);
+    const savedRow = concept(conceptId)!;
     const previous = row.publishedRevision
       ? revisions(conceptId).find((item) =>
         item.number === row.publishedRevision
@@ -1937,9 +2223,10 @@ export async function createCollabApp({
       )?.[1] ?? "";
       const sameMetadata =
         metadata.match(/^type:\s*(.+)$/m)?.[1] === row.type &&
-        metadata.match(/^title:\s*(.+)$/m)?.[1] === JSON.stringify(row.title);
+        metadata.match(/^title:\s*(.+)$/m)?.[1] === JSON.stringify(row.title) &&
+        savedRow.draftFrontmatter === savedRow.publishedFrontmatter;
       if (sameMetadata && bodyOnly(published) === live.markdown) {
-        return await payload(concept(conceptId)!, true, userId);
+        return await payload(savedRow, true, userId);
       }
     }
     // ponytail: one process allocates revision numbers; use a DB sequence if multi-node publishing arrives.
@@ -1968,7 +2255,7 @@ export async function createCollabApp({
         "INSERT INTO okf_revision (conceptId, number, objectKey, publishedAt, actorUserId) VALUES (?, ?, ?, ?, ?)",
       ).run(conceptId, number, objectKey, publishedAt, userId);
       db.prepare(
-        "UPDATE okf_concept SET publishedRevision = ?, updatedAt = ? WHERE id = ?",
+        "UPDATE okf_concept SET publishedRevision = ?, publishedFrontmatter = draftFrontmatter, updatedAt = ? WHERE id = ?",
       ).run(number, publishedAt, conceptId);
       db.exec("COMMIT");
     } catch (error) {
@@ -1993,12 +2280,24 @@ export async function createCollabApp({
           .objectKey,
       )
       : null;
+    const publishedBody = published ? bodyOnly(published) : null;
+    const isArtifact = row.type.toLocaleLowerCase() === "artifact";
+    const artifactMeta = isArtifact
+      ? await conceptArtifactMeta(
+        row,
+        canEdit,
+        userId,
+        canEdit ? live.markdown : publishedBody ?? "",
+        traces,
+      )
+      : undefined;
     return {
-      ...row,
+      ...publicConceptRow(row),
+      ...(artifactMeta ? { artifactMeta } : {}),
       openCommentCount: openCommentCount(row.id),
       space: space(row.spaceId)?.name ?? row.spaceId,
       draft: canEdit ? live.markdown : null,
-      published: published ? bodyOnly(published) : null,
+      published: publishedBody,
       revisions: canEdit ? history : [],
       activity: security.activity(`concept:${row.id}`),
       workTraces: canEdit
@@ -4175,7 +4474,7 @@ export async function createCollabApp({
         const file = artifactStore.file(
           appId,
           decodeURIComponent(appFileRoute[2] ?? ""),
-          state.canEdit,
+          state.canEdit && url.searchParams.get("version") !== "live",
         );
         if (!file) {
           return new Response("App file not found", {
@@ -4196,6 +4495,29 @@ export async function createCollabApp({
             headers: cors(request),
           },
         );
+      }
+    }
+    if (url.pathname === "/api/artifact-gallery" && request.method === "GET") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      try {
+        const spaceId = (url.searchParams.get("spaceId") ?? "").trim();
+        return Response.json(
+          await artifactGallery(current.user.id, spaceId),
+          { headers: cors(request) },
+        );
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Gallery unavailable",
+        }, {
+          status: error instanceof ActionError ? error.status : 503,
+          headers: cors(request),
+        });
       }
     }
     if (
@@ -4917,7 +5239,7 @@ export async function createCollabApp({
             : canEdit && archived
         ) {
           visible.push({
-            ...row,
+            ...publicConceptRow(row),
             space: space(row.spaceId)?.name ?? row.spaceId,
             openCommentCount: openCommentCount(row.id),
           });

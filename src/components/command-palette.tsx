@@ -32,6 +32,7 @@ export function CommandPalette({
   open,
   onCreate,
   onFocus,
+  onOpenArtifacts,
   onOpenChange,
   onOpenConcept,
   onOpenHome,
@@ -46,6 +47,7 @@ export function CommandPalette({
   open: boolean;
   onCreate: () => void;
   onFocus: () => void;
+  onOpenArtifacts: () => void;
   onOpenChange: (open: boolean) => void;
   onOpenConcept: (id: string) => void;
   onOpenHome: () => void;
@@ -138,6 +140,9 @@ export function CommandPalette({
             <CommandGroup heading="Quick actions">
               <CommandItem onSelect={() => run(onOpenHome)}>
                 <Home /> Home
+              </CommandItem>
+              <CommandItem onSelect={() => run(onOpenArtifacts)}>
+                <Blocks /> Artifacts
               </CommandItem>
               {canEdit && (
                 <CommandItem onSelect={() => run(onCreate)}>

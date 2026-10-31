@@ -86,6 +86,7 @@ export type Concept = {
   activity: ActivityEvent[];
   workTraces: WorkTrace[];
   openCommentCount: number;
+  artifactMeta?: ArtifactMeta;
 };
 export type CommentMessage = {
   id: string;
@@ -288,6 +289,7 @@ export type Artifact = {
   bundle?: { entry: string; files: string[] };
   document?: string;
   url?: string;
+  createdBy?: string;
   versions: ArtifactVersion[];
   updatedAt: string;
 };
@@ -304,4 +306,40 @@ export type ArtifactState = {
   }[];
   canEdit: boolean;
   canPublish: boolean;
+};
+export type ArtifactSource = {
+  kind: "frontmatter" | "hub" | "external" | "trace";
+  label: string;
+  href?: string;
+  conceptId?: string;
+};
+export type ArtifactMeta = {
+  description: string;
+  publishedDescription: string;
+  owner: string;
+  publishedOwner: string;
+  frontmatterStatus: string | null;
+  publishedFrontmatterStatus: string | null;
+  isCreator: boolean;
+  sources: ArtifactSource[];
+};
+export type ArtifactGalleryItem = {
+  id: string;
+  title: string;
+  description: string;
+  frontmatterStatus: string | null;
+  owner: string;
+  updatedAt: string;
+  spaceId: string;
+  space: string;
+  spaceIcon: string;
+  publishedRevision: number | null;
+  appCount: number;
+  appStatus: "draft" | "live" | "changes_pending" | null;
+  liveVersion: number | null;
+  version: number | null;
+  grants: string[];
+};
+export type ArtifactGalleryResponse = {
+  artifacts: ArtifactGalleryItem[];
 };

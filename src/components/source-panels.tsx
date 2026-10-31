@@ -1706,10 +1706,10 @@ const formatBytes = (bytes: number) =>
     ? `${(bytes / 1024).toFixed(1)} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
-const appFileUrl = (artifact: Artifact) =>
+const appFileUrl = (artifact: Artifact, preferLive = false) =>
   `${SERVICE}/api/apps/${encodeURIComponent(artifact.id)}/files/${
     artifact.bundle?.entry.split("/").map(encodeURIComponent).join("/") ?? ""
-  }`;
+  }${preferLive ? "?version=live" : ""}`;
 
 function CapabilityPicker({
   actions,
@@ -1765,7 +1765,13 @@ function CapabilityPicker({
   );
 }
 
-function AppFrame({ artifact }: { artifact: Artifact }) {
+export function AppFrame(
+  { artifact, fullBleed = false, preferLive = false }: {
+    artifact: Artifact;
+    fullBleed?: boolean;
+    preferLive?: boolean;
+  },
+) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(280);
   useEffect(() => setHeight(280), [artifact.id, artifact.version]);
@@ -1781,6 +1787,7 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
       };
       if (message?.type === "okf:size") {
         if (
+          !fullBleed &&
           artifact.type === "inline_html" &&
           typeof message.height === "number" &&
           Number.isFinite(message.height) && message.height > 0
@@ -1822,20 +1829,24 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
     };
     globalThis.addEventListener("message", receive);
     return () => globalThis.removeEventListener("message", receive);
-  }, [artifact.grants, artifact.id, artifact.type]);
+  }, [artifact.grants, artifact.id, artifact.type, fullBleed]);
   return (
     <iframe
-      key={`${artifact.id}:${artifact.version}`}
+      key={`${artifact.id}:${artifact.version}:${
+        preferLive ? "live" : "default"
+      }`}
       ref={frame}
-      className="artifact-frame"
-      style={{ height }}
+      className={fullBleed
+        ? "artifact-frame artifact-frame-bleed"
+        : "artifact-frame"}
+      style={fullBleed ? undefined : { height }}
       title={artifact.title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       allow=""
-      loading="lazy"
+      loading={fullBleed ? undefined : "lazy"}
       src={artifact.bundle
-        ? appFileUrl(artifact)
+        ? appFileUrl(artifact, preferLive)
         : artifact.type === "https_url"
         ? artifact.url
         : undefined}
@@ -1847,10 +1858,11 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
 }
 
 export function AppPanel(
-  { conceptId, conceptActive, onInsertReference }: {
+  { conceptId, conceptActive, onInsertReference, onStateChange }: {
     conceptId: string;
     conceptActive: boolean;
     onInsertReference?: (artifact: Artifact) => void;
+    onStateChange?: (apps: Artifact[], canPublish: boolean) => void;
   },
 ) {
   const [state, setState] = useState<ArtifactState | null>(null);
@@ -1867,6 +1879,8 @@ export function AppPanel(
   const [grants, setGrants] = useState<string[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const stateListener = useRef(onStateChange);
+  stateListener.current = onStateChange;
   const load = useCallback(async () => {
     const response = await api(
       `/api/apps?conceptId=${encodeURIComponent(conceptId)}`,
@@ -1874,6 +1888,10 @@ export function AppPanel(
     const result = await response.json() as ArtifactState & { error?: string };
     if (!response.ok) throw new Error(result.error ?? "Apps unavailable");
     setState(result);
+    stateListener.current?.(
+      result.apps ?? result.artifacts ?? [],
+      Boolean(result.canPublish),
+    );
   }, [conceptId]);
   useEffect(() => {
     load().catch((cause) => setError(cause.message));

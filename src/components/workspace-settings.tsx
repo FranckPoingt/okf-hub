@@ -279,6 +279,8 @@ export function NewDocumentDialog({
   templates,
   initialSpaceId,
   initialParentId,
+  initialType = "Policy",
+  initialIntent = "canonical",
   busy,
   error,
   onOpenChange,
@@ -290,24 +292,33 @@ export function NewDocumentDialog({
   templates: DocumentTemplate[];
   initialSpaceId?: string;
   initialParentId?: string;
+  initialType?: string;
+  initialIntent?: string;
   busy: boolean;
   error: string;
   onOpenChange: (open: boolean) => void;
   onCreate: (event: FormEvent<HTMLFormElement>) => Promise<boolean>;
 }) {
   const [templateId, setTemplateId] = useState("");
-  const [documentType, setDocumentType] = useState("Policy");
-  const [intent, setIntent] = useState("canonical");
+  const [documentType, setDocumentType] = useState(initialType);
+  const [intent, setIntent] = useState(initialIntent);
   const [spaceId, setSpaceId] = useState(initialSpaceId || spaces[0]?.id || "");
   const [parentId, setParentId] = useState(initialParentId ?? "");
   useEffect(() => {
     if (!open) return;
     setTemplateId("");
-    setDocumentType("Policy");
-    setIntent("canonical");
+    setDocumentType(initialType);
+    setIntent(initialIntent);
     setSpaceId(initialSpaceId || spaces[0]?.id || "");
     setParentId(initialParentId ?? "");
-  }, [open, initialSpaceId, initialParentId, spaces]);
+  }, [
+    open,
+    initialIntent,
+    initialParentId,
+    initialSpaceId,
+    initialType,
+    spaces,
+  ]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     if (await onCreate(event)) onOpenChange(false);

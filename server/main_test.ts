@@ -282,10 +282,25 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
         'data-dogfood-revision="2"',
       ),
     );
+    assert.ok(
+      (await (await owner.request(filePath)).text()).includes(
+        'data-dogfood-revision="2"',
+      ),
+    );
+    assert.ok(
+      !(await (await owner.request(`${filePath}?version=live`)).text())
+        .includes('data-dogfood-revision="2"'),
+    );
     const draftDocument =
       await (await owner.request(`/api/concepts/${first.documentId}`)).json();
     assert.equal(draftDocument.publishedRevision, 1);
     assert.equal(draftDocument.workTraces.length, 2);
+    assert.equal(draftDocument.artifactMeta.owner, "Franck");
+    assert.equal(
+      draftDocument.artifactMeta.frontmatterStatus,
+      "working-hypothesis",
+    );
+    assert.equal(draftDocument.artifactMeta.isCreator, true);
     const activated = await saveArtifact({ ...options, publish: true });
     assert.equal(activated.version, 2);
     assert.ok(
@@ -296,11 +311,96 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     const publishedDocument =
       await (await viewer.request(`/api/concepts/${first.documentId}`)).json();
     assert.equal(publishedDocument.publishedRevision, 2);
+    assert.equal(publishedDocument.artifactMeta.isCreator, false);
+    assert.equal(publishedDocument.artifactMeta.publishedOwner, "Franck");
     assert.ok(
       publishedDocument.published.includes(
         "The second version preserves the same shared link.",
       ),
     );
+    const spaceCreate = await owner.request("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "Onboarding" }),
+    });
+    assert.equal(spaceCreate.status, 201);
+    const onboardingSpace = await spaceCreate.json();
+    const draftOnlyCreate = await owner.request("/api/concepts", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Draft ROI calculator",
+        type: "Artifact",
+        intent: "working",
+        spaceId: onboardingSpace.id,
+      }),
+    });
+    assert.equal(draftOnlyCreate.status, 201);
+    const draftOnly = await draftOnlyCreate.json();
+    assert.equal(
+      (await owner.request(`/api/concepts/${draftOnly.id}`, {
+        method: "PUT",
+        body: [
+          "---",
+          "description: Draft-only margin calculator for finance review.",
+          "owner: Finance team",
+          "status: draft",
+          "sources:",
+          `  - /knowledge/${first.documentId}`,
+          "  - https://example.com/finance-model",
+          "---",
+          "",
+          "# Draft ROI calculator",
+          "",
+          "Context body.",
+          "",
+        ].join("\n"),
+      })).status,
+      204,
+    );
+    const draftOnlyPayload =
+      await (await owner.request(`/api/concepts/${draftOnly.id}`)).json();
+    assert.equal(
+      draftOnlyPayload.artifactMeta.description,
+      "Draft-only margin calculator for finance review.",
+    );
+    assert.equal(draftOnlyPayload.artifactMeta.owner, "Finance team");
+    assert.equal(draftOnlyPayload.artifactMeta.sources.length, 2);
+    assert.equal(
+      draftOnlyPayload.artifactMeta.sources[0].conceptId,
+      first.documentId,
+    );
+
+    assert.equal((await fetch(`${base}/api/artifact-gallery`)).status, 401);
+    const ownerGallery = await (await owner.request("/api/artifact-gallery"))
+      .json();
+    assert.equal(ownerGallery.artifacts.length, 2);
+    const ownerOnboardingGallery = await (await owner.request(
+      `/api/artifact-gallery?spaceId=${onboardingSpace.id}`,
+    )).json();
+    assert.equal(ownerOnboardingGallery.artifacts.length, 1);
+    assert.equal(ownerOnboardingGallery.artifacts[0].id, draftOnly.id);
+    assert.equal(
+      ownerOnboardingGallery.artifacts[0].description,
+      "Draft-only margin calculator for finance review.",
+    );
+    assert.equal(ownerOnboardingGallery.artifacts[0].owner, "Finance team");
+
+    const viewerGallery = await (await viewer.request("/api/artifact-gallery"))
+      .json();
+    assert.deepEqual(
+      viewerGallery.artifacts.map((item: { id: string }) => item.id),
+      [first.documentId],
+    );
+    assert.equal(viewerGallery.artifacts[0].owner, "Franck");
+    assert.equal(viewerGallery.artifacts[0].liveVersion, 2);
+    const viewerPoliciesGallery = await (await viewer.request(
+      "/api/artifact-gallery?spaceId=policies",
+    )).json();
+    assert.equal(viewerPoliciesGallery.artifacts.length, 1);
+    const viewerOnboardingGallery = await (await viewer.request(
+      `/api/artifact-gallery?spaceId=${onboardingSpace.id}`,
+    )).json();
+    assert.equal(viewerOnboardingGallery.artifacts.length, 0);
+
     const appState =
       await (await owner.request(`/api/apps?conceptId=${first.documentId}`))
         .json();

@@ -298,6 +298,7 @@ export function createArtifactStore(
         ? inlineDocument(selected.content)
         : undefined,
       url: item.type === "https_url" ? selected.content : undefined,
+      createdBy: item.createdBy,
       versions,
       updatedAt: item.updatedAt,
     };
@@ -461,6 +462,17 @@ export function createArtifactStore(
         };
       }
       return { body: bytes, type: file.type || "application/octet-stream" };
+    },
+    textFile(id: string, requestedPath: string, useDraft: boolean) {
+      const item = artifact(id);
+      const number = item && (useDraft ? item.draftVersion : item.liveVersion);
+      if (!item || !number) return null;
+      const selected = version(id, number);
+      const bundle = selected ? parseBundle(selected.content) : null;
+      if (!bundle) return null;
+      const path = safeBundlePath(requestedPath);
+      const file = bundle.files.find((candidate) => candidate.path === path);
+      return file ? new TextDecoder().decode(bundleBytes(file)) : null;
     },
     data: {
       list(id: string, userId: string, collection: string) {

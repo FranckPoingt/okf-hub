@@ -12,10 +12,12 @@ import {
 Deno.test("round-trips stable app routes and rejects malformed paths", () => {
   const routes: Exclude<AppRoute, { kind: "not_found" }>[] = [
     { kind: "home" as const },
+    { kind: "artifacts" as const },
     { kind: "search" as const },
     { kind: "sources" as const },
     { kind: "developer" as const },
     { kind: "space" as const, id: "people-operations" },
+    { kind: "space_artifacts" as const, id: "people-operations" },
     ...SETTINGS_SECTIONS.map((section) => ({
       kind: "manage" as const,
       section,
@@ -40,6 +42,9 @@ Deno.test("round-trips stable app routes and rejects malformed paths", () => {
   });
   assert.deepEqual(parseAppRoute("/settings/unknown"), { kind: "not_found" });
   assert.deepEqual(parseAppRoute("/spaces/People"), { kind: "not_found" });
+  assert.deepEqual(parseAppRoute("/spaces/People/artifacts"), {
+    kind: "not_found",
+  });
   assert.deepEqual(parseAppRoute("/knowledge/%zz"), { kind: "not_found" });
   assert.deepEqual(parseAppRoute("/private"), { kind: "not_found" });
 });

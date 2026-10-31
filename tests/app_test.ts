@@ -210,4 +210,19 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
     await Deno.readTextFile("src/App.tsx"),
     /const spaceRouteVersion = spaces\.map[\s\S]*spaceRouteVersion,\n {2}\]\);/,
   );
+  assert.match(bundle, /View context/);
+  assert.match(bundle, /Open as document/);
+  assert.match(bundle, /Open artifact/);
+  assert.match(bundle, /\/api\/artifact-gallery/);
+  assert.match(bundle, /Filter artifacts by space/);
+  const artifactPanels = await Deno.readTextFile(
+    "src/components/artifact-panels.tsx",
+  );
+  assert.match(artifactPanels, /from "\.\.\/hooks\/useIsMobile\.ts"/);
+  const sourcePanels = await Deno.readTextFile(
+    "src/components/source-panels.tsx",
+  );
+  assert.match(sourcePanels, /sandbox="allow-scripts"/);
+  assert.match(sourcePanels, /referrerPolicy="no-referrer"/);
+  assert.match(sourcePanels, /allow=""/);
 });

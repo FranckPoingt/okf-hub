@@ -15,6 +15,11 @@ import {
   useState,
 } from "react";
 import { AppSidebar } from "./components/app-sidebar.tsx";
+import {
+  ArtifactFirstView,
+  ArtifactGallery,
+  canOpenArtifactFirst,
+} from "./components/artifact-panels.tsx";
 import { AskOKF } from "./components/ask-okf.tsx";
 import { CommandPalette } from "./components/command-palette.tsx";
 import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
@@ -72,6 +77,7 @@ import type { ConnectorDefinition } from "./lib/connectors.ts";
 import type {
   AIConfig,
   Artifact,
+  ArtifactState,
   Bootstrap,
   Concept,
   DocumentTemplate,
@@ -116,6 +122,8 @@ export default function App() {
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [newDocumentSpaceId, setNewDocumentSpaceId] = useState<string>();
   const [newDocumentParentId, setNewDocumentParentId] = useState<string>();
+  const [newDocumentType, setNewDocumentType] = useState("Policy");
+  const [newDocumentIntent, setNewDocumentIntent] = useState("canonical");
   const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
   const [spaceDialogIcon, setSpaceDialogIcon] = useState("");
   const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
@@ -161,6 +169,13 @@ export default function App() {
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
   const [homeOpen, setHomeOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [spaceArtifactsIdOpen, setSpaceArtifactsIdOpen] = useState<
+    string | null
+  >(null);
+  const [conceptApps, setConceptApps] = useState<Artifact[]>([]);
+  const [canPublishConceptApps, setCanPublishConceptApps] = useState(false);
+  const [artifactFirstOpen, setArtifactFirstOpen] = useState(true);
   const [spaceIdOpen, setSpaceIdOpen] = useState<string | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -239,12 +254,33 @@ export default function App() {
     }
     setAIConfig(result);
   }, []);
+  const loadConceptApps = useCallback(async (id: string) => {
+    const response = await api(
+      `/api/apps?conceptId=${encodeURIComponent(id)}`,
+    );
+    if (!response.ok) {
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
+      return [];
+    }
+    const body = await response.json() as ArtifactState;
+    const apps = body.apps ?? body.artifacts ?? [];
+    setConceptApps(apps);
+    setCanPublishConceptApps(Boolean(body.canPublish));
+    return apps;
+  }, []);
   const openHubConcept = useCallback(async (id: string, record = true) => {
     setConceptLoaded(false);
     setRouteError("");
     const response = await api(conceptPath(id));
     const result = await response.json() as Concept & { error?: string };
     if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
+    if (result.type.toLocaleLowerCase() === "artifact") {
+      await loadConceptApps(id);
+    } else {
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
+    }
     setConcept(result);
     const content = bootstrap?.canEdit ? result.draft : result.published;
     setInitialMarkdown(content ?? null);
@@ -258,6 +294,8 @@ export default function App() {
     setCommentAnchor(null);
     setImported(null);
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
@@ -266,13 +304,17 @@ export default function App() {
     const requestedSurface = !record
       ? new URLSearchParams(globalThis.location.search).get("surface")
       : null;
+    setArtifactFirstOpen(
+      requestedSurface !== "document" && requestedSurface !== "artifacts" &&
+        requestedSurface !== "activity",
+    );
     setSurface(
       requestedSurface === "artifacts" || requestedSurface === "activity"
         ? requestedSurface
         : "document",
     );
     if (record) setBrowserRoute({ kind: "concept", id });
-  }, [bootstrap?.canEdit]);
+  }, [bootstrap?.canEdit, loadConceptApps]);
   const refreshHubLists = useCallback(async () => {
     const [spacesResponse, conceptsResponse] = await Promise.all([
       api("/api/spaces"),
@@ -336,6 +378,10 @@ export default function App() {
       setImports([]);
       setImported(null);
       setHomeOpen(false);
+      setArtifactsOpen(false);
+      setSpaceArtifactsIdOpen(null);
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
       setSpaceIdOpen(null);
       setSearchOpen(false);
       setAskOpen(false);
@@ -584,8 +630,32 @@ export default function App() {
     setActionBusy(false);
     if (!response.ok) return setActionError(result.error ?? "Update failed");
     setConcept(result);
+    if (result.type.toLocaleLowerCase() === "artifact") {
+      await loadConceptApps(result.id);
+    }
     setDocumentSettingsOpen(false);
     await refreshHubLists();
+  };
+
+  const activateConceptApp = async (appId: string) => {
+    if (!concept) return;
+    setActionBusy(true);
+    setActionError("");
+    const response = await api(
+      `/api/apps/${encodeURIComponent(appId)}/activate`,
+      {
+        method: "POST",
+      },
+    );
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
+    setActionBusy(false);
+    if (!response.ok) {
+      setActionError(result.error ?? "App activation failed");
+      return;
+    }
+    await loadConceptApps(concept.id);
   };
 
   const publish = async () => {
@@ -924,6 +994,8 @@ export default function App() {
     }
     setImported(result);
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
@@ -937,6 +1009,8 @@ export default function App() {
     setRouteError("");
     setImported(null);
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
@@ -948,6 +1022,7 @@ export default function App() {
         setActionError(error.message)
       );
     } else if (id && record) {
+      setArtifactFirstOpen(true);
       setBrowserRoute({ kind: "concept", id });
     } else if (!id && concept) {
       if (record) setBrowserRoute({ kind: "concept", id: concept.id });
@@ -960,6 +1035,8 @@ export default function App() {
     setPresenting(false);
     setRouteError("");
     setHomeOpen(true);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(false);
@@ -969,10 +1046,42 @@ export default function App() {
     setDocumentSettingsOpen(false);
     if (record) setBrowserRoute({ kind: "home" });
   };
+  const showArtifacts = (record = true) => {
+    setPresenting(false);
+    setRouteError("");
+    setArtifactsOpen(true);
+    setSpaceArtifactsIdOpen(null);
+    setHomeOpen(false);
+    setSpaceIdOpen(null);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(false);
+    setDocumentSettingsOpen(false);
+    if (record) setBrowserRoute({ kind: "artifacts" });
+  };
+  const showSpaceArtifacts = (id: string, record = true) => {
+    setPresenting(false);
+    setRouteError("");
+    setSpaceArtifactsIdOpen(id);
+    setArtifactsOpen(false);
+    setHomeOpen(false);
+    setSpaceIdOpen(null);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(false);
+    setDocumentSettingsOpen(false);
+    if (record) setBrowserRoute({ kind: "space_artifacts", id });
+  };
   const showSpace = (id: string, record = true) => {
     setPresenting(false);
     setRouteError("");
     setSpaceIdOpen(id);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setHomeOpen(false);
     setImported(null);
     setSourceOpen(false);
@@ -986,6 +1095,8 @@ export default function App() {
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSearchOpen(true);
     setSourceOpen(false);
@@ -999,6 +1110,8 @@ export default function App() {
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(true);
@@ -1018,6 +1131,8 @@ export default function App() {
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setCreateOpen(true);
     setDocumentSettingsOpen(false);
@@ -1032,6 +1147,8 @@ export default function App() {
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(false);
@@ -1041,8 +1158,18 @@ export default function App() {
     if (record) setBrowserRoute({ kind: "developer" });
   };
   const openNewDocument = (spaceId?: string, parentId?: string) => {
+    setNewDocumentType("Policy");
+    setNewDocumentIntent("canonical");
     setNewDocumentSpaceId(spaceId);
     setNewDocumentParentId(parentId);
+    setActionError("");
+    setNewDocumentOpen(true);
+  };
+  const openNewArtifact = (spaceId?: string) => {
+    setNewDocumentType("Artifact");
+    setNewDocumentIntent("working");
+    setNewDocumentSpaceId(spaceId);
+    setNewDocumentParentId(undefined);
     setActionError("");
     setNewDocumentOpen(true);
   };
@@ -1088,6 +1215,7 @@ export default function App() {
       return;
     }
     pendingReference.current = { title, href };
+    setArtifactFirstOpen(false);
     setDocumentMode("edit");
     setSurface("document");
   }, [documentMode, surface]);
@@ -1109,6 +1237,8 @@ export default function App() {
       if (!active) return;
       setRouteError("This knowledge page is unavailable.");
       setHomeOpen(false);
+      setArtifactsOpen(false);
+      setSpaceArtifactsIdOpen(null);
       setSpaceIdOpen(null);
       setSearchOpen(false);
       setSourceOpen(false);
@@ -1121,6 +1251,13 @@ export default function App() {
       const route = parseAppRoute(globalThis.location.pathname);
       try {
         if (route.kind === "home") return showHome(false);
+        if (route.kind === "artifacts") return showArtifacts(false);
+        if (route.kind === "space_artifacts") {
+          if (!spaceRouteVersion.split("\0").includes(route.id)) {
+            return unavailable();
+          }
+          return showSpaceArtifacts(route.id, false);
+        }
         if (route.kind === "search") return showSearch(false);
         if (route.kind === "sources") return showSources(false);
         if (route.kind === "developer") {
@@ -1248,8 +1385,15 @@ export default function App() {
   const activeSpace = spaceIdOpen
     ? spaces.find((item) => item.id === spaceIdOpen) ?? null
     : null;
+  const activeSpaceArtifacts = spaceArtifactsIdOpen
+    ? spaces.find((item) => item.id === spaceArtifactsIdOpen) ?? null
+    : null;
   const activeView = homeOpen
     ? "home"
+    : artifactsOpen
+    ? "artifacts"
+    : activeSpaceArtifacts
+    ? "space_artifacts"
     : activeSpace
     ? "space"
     : searchOpen
@@ -1267,15 +1411,19 @@ export default function App() {
     ? "Settings"
     : developerOpen
     ? "Developer"
-    : activeSpace
+    : activeSpace || activeSpaceArtifacts
     ? "Spaces"
-    : homeOpen || searchOpen || sourceOpen
+    : homeOpen || artifactsOpen || searchOpen || sourceOpen
     ? "Company knowledge"
     : imported
     ? importedSourceLabel
     : concept?.space ?? "Hub-native knowledge";
   const pageTitle = homeOpen
     ? "Home"
+    : artifactsOpen
+    ? "Artifacts"
+    : activeSpaceArtifacts
+    ? `${activeSpaceArtifacts.name} · Artifacts`
     : activeSpace
     ? activeSpace.name
     : searchOpen
@@ -1287,9 +1435,31 @@ export default function App() {
     : developerOpen
     ? "API documentation"
     : imported?.title ?? concept?.title ?? "Hub-native knowledge";
+  const isArtifactOwner = Boolean(
+    bootstrap.access === "owner" ||
+      concept?.artifactMeta?.isCreator ||
+      (bootstrap.user?.id &&
+        conceptApps.some((app) => app.createdBy === bootstrap.user?.id)),
+  );
+  const isArtifactFirstEligible = canOpenArtifactFirst(
+    concept,
+    conceptApps,
+    view,
+    isArtifactOwner,
+  );
+  const isConceptRouteActive = Boolean(
+    concept && !routeError && !homeOpen && !artifactsOpen &&
+      !activeSpaceArtifacts && !activeSpace && !searchOpen && !sourceOpen &&
+      !createOpen && !developerOpen && !imported,
+  );
+  const showArtifactFirst = Boolean(
+    conceptLoaded && isConceptRouteActive && isArtifactFirstEligible &&
+      artifactFirstOpen,
+  );
   const statusTone =
-    homeOpen || activeSpace || searchOpen || sourceOpen || createOpen ||
-      developerOpen
+    homeOpen || artifactsOpen || activeSpaceArtifacts || activeSpace ||
+      searchOpen || sourceOpen || createOpen || developerOpen ||
+      showArtifactFirst
       ? "online"
       : imported
       ? imported.source?.status === "sync_failed" ? "offline" : "online"
@@ -1300,7 +1470,8 @@ export default function App() {
       : status === "syncing"
       ? "connecting"
       : status;
-  const statusLabel = searchOpen || homeOpen
+  const statusLabel = searchOpen || homeOpen || artifactsOpen ||
+      activeSpaceArtifacts
     ? "permission filtered"
     : activeSpace
     ? `${activeSpace.count} documents`
@@ -1312,6 +1483,8 @@ export default function App() {
     ? "developer API"
     : imported
     ? "read only"
+    : showArtifactFirst
+    ? conceptApps.some((app) => app.liveVersion !== null) ? "artifact" : "draft"
     : concept?.status === "archived"
     ? "archived"
     : concept?.lockedAt
@@ -1321,6 +1494,10 @@ export default function App() {
     : "published";
   const statusDetail = homeOpen
     ? "Knowledge overview"
+    : artifactsOpen
+    ? "Workspace artifact gallery"
+    : activeSpaceArtifacts
+    ? "Space artifact gallery"
     : activeSpace
     ? "Space overview"
     : searchOpen
@@ -1337,6 +1514,8 @@ export default function App() {
       : imported.sourceId === "notion"
       ? "Notion owned"
       : "Repository owned"
+    : showArtifactFirst
+    ? "Sandboxed interactive artifact"
     : concept?.lockedAt
     ? "Read only until unlocked"
     : bootstrap.canEdit && view === "published" && concept?.publishedRevision
@@ -1368,7 +1547,7 @@ export default function App() {
         <AppSidebar
           access={bootstrap.access}
           activeImportId={imported?.id}
-          activeSpaceId={activeSpace?.id}
+          activeSpaceId={activeSpace?.id ?? activeSpaceArtifacts?.id}
           activeView={activeView}
           canEdit={Boolean(bootstrap.canEdit)}
           concepts={concepts}
@@ -1411,9 +1590,11 @@ export default function App() {
           }}
           onCreateApp={() => {
             if (!concept) return;
+            setArtifactFirstOpen(false);
             setSurface("artifacts");
             showHubConcept(concept.id);
           }}
+          onCreateArtifact={openNewArtifact}
           onCreateDocument={openNewDocument}
           onCreateSpace={() => {
             setActionError("");
@@ -1439,6 +1620,7 @@ export default function App() {
           onManageAccess={() => {
             showCreate("members");
           }}
+          onOpenArtifacts={showArtifacts}
           onOpenDeveloper={() => {
             showDeveloper();
           }}
@@ -1447,6 +1629,7 @@ export default function App() {
           onOpenImported={(sourceId, path) => void openImported(sourceId, path)}
           onOpenSearch={openGlobalSearch}
           onOpenSpace={showSpace}
+          onOpenSpaceArtifacts={showSpaceArtifacts}
           onOpenSources={showSources}
           onSignOut={() => void signOut()}
         />
@@ -1460,7 +1643,7 @@ export default function App() {
             statusTone={statusTone}
             title={pageTitle}
             onSearch={openGlobalSearch}
-            actions={imported
+            actions={imported || showArtifactFirst
               ? (
                 <Button
                   type="button"
@@ -1472,9 +1655,7 @@ export default function App() {
                   <Sparkles className="size-3.5" /> Ask OKF
                 </Button>
               )
-              : concept && !homeOpen && !activeSpace && !searchOpen &&
-                  !sourceOpen &&
-                  !createOpen && !developerOpen && !imported
+              : isConceptRouteActive && concept
               ? (
                 <DocumentToolbar
                   actionBusy={actionBusy}
@@ -1517,6 +1698,9 @@ export default function App() {
                   }}
                   onHistory={() => setHistoryOpen((open) => !open)}
                   onModeChange={setDocumentMode}
+                  onOpenArtifactView={isArtifactFirstEligible
+                    ? () => setArtifactFirstOpen(true)
+                    : undefined}
                   onPublish={() => void publish()}
                   onPresent={() => setPresenting(true)}
                   onReferences={() => setReferencesOpen(true)}
@@ -1531,7 +1715,11 @@ export default function App() {
               : undefined}
           />
         )}
-        <section className="workspace">
+        <section
+          className={showArtifactFirst
+            ? "workspace workspace-bleed"
+            : "workspace"}
+        >
           {focusMode && (
             <Button
               type="button"
@@ -1574,6 +1762,18 @@ export default function App() {
                 onSources={showSources}
               />
             )
+            : artifactsOpen || activeSpaceArtifacts
+            ? (
+              <ArtifactGallery
+                space={activeSpaceArtifacts}
+                spaces={spaces}
+                canEdit={Boolean(bootstrap.canEdit)}
+                onCreateArtifact={openNewArtifact}
+                onOpenArtifacts={showArtifacts}
+                onOpenSpaceArtifacts={showSpaceArtifacts}
+                onOpenConcept={showHubConcept}
+              />
+            )
             : activeSpace
             ? (
               <SpacePanel
@@ -1581,6 +1781,7 @@ export default function App() {
                 concepts={concepts}
                 canEdit={Boolean(bootstrap.canEdit)}
                 onCreate={() => openNewDocument(activeSpace.id)}
+                onOpenArtifacts={() => showSpaceArtifacts(activeSpace.id)}
                 onOpenConcept={showHubConcept}
               />
             )
@@ -1752,6 +1953,28 @@ export default function App() {
                 {actionError && <p className="form-error">{actionError}</p>}
               </section>
             )
+            : showArtifactFirst
+            ? (
+              <ArtifactFirstView
+                concept={concept}
+                spaceIcon={spaces.find((item) => item.id === concept.spaceId)
+                  ?.icon ?? ""}
+                apps={conceptApps}
+                markdown={markdown}
+                view={view}
+                isOwner={isArtifactOwner}
+                canPublishApp={canPublishConceptApps}
+                activating={actionBusy}
+                onActivateApp={activateConceptApp}
+                onOpenAsDocument={() => {
+                  setArtifactFirstOpen(false);
+                  setSurface("document");
+                }}
+                onOpenConcept={showHubConcept}
+                onOpenSpaceArtifacts={showSpaceArtifacts}
+                onViewChange={setView}
+              />
+            )
             : (
               <MilkdownProvider
                 key={`${concept.id}-${concept.status}-${view}-${editorVersion}`}
@@ -1922,6 +2145,11 @@ export default function App() {
                                   item.id === next.id ? next : item
                                 )
                               );
+                              if (
+                                next.type.toLocaleLowerCase() === "artifact"
+                              ) {
+                                void loadConceptApps(next.id);
+                              }
                             }}
                           />
                           <DocumentEditor
@@ -1976,6 +2204,10 @@ export default function App() {
                     onInsertReference={bootstrap.canEdit
                       ? insertArtifactReference
                       : undefined}
+                    onStateChange={(apps, canPublish) => {
+                      setConceptApps(apps);
+                      setCanPublishConceptApps(canPublish);
+                    }}
                   />
                 )}
                 {surface === "activity" && (
@@ -2053,6 +2285,8 @@ export default function App() {
           templates={templates}
           initialSpaceId={newDocumentSpaceId}
           initialParentId={newDocumentParentId}
+          initialType={newDocumentType}
+          initialIntent={newDocumentIntent}
           busy={actionBusy}
           error={actionError}
           onOpenChange={setNewDocumentOpen}
@@ -2118,20 +2352,25 @@ export default function App() {
       {!presenting && (
         <CommandPalette
           canEdit={Boolean(bootstrap.canEdit)}
-          concept={concept && !homeOpen && !searchOpen && !sourceOpen &&
+          concept={concept && !homeOpen && !artifactsOpen &&
+              !activeSpaceArtifacts && !searchOpen && !sourceOpen &&
               !createOpen && !imported
             ? concept
             : null}
           open={searchPaletteOpen}
           onCreate={() => openNewDocument()}
           onFocus={() => setFocusMode(true)}
+          onOpenArtifacts={showArtifacts}
           onOpenChange={setSearchPaletteOpen}
           onOpenConcept={showHubConcept}
           onOpenHome={showHome}
           onOpenImported={openImported}
           onOpenReferences={() => setReferencesOpen(true)}
           onOpenSearch={showSearch}
-          onOpenSurface={setSurface}
+          onOpenSurface={(next) => {
+            setArtifactFirstOpen(false);
+            setSurface(next);
+          }}
           onPresent={() => setPresenting(true)}
         />
       )}
