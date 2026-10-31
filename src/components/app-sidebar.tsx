@@ -1,6 +1,7 @@
 import {
   AppWindow,
   Archive,
+  Blocks,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -10,19 +11,27 @@ import {
   Home,
   Lock,
   LogOut,
+  Monitor,
+  Moon,
   MoreHorizontal,
   Plus,
   Search,
   Settings,
+  Sun,
   Unlock,
 } from "lucide-react";
 import { type DragEvent, useState } from "react";
 import { Avatar, AvatarFallback } from "./ui/avatar.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
+import { setTheme, type ThemeChoice, useTheme } from "../lib/theme.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
@@ -51,6 +60,8 @@ import {
 type NavigationView =
   | "home"
   | "search"
+  | "artifacts"
+  | "space_artifacts"
   | "sources"
   | "developer"
   | "space"
@@ -65,6 +76,7 @@ type SidebarConcept = {
   parentId: string | null;
   sortOrder: number;
   title: string;
+  type?: string;
   status: "active" | "archived";
   lockedAt: string | null;
   lockedBy: string | null;
@@ -97,6 +109,7 @@ type AppSidebarProps = {
   workspace: { name: string; tagline: string; logo: string };
   onCreate: () => void;
   onCreateApp: () => void;
+  onCreateArtifact: (spaceId?: string) => void;
   onCreateDocument: (spaceId?: string, parentId?: string) => void;
   onCreateSpace: () => void;
   onArchiveDocument: (concept: SidebarConcept) => void;
@@ -106,12 +119,14 @@ type AppSidebarProps = {
     destination: { spaceId: string; parentId: string | null; index: number },
   ) => void;
   onManageAccess: () => void;
+  onOpenArtifacts: () => void;
   onOpenDeveloper: () => void;
   onOpenConcept: (id: string) => void;
   onOpenHome: () => void;
   onOpenImported: (sourceId: string, path: string) => void;
   onOpenSearch: () => void;
   onOpenSpace: (id: string) => void;
+  onOpenSpaceArtifacts: (id: string) => void;
   onOpenSources: () => void;
   onSignOut: () => void;
 };
@@ -135,22 +150,26 @@ export function AppSidebar({
   workspace,
   onCreate,
   onCreateApp,
+  onCreateArtifact,
   onCreateDocument,
   onCreateSpace,
   onArchiveDocument,
   onToggleDocumentLock,
   onMoveDocument,
   onManageAccess,
+  onOpenArtifacts,
   onOpenDeveloper,
   onOpenConcept,
   onOpenHome,
   onOpenImported,
   onOpenSearch,
   onOpenSpace,
+  onOpenSpaceArtifacts,
   onOpenSources,
   onSignOut,
 }: AppSidebarProps) {
   const { state, isMobile } = useSidebar();
+  const theme = useTheme();
   const iconOnly = !isMobile && state === "collapsed";
   const [collapsedSpaces, setCollapsedSpaces] = useState<Set<string>>(
     () => new Set(),
@@ -258,7 +277,7 @@ export function AppSidebar({
           {hasChildren && (
             <button
               type="button"
-              className="absolute top-1.5 left-0.5 z-10 flex size-5 items-center justify-center rounded text-sidebar-foreground/55 hover:bg-sidebar-accent"
+              className="absolute top-1.5 left-0.5 z-10 flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent"
               aria-label={`${
                 collapsed ? "Expand" : "Collapse"
               } ${concept.title}`}
@@ -283,6 +302,8 @@ export function AppSidebar({
               ? <Archive />
               : concept.lockedAt
               ? <Lock />
+              : concept.type?.toLocaleLowerCase() === "artifact"
+              ? <Blocks />
               : <FileText />}
             <span>{concept.title}</span>
           </SidebarMenuButton>
@@ -336,6 +357,11 @@ export function AppSidebar({
       );
     });
 
+  const totalArtifacts =
+    concepts.filter((item) =>
+      item.status === "active" && item.type?.toLocaleLowerCase() === "artifact"
+    ).length;
+
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader>
@@ -363,7 +389,7 @@ export function AppSidebar({
                 )}
               <span className="grid min-w-0 flex-1 text-left leading-tight">
                 <span className="truncate">{workspace.name}</span>
-                <span className="truncate text-xs font-normal text-sidebar-foreground/60">
+                <span className="truncate text-xs font-normal text-muted-foreground">
                   {workspace.tagline}
                 </span>
               </span>
@@ -398,9 +424,25 @@ export function AppSidebar({
                   <Search />
                   <span>Search</span>
                 </SidebarMenuButton>
-                <SidebarMenuBadge className="font-normal text-sidebar-foreground/45">
+                <SidebarMenuBadge className="font-normal text-muted-foreground">
                   ⌘K
                 </SidebarMenuBadge>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  tooltip="Artifacts"
+                  isActive={activeView === "artifacts"}
+                  onClick={onOpenArtifacts}
+                >
+                  <Blocks />
+                  <span>Artifacts</span>
+                </SidebarMenuButton>
+                {totalArtifacts > 0 && (
+                  <SidebarMenuBadge className="font-normal text-muted-foreground">
+                    {totalArtifacts}
+                  </SidebarMenuBadge>
+                )}
               </SidebarMenuItem>
               {canEdit && (
                 <SidebarMenuItem>
@@ -425,11 +467,14 @@ export function AppSidebar({
                       <DropdownMenuItem onClick={() => onCreateDocument()}>
                         <FileText /> Document
                       </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onCreateArtifact()}>
+                        <Blocks /> Artifact
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={!currentConceptId}
                         onClick={onCreateApp}
                       >
-                        <AppWindow /> App
+                        <AppWindow /> Artifact
                         {!currentConceptId && (
                           <span className="ml-auto text-xs text-muted-foreground">
                             Open a document
@@ -466,9 +511,17 @@ export function AppSidebar({
 
         {spaces.map((space) => {
           const collapsed = collapsedSpaces.has(space.id);
+          const spaceArtifacts = concepts.filter((item) =>
+            item.spaceId === space.id &&
+            item.status === "active" &&
+            item.type?.toLocaleLowerCase() === "artifact"
+          ).length;
+          const spaceArtifactsActive = activeView === "space_artifacts" &&
+            activeSpaceId === space.id;
           if (iconOnly) {
             const active =
-              activeView === "space" && activeSpaceId === space.id ||
+              (activeView === "space" || activeView === "space_artifacts") &&
+                activeSpaceId === space.id ||
               activeView === "concept" &&
                 concepts.some((item) =>
                   item.id === currentConceptId && item.spaceId === space.id
@@ -504,7 +557,7 @@ export function AppSidebar({
               <div className="relative">
                 <button
                   type="button"
-                  className="absolute top-1.5 left-2 z-10 flex size-5 items-center justify-center rounded text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  className="absolute top-1.5 left-2 z-10 flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   aria-label={`${
                     collapsed ? "Expand" : "Collapse"
                   } ${space.name}`}
@@ -552,7 +605,7 @@ export function AppSidebar({
                     <SpaceIcon value={space.icon} />
                   </span>
                   <span className="truncate font-medium">{space.name}</span>
-                  <span className="ml-auto tabular-nums text-sidebar-foreground/60">
+                  <span className="ml-auto tabular-nums text-muted-foreground">
                     {space.count}
                   </span>
                 </SidebarGroupLabel>
@@ -570,7 +623,28 @@ export function AppSidebar({
               </div>
               {!collapsed && (
                 <SidebarGroupContent>
-                  <SidebarMenu>{renderConcepts(space.id, null)}</SidebarMenu>
+                  <SidebarMenu>
+                    {spaceArtifacts > 0 && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          type="button"
+                          size="sm"
+                          tooltip={`${space.name} artifacts`}
+                          aria-label={`${space.name} artifacts`}
+                          isActive={spaceArtifactsActive}
+                          onClick={() => onOpenSpaceArtifacts(space.id)}
+                          className="pl-6 text-muted-foreground"
+                        >
+                          <Blocks />
+                          <span>Artifacts</span>
+                        </SidebarMenuButton>
+                        <SidebarMenuBadge className="font-normal text-muted-foreground">
+                          {spaceArtifacts}
+                        </SidebarMenuBadge>
+                      </SidebarMenuItem>
+                    )}
+                    {renderConcepts(space.id, null)}
+                  </SidebarMenu>
                 </SidebarGroupContent>
               )}
             </SidebarGroup>
@@ -723,16 +797,18 @@ export function AppSidebar({
                 </Avatar>
                 <span className="grid min-w-0 flex-1 text-left leading-tight">
                   <span className="truncate font-medium">{user.name}</span>
-                  <span className="truncate text-xs text-sidebar-foreground/60">
+                  <span className="truncate text-xs text-muted-foreground">
                     {access} · {user.email}
                   </span>
                 </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-64">
-                <DropdownMenuItem onClick={onCreate}>
-                  <Settings />
-                  Workspace settings
-                </DropdownMenuItem>
+                {canEdit && (
+                  <DropdownMenuItem onClick={onCreate}>
+                    <Settings />
+                    Workspace settings
+                  </DropdownMenuItem>
+                )}
                 {access === "owner" && (
                   <DropdownMenuItem onClick={onManageAccess}>
                     <Settings />
@@ -743,6 +819,27 @@ export function AppSidebar({
                   <Code2 />
                   Developer settings
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={theme.choice}
+                    onValueChange={(value) => setTheme(value as ThemeChoice)}
+                  >
+                    <DropdownMenuRadioItem value="light">
+                      <Sun />
+                      Light
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="dark">
+                      <Moon />
+                      Dark
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="system">
+                      <Monitor />
+                      System
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onSignOut}>
                   <LogOut />

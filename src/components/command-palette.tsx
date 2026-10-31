@@ -25,6 +25,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "./ui/command.tsx";
+import { DocumentIcon } from "./document-icon.tsx";
 
 export function CommandPalette({
   canEdit,
@@ -32,6 +33,7 @@ export function CommandPalette({
   open,
   onCreate,
   onFocus,
+  onOpenArtifacts,
   onOpenChange,
   onOpenConcept,
   onOpenHome,
@@ -46,6 +48,7 @@ export function CommandPalette({
   open: boolean;
   onCreate: () => void;
   onFocus: () => void;
+  onOpenArtifacts: () => void;
   onOpenChange: (open: boolean) => void;
   onOpenConcept: (id: string) => void;
   onOpenHome: () => void;
@@ -139,6 +142,9 @@ export function CommandPalette({
               <CommandItem onSelect={() => run(onOpenHome)}>
                 <Home /> Home
               </CommandItem>
+              <CommandItem onSelect={() => run(onOpenArtifacts)}>
+                <Blocks /> Artifacts
+              </CommandItem>
               {canEdit && (
                 <CommandItem onSelect={() => run(onCreate)}>
                   <FilePlus2 /> New document
@@ -158,7 +164,9 @@ export function CommandPalette({
                 key={`${item.sourceId}-${item.id}`}
                 onSelect={() => openResult(item)}
               >
-                {item.kind === "hub-native" ? <FileText /> : <GitBranch />}
+                {item.kind === "hub-native"
+                  ? <DocumentIcon type={item.type} />
+                  : <GitBranch />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{item.title}</span>
                   <span className="block truncate text-xs text-muted-foreground">
@@ -188,7 +196,7 @@ export function CommandPalette({
                 <CommandItem
                   onSelect={() => run(() => onOpenSurface("artifacts"))}
                 >
-                  <Blocks /> Apps
+                  <Blocks /> Artifacts
                 </CommandItem>
                 <CommandItem onSelect={() => run(onOpenReferences)}>
                   <Link2 /> References and backlinks

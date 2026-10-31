@@ -1,0 +1,17 @@
+# QA-only override for `docker compose -p okf-design`. Maps a fake HTTPS Git
+# URL onto a bare repository inside the container so a "local" Git source can
+# be connected without network access or changes to the app.
+services:
+  app:
+    environment:
+      GIT_CONFIG_COUNT: "3"
+      GIT_CONFIG_KEY_0: url.file:///seed/handbook.git.insteadOf
+      GIT_CONFIG_VALUE_0: https://git.acme.test/acme/handbook.git
+      GIT_CONFIG_KEY_1: protocol.file.allow
+      GIT_CONFIG_VALUE_1: always
+      GIT_CONFIG_KEY_2: safe.directory
+      GIT_CONFIG_VALUE_2: "*"
+    volumes:
+      - seed_git:/seed
+volumes:
+  seed_git:

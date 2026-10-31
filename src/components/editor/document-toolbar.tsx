@@ -2,23 +2,30 @@ import {
   Activity,
   Archive,
   Blocks,
+  CircleCheck,
   Download,
   Eye,
   FilePlus2,
   FileText,
   Focus,
+  GitCompareArrows,
   History,
   Link2,
+  LoaderCircle,
   MessageSquare,
   MoreHorizontal,
   Pencil,
   Presentation,
   RotateCcw,
   Settings2,
+  Sparkles,
+  TriangleAlert,
   Users,
 } from "lucide-react";
 import type { Collaborator } from "../../collab-provider.ts";
-import { Badge } from "../ui/badge.tsx";
+import type { Freshness } from "../../lib/governance.ts";
+import type { Trust } from "../../lib/models.ts";
+import { TrustBadge } from "../trust-badge.tsx";
 import { Button } from "../ui/button.tsx";
 import {
   DropdownMenu,
@@ -31,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
+import "./editor-ux.css";
 
 export type DocumentSurface = "document" | "artifacts" | "activity";
 export type DocumentMode = "edit" | "read";
@@ -43,22 +51,33 @@ type DocumentToolbarProps = {
   commentCount: number;
   exportHref?: string;
   hasPublished: boolean;
+  hasUnpublishedChanges: boolean;
+  saveState?: "saving" | "saved" | "failed";
   focusMode: boolean;
   mode: DocumentMode;
   revisionCount: number;
   status: "active" | "archived";
+  trust?: Trust;
+  freshness?: Freshness;
+  reviewDueDate?: string | null;
+  trustReason?: string;
   surface: DocumentSurface;
   view: "draft" | "published";
   width: DocumentWidth;
   onArchive: () => void;
+  onAsk: () => void;
   onComments: () => void;
   onHistory: () => void;
   onModeChange: (mode: DocumentMode) => void;
+  onOpenArtifactView?: () => void;
   onPublish: () => void;
+  onReviewChanges: () => void;
+  onRetrySave?: () => void;
   onPresent: () => void;
   onReferences: () => void;
   onRestore: () => void;
   onSettings: () => void;
+  onSaveAsTemplate?: () => void;
   onSurfaceChange: (surface: DocumentSurface) => void;
   onFocusModeChange: (focus: boolean) => void;
   onViewChange: (view: "draft" | "published") => void;
@@ -72,22 +91,33 @@ export function DocumentToolbar({
   commentCount,
   exportHref,
   hasPublished,
+  hasUnpublishedChanges,
+  saveState,
   focusMode,
   mode,
   revisionCount,
   status,
+  trust,
+  freshness,
+  reviewDueDate,
+  trustReason,
   surface,
   view,
   width,
   onArchive,
+  onAsk,
   onComments,
   onHistory,
   onModeChange,
+  onOpenArtifactView,
   onPublish,
+  onReviewChanges,
+  onRetrySave,
   onPresent,
   onReferences,
   onRestore,
   onSettings,
+  onSaveAsTemplate,
   onSurfaceChange,
   onFocusModeChange,
   onViewChange,
@@ -95,6 +125,18 @@ export function DocumentToolbar({
 }: DocumentToolbarProps) {
   return (
     <div className="document-toolbar">
+      {onOpenArtifactView && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="h-8 gap-1.5 px-2.5 text-xs"
+          onClick={onOpenArtifactView}
+        >
+          <Blocks className="size-3.5" />
+          <span>Open artifact</span>
+        </Button>
+      )}
       <Tabs
         className="document-surface-tabs"
         value={surface}
@@ -113,11 +155,11 @@ export function DocumentToolbar({
           <TabsTrigger
             value="artifacts"
             className="h-7 gap-1.5 px-2.5 text-xs"
-            aria-label="Apps"
-            title="Apps"
+            aria-label="Artifacts"
+            title="Artifacts"
           >
             <Blocks className="size-3.5" />
-            <span className="hidden lg:inline">Apps</span>
+            <span className="hidden lg:inline">Artifacts</span>
           </TabsTrigger>
           <TabsTrigger
             value="activity"
@@ -134,16 +176,30 @@ export function DocumentToolbar({
       <Button
         type="button"
         size="sm"
-        variant="ghost"
-        className="document-collaborators h-8 gap-1.5 px-2 text-xs text-muted-foreground"
-        aria-label={`${collaborators.length} collaborators online`}
-        title={collaborators.length
-          ? collaborators.map((person) => person.name).join(", ")
-          : "No collaborators online"}
+        variant="outline"
+        className="h-8 gap-1.5 px-2.5 text-xs"
+        onClick={onAsk}
+        aria-label="Ask OKF"
+        title="Ask OKF"
       >
-        <Users className="size-3.5" />
-        <span>{collaborators.length}</span>
+        <Sparkles className="size-3.5" />
+        <span className="hidden xl:inline">Ask OKF</span>
       </Button>
+
+      <span
+        className="document-collaborators document-presence"
+        aria-label={collaborators.length
+          ? `${collaborators.length} people in this document, including you`
+          : "No one connected to this document"}
+        title={collaborators.length
+          ? `In this document: ${
+            collaborators.map((person) => person.name).join(", ")
+          }`
+          : "No one connected to this document"}
+      >
+        <Users className="size-3.5" aria-hidden="true" />
+        <span>{collaborators.length}</span>
+      </span>
 
       <Button
         type="button"
@@ -169,25 +225,98 @@ export function DocumentToolbar({
         <Link2 />
       </Button>
 
+      <TrustBadge
+        trust={trust}
+        reason={trustReason}
+        freshness={freshness}
+        reviewDueDate={reviewDueDate}
+      />
+
       {canEdit && status === "active" && (
-        <Badge
-          variant={view === "published" ? "default" : "secondary"}
-          className="h-6 rounded-md px-2 text-[11px] font-medium"
+        <Tabs
+          className="document-version-tabs"
+          value={view}
+          onValueChange={(value) =>
+            onViewChange(value as "draft" | "published")}
         >
-          {view === "published" ? "Published" : "Draft"}
-        </Badge>
+          <TabsList className="h-8 p-0.5" aria-label="Document version">
+            <TabsTrigger
+              value="draft"
+              title="Edit draft"
+              aria-label={hasUnpublishedChanges
+                ? "Draft with unpublished changes"
+                : "Draft"}
+              className="h-7 gap-1 px-2 text-xs"
+            >
+              Draft
+              {hasUnpublishedChanges && (
+                <span className="draft-change-dot" aria-hidden="true" />
+              )}
+            </TabsTrigger>
+            <TabsTrigger
+              value="published"
+              disabled={!hasPublished}
+              title={hasPublished
+                ? "View published document"
+                : "Publish a first version to make it available to readers"}
+              className="h-7 px-2 text-xs"
+            >
+              Published
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       )}
 
-      {canEdit && status === "active" && view === "published" &&
-        hasPublished && (
-        <Button
-          className="h-8 px-2.5 text-xs"
-          type="button"
-          variant="outline"
-          onClick={() => onViewChange("draft")}
+      {canEdit && status === "active" && view === "draft" && saveState && (
+        <div
+          className="document-save-status"
+          data-state={saveState}
+          role="status"
+          aria-live="polite"
         >
-          <Pencil className="size-3.5" />
-          Edit draft
+          {saveState === "saving"
+            ? (
+              <LoaderCircle
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
+            )
+            : saveState === "failed"
+            ? <TriangleAlert className="size-3.5" aria-hidden="true" />
+            : <CircleCheck className="size-3.5" aria-hidden="true" />}
+          <span>
+            {saveState === "saving"
+              ? "Saving…"
+              : saveState === "failed"
+              ? "Save failed"
+              : "Saved"}
+          </span>
+          {saveState === "failed" && onRetrySave && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              aria-label="Retry saving document"
+              onClick={onRetrySave}
+            >
+              Retry
+            </Button>
+          )}
+        </div>
+      )}
+
+      {canEdit && status === "active" && hasUnpublishedChanges && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 px-2 text-xs"
+          aria-label="Review unpublished changes"
+          title="Review changes before publishing"
+          onClick={onReviewChanges}
+        >
+          <GitCompareArrows className="size-3.5" />
+          <span className="hidden sm:inline">Review changes</span>
         </Button>
       )}
 
@@ -197,7 +326,10 @@ export function DocumentToolbar({
           className="h-8 px-3 text-xs"
           type="button"
           onClick={onPublish}
-          disabled={actionBusy}
+          disabled={actionBusy || (hasPublished && !hasUnpublishedChanges)}
+          title={hasPublished && !hasUnpublishedChanges
+            ? "No unpublished changes"
+            : "Publish this draft"}
         >
           <FilePlus2 className="size-3.5" />
           <span className="hidden lg:inline">
@@ -226,6 +358,7 @@ export function DocumentToolbar({
               size="icon-sm"
               variant="ghost"
               aria-label="Document actions"
+              title="Document actions"
             />
           }
         >
@@ -235,7 +368,7 @@ export function DocumentToolbar({
           <DropdownMenuItem onClick={onPresent}>
             <Presentation /> Present
           </DropdownMenuItem>
-          {canEdit && (
+          {canEdit && view === "draft" && (
             <DropdownMenuItem
               onClick={() => onModeChange(mode === "edit" ? "read" : "edit")}
             >
@@ -278,6 +411,11 @@ export function DocumentToolbar({
               <DropdownMenuItem onClick={onSettings}>
                 <Settings2 /> Settings
               </DropdownMenuItem>
+              {status === "active" && onSaveAsTemplate && (
+                <DropdownMenuItem onClick={onSaveAsTemplate}>
+                  <FilePlus2 /> Save as template
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               {status === "active"
                 ? (

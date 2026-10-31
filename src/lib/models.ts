@@ -1,3 +1,9 @@
+import type {
+  Freshness,
+  GovernanceSummary,
+  KnowledgePerson,
+} from "./governance.ts";
+
 export type Invitation = {
   invitationId: string;
   email: string;
@@ -5,18 +11,25 @@ export type Invitation = {
   url: string;
   status: string;
 };
+export type AIConfig = {
+  enabled: boolean;
+  provider: string;
+  model: string;
+};
 export type Bootstrap = {
   user: { id: string; name: string; email: string } | null;
   access?: "owner" | "editor" | "viewer" | "none";
   canView?: boolean;
   canEdit?: boolean;
   signupAllowed?: boolean;
+  setupTokenRequired?: boolean;
   ssoProviders?: {
     providerId: string;
     name: string;
     type: "oidc" | "saml";
   }[];
   setupRequired?: boolean;
+  passwordChangeRequired?: boolean;
   invitationRequired?: boolean;
   invitations?: Invitation[];
   workspace?: { name: string; tagline: string; logo: string };
@@ -60,7 +73,8 @@ export type WorkTrace = {
   foldedAt: string | null;
   foldedKnowledge: string | null;
 };
-export type Concept = {
+export type Concept = GovernanceSummary & {
+  sources?: Array<string | Record<string, unknown>>;
   id: string;
   spaceId: string;
   parentId: string | null;
@@ -72,6 +86,10 @@ export type Concept = {
   intent: DocumentIntent;
   status: "active" | "archived";
   publishedRevision: number | null;
+  hasUnpublishedChanges: boolean;
+  publishedMetadata?:
+    | { title: string; type: string; intent?: DocumentIntent }
+    | null;
   lockedAt: string | null;
   lockedBy: string | null;
   updatedAt: string;
@@ -81,6 +99,9 @@ export type Concept = {
   activity: ActivityEvent[];
   workTraces: WorkTrace[];
   openCommentCount: number;
+  trust?: Trust;
+  trustReason?: string;
+  artifactMeta?: ArtifactMeta;
 };
 export type CommentMessage = {
   id: string;
@@ -196,20 +217,34 @@ export type ImportedConcept = {
   importedAt: string;
   tags: string[];
   owner: string;
+  describes?: string[];
+  describedOwners?: string[];
+  stale?: { from: string; to: string; paths: string[] } | null;
   markdown?: string;
   revisionCount?: number;
   source?: RepositorySource | SharedSource | NotionSource;
 };
+export type Trust = "current" | "stale" | "sync_failed";
 export type SearchRelationship = {
   id: string;
   kind: "hub-native" | "imported";
   sourceId: string;
   title: string;
   path?: string;
-  trust: "current" | "sync_failed";
+  trust: Trust;
+  trustReason?: string;
+  // Advisory review state; independent of dependency/source `trust`.
+  freshness?: Freshness;
   sourceLabel: string;
 };
 export type SearchResult = SearchRelationship & {
+  ownerUserId?: string | null;
+  reviewDueDate?: string | null;
+  reviewedRevision?: number | null;
+  reviewedAt?: string | null;
+  reviewer?: KnowledgePerson | null;
+  publishedRevision?: number | null;
+  hasUnpublishedChanges?: boolean;
   type: string;
   tags: string[];
   owner: string;
@@ -220,6 +255,10 @@ export type SearchResult = SearchRelationship & {
   snippet: string;
   links: SearchRelationship[];
   backlinks: SearchRelationship[];
+  linkTargets: Record<string, string>;
+  alsoDefinedIn: SearchRelationship[];
+  canCompareDefinitions?: boolean;
+  aiEnabled?: boolean;
 };
 export type SearchResponse = {
   query: string;
@@ -299,4 +338,43 @@ export type ArtifactState = {
   }[];
   canEdit: boolean;
   canPublish: boolean;
+  usage?: {
+    viewers30d: number;
+    viewersAllTime: number;
+    othersSaves: number;
+    lastOpenedAt: string | null;
+  };
+};
+export type ArtifactSource = {
+  kind: "frontmatter" | "hub" | "external" | "trace";
+  label: string;
+  href?: string;
+  conceptId?: string;
+};
+export type ArtifactMeta = {
+  description: string;
+  publishedDescription: string;
+  sources: ArtifactSource[];
+};
+export type ArtifactGalleryItem = {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  updatedAt: string;
+  spaceId: string;
+  space: string;
+  spaceIcon: string;
+  publishedRevision: number | null;
+  trust: Trust;
+  trustReason?: string;
+  freshness?: Freshness;
+  appCount: number;
+  appStatus: "draft" | "live" | "changes_pending" | null;
+  liveVersion: number | null;
+  version: number | null;
+  grants: string[];
+};
+export type ArtifactGalleryResponse = {
+  artifacts: ArtifactGalleryItem[];
 };

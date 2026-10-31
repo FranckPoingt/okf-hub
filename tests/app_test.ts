@@ -56,9 +56,13 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /imported-document-header/);
   assert.match(bundle, /Shared-store owned/);
   assert.match(bundle, /Tools for this knowledge/);
-  assert.match(bundle, /Create draft App/);
+  assert.match(bundle, /Answers from/);
+  assert.match(bundle, /Create draft Artifact/);
   assert.match(bundle, /Upload bundle/);
-  assert.match(bundle, /Drop or paste an app folder/);
+  assert.match(bundle, /Drop or paste an Artifact folder/);
+  const askOKF = await Deno.readTextFile("src/components/ask-okf.tsx");
+  assert.match(askOKF, /request\.current\?\.abort\(\)/);
+  assert.match(askOKF, /request\.current !== controller/);
   assert.match(bundle, /Developer settings/);
   assert.match(bundle, /Developer API/);
   assert.match(bundle, /Loading API reference/);
@@ -87,6 +91,14 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(workspaceSettings, /nextTemplateId === "understanding-brief"/);
   assert.match(workspaceSettings, /setDocumentType\("Explanation"\)/);
   assert.match(workspaceSettings, /setIntent\("working"\)/);
+  assert.match(
+    workspaceSettings,
+    /canManageMembers && \([\s\S]*value="members"/,
+  );
+  assert.match(
+    await Deno.readTextFile("src/App.tsx"),
+    /canManageMembers=\{bootstrap\.access === "owner"\}/,
+  );
   const developerPanel = await Deno.readTextFile(
     "src/components/developer-panel.tsx",
   );
@@ -98,6 +110,20 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(developerPanel, /agent: \{ disabled: true \}/);
   assert.match(developerPanel, /mcp: \{ disabled: true \}/);
   assert.match(developerPanel, /hideSearch: true/);
+  // Viewers manage their own keys from the developer page, not editor-only settings.
+  assert.match(
+    developerPanel,
+    /managingKeys \? <DeveloperSettings embedded \/>/,
+  );
+  // The key list reuses the page heading instead of repeating its own.
+  assert.match(
+    developerPanel,
+    /\{!embedded && \(\s*<div className="settings-section-heading">/,
+  );
+  assert.doesNotMatch(
+    await Deno.readTextFile("src/App.tsx"),
+    /kind === "developer"\) \{\s*if \(!bootstrap\.canEdit\)/,
+  );
   assert.match(bundle, /Workspace identity/);
   assert.match(bundle, /New subdocument/);
   assert.match(bundle, /Document locked/);
@@ -137,10 +163,6 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.doesNotMatch(
     await Deno.readTextFile("src/components/editor/document-properties.tsx"),
     /updateFrontmatter|onMarkdownChange/,
-  );
-  assert.match(
-    await Deno.readTextFile("src/App.tsx"),
-    /item\.id === next\.id \? next : item/,
   );
   assert.match(
     await Deno.readTextFile("src/components/editor/document-editor.tsx"),
@@ -198,4 +220,24 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
     await Deno.readTextFile("src/App.tsx"),
     /const spaceRouteVersion = spaces\.map[\s\S]*spaceRouteVersion,\n {2}\]\);/,
   );
+  assert.match(bundle, /View context/);
+  assert.match(bundle, /Open as document/);
+  assert.match(bundle, /Open artifact/);
+  assert.match(bundle, /\/api\/artifact-gallery/);
+  assert.match(bundle, /Filter artifacts by space/);
+  const artifactPanels = await Deno.readTextFile(
+    "src/components/artifact-panels.tsx",
+  );
+  assert.match(artifactPanels, /from "\.\.\/hooks\/use-mobile\.ts"/);
+  // The sandbox badge must wrap inside the narrow mobile context sheet.
+  assert.match(
+    artifactPanels,
+    /max-w-full[^"]*whitespace-normal[^]*?sandboxLabel\(activeApp\.grants\.length\)/,
+  );
+  const sourcePanels = await Deno.readTextFile(
+    "src/components/source-panels.tsx",
+  );
+  assert.match(sourcePanels, /sandbox="allow-scripts"/);
+  assert.match(sourcePanels, /referrerPolicy="no-referrer"/);
+  assert.match(sourcePanels, /allow=""/);
 });

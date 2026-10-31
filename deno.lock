@@ -4,6 +4,7 @@
     "jsr:@std/assert@*": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/yaml@^1.2.0": "1.2.0",
+    "npm:@ax-llm/ax@24.0.4": "24.0.4",
     "npm:@base-ui/react@^1.0.0-rc.0": "1.7.0_@types+react@19.2.14_react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@better-auth/core@1.6.25": "1.6.25_@better-auth+utils@0.4.2_@better-fetch+fetch@1.3.1_better-call@1.3.7__zod@4.4.3_jose@6.2.8_kysely@0.29.4_nanostores@1.4.2_zod@4.4.3",
     "npm:@better-auth/sso@1.6.25": "1.6.25_@better-auth+core@1.6.25__@better-auth+utils@0.4.2__@better-fetch+fetch@1.3.1__better-call@1.3.7___zod@4.4.3__jose@6.2.8__kysely@0.29.4__nanostores@1.4.2__zod@4.4.3_@better-auth+utils@0.4.2_@better-fetch+fetch@1.3.1_better-auth@1.6.25__react@19.2.6__react-dom@19.2.6___react@19.2.6__vue@3.5.41___typescript@5.9.3__typescript@5.9.3_better-call@1.3.7__zod@4.4.3",
@@ -92,6 +93,14 @@
         "escape-html",
         "xpath@0.0.32"
       ]
+    },
+    "@ax-llm/ax@24.0.4": {
+      "integrity": "sha512-AI47e4lzihZpBvXaFvmavTXYvVU40r5sskAE59M4RdgJxO1OcChiQkFrwBk+PQ40cIdqPIaY5fG1V9N+rHF+og==",
+      "dependencies": [
+        "@opentelemetry/api"
+      ],
+      "scripts": true,
+      "bin": true
     },
     "@babel/code-frame@7.29.7": {
       "integrity": "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==",
@@ -5434,6 +5443,7 @@
     ],
     "packageJson": {
       "dependencies": [
+        "npm:@ax-llm/ax@24.0.4",
         "npm:@base-ui/react@^1.0.0-rc.0",
         "npm:@better-auth/core@1.6.25",
         "npm:@better-auth/sso@1.6.25",

@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { getMigrations } from "better-auth/db/migration";
-import { organization } from "better-auth/plugins";
+import { magicLink, organization } from "better-auth/plugins";
 import { runWithAdapter } from "@better-auth/core/context";
 import { sso } from "@better-auth/sso";
 import type { ConfiguredSSOProvider } from "./sso-config.ts";
@@ -13,6 +13,15 @@ type Session = Awaited<
   ReturnType<ReturnType<typeof betterAuth>["api"]["getSession"]>
 >;
 type Row = Record<string, unknown>;
+export type SourceGrant = {
+  type: "user" | "group";
+  id: string;
+  role: "viewer" | "editor";
+};
+export type SourceAccess = {
+  mode: "workspace" | "restricted";
+  grants: SourceGrant[];
+};
 export type AuthActor = {
   user: { id: string; name: string; email: string };
   scopes: string[];
@@ -20,9 +29,15 @@ export type AuthActor = {
 };
 
 const SOURCE = "company";
+// Host-operator actions (CLI, startup bootstrap) are audited under this actor.
+export const HOST_OPERATOR = "host-operator";
+const LOGIN_LINK_SECONDS = 15 * 60;
 const SPACE = "policies";
 const IMPORTED_SPACE = "imported";
 export const CONCEPT = "incident-communication";
+
+// Bump when `model` changes; existing stores get a new model version.
+const MODEL_VERSION = 3;
 
 const model = {
   schema_version: "1.1",
@@ -80,26 +95,44 @@ const model = {
       type: "space",
       relations: {
         parent: { this: {} },
+        // Restricted sources drop `parent` and keep only workspace owners.
+        workspace: { this: {} },
+        manager: { this: {} },
         editor: { this: {} },
         viewer: { this: {} },
+        manage: { computedUserset: { relation: "manager" } },
         edit: {
           union: {
-            child: [{ computedUserset: { relation: "editor" } }, {
+            child: [{ computedUserset: { relation: "manager" } }, {
+              computedUserset: { relation: "editor" },
+            }, {
               tupleToUserset: {
                 tupleset: { relation: "parent" },
                 computedUserset: { relation: "edit" },
+              },
+            }, {
+              tupleToUserset: {
+                tupleset: { relation: "workspace" },
+                computedUserset: { relation: "owner" },
               },
             }],
           },
         },
         view: {
           union: {
-            child: [{ computedUserset: { relation: "editor" } }, {
+            child: [{ computedUserset: { relation: "manager" } }, {
+              computedUserset: { relation: "editor" },
+            }, {
               computedUserset: { relation: "viewer" },
             }, {
               tupleToUserset: {
                 tupleset: { relation: "parent" },
                 computedUserset: { relation: "view" },
+              },
+            }, {
+              tupleToUserset: {
+                tupleset: { relation: "workspace" },
+                computedUserset: { relation: "owner" },
               },
             }],
           },
@@ -108,14 +141,16 @@ const model = {
       metadata: {
         relations: {
           parent: { directly_related_user_types: [{ type: "source" }] },
+          workspace: { directly_related_user_types: [{ type: "source" }] },
+          manager: { directly_related_user_types: [{ type: "user" }] },
           editor: {
-            directly_related_user_types: [{
+            directly_related_user_types: [{ type: "user" }, {
               type: "group",
               relation: "member",
             }],
           },
           viewer: {
-            directly_related_user_types: [{
+            directly_related_user_types: [{ type: "user" }, {
               type: "group",
               relation: "member",
             }],
@@ -153,6 +188,13 @@ function json(data: unknown, status = 200) {
   return Response.json(data, { status });
 }
 
+function randomToken(bytes = 32) {
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(bytes)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 async function secret(dataDir: string, configured?: string) {
   if (configured) return configured;
   const path = `${dataDir}/auth-secret`;
@@ -177,6 +219,7 @@ export async function createSecurity({
   openfgaKey,
   trustedOrigins = [],
   ssoProviders = [],
+  requireSetupToken = false,
 }: {
   dataDir: string;
   baseURL?: string;
@@ -185,6 +228,8 @@ export async function createSecurity({
   openfgaKey?: string;
   trustedOrigins?: string[];
   ssoProviders?: ConfiguredSSOProvider[];
+  // Production entry points set this; tests create the first account freely.
+  requireSetupToken?: boolean;
 }) {
   const db = new DatabaseSync(`${dataDir}/hub.db`);
   db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
@@ -193,6 +238,9 @@ export async function createSecurity({
       | Row
       | undefined)?.value as string | undefined;
   const authSecretValue = await secret(dataDir, authSecret);
+  // Emails allowed past the signup gate: a valid setup token or a host operator.
+  const allowedSignups = new Set<string>();
+  let capturedLoginLink = "";
   const authHost = new URL(baseURL).hostname;
   const localCookieDomain = authHost === "okf-hub.localhost"
     ? "okf-hub.localhost"
@@ -213,7 +261,16 @@ export async function createSecurity({
       user: {
         create: {
           before: (user) => {
-            if (!get("organization_id")) return Promise.resolve();
+            if (allowedSignups.has(user.email.toLowerCase())) {
+              return Promise.resolve();
+            }
+            if (!get("organization_id")) {
+              if (!requireSetupToken) return Promise.resolve();
+              throw new APIError("FORBIDDEN", {
+                message:
+                  "Open the setup link from the server logs to create the first account",
+              });
+            }
             const invited = db.prepare(
               "SELECT 1 FROM invitation WHERE lower(email) = lower(?) AND status = 'pending'",
             ).get(user.email);
@@ -239,6 +296,15 @@ export async function createSecurity({
     telemetry: { enabled: false },
     plugins: [
       organization({ teams: { enabled: true } }),
+      // Links are only minted by the host operator; the request route is blocked in handle().
+      magicLink({
+        expiresIn: LOGIN_LINK_SECONDS,
+        disableSignUp: true,
+        storeToken: "hashed",
+        sendMagicLink: ({ url }) => {
+          capturedLoginLink = url;
+        },
+      }),
       ...(ssoProviders.length
         ? [sso({ defaultSSO: ssoProviders.map((provider) => provider.auth) })]
         : []),
@@ -446,13 +512,14 @@ export async function createSecurity({
       storeId = String(result.id);
       set("openfga_store_id", storeId);
     }
-    if (!modelId) {
+    if (!modelId || Number(get("openfga_model_version") ?? 1) < MODEL_VERSION) {
       const result = await fga(`/stores/${storeId}/authorization-models`, {
         method: "POST",
         body: JSON.stringify(model),
       }) as Row;
       modelId = String(result.authorization_model_id);
       set("openfga_model_id", modelId);
+      set("openfga_model_version", String(MODEL_VERSION));
     }
     return { storeId, modelId };
   }
@@ -472,7 +539,7 @@ export async function createSecurity({
 
   async function checkObject(
     userId: string,
-    relation: "view" | "edit",
+    relation: "view" | "edit" | "manage",
     object: string,
   ) {
     const { storeId, modelId } = await authorization();
@@ -500,10 +567,26 @@ export async function createSecurity({
 
   function checkSpace(
     userId: string,
-    relation: "view" | "edit",
+    relation: "view" | "edit" | "manage",
     spaceId: string,
   ) {
     return checkObject(userId, relation, `space:${spaceId}`);
+  }
+
+  // True when the user can edit the workspace or any hub space or imported source.
+  async function canEditAnywhere(userId: string) {
+    if (await check(userId, "edit")) return true;
+    const rows = db.prepare(
+      "SELECT key FROM okf_config WHERE key LIKE 'openfga_hub_space:%' OR key LIKE 'openfga_imported_space:%'",
+    ).all() as Row[];
+    for (const { key } of rows) {
+      const [kind, id] = String(key).split(/:(.*)/s);
+      const spaceId = kind === "openfga_hub_space"
+        ? id
+        : `${IMPORTED_SPACE}-${id}`;
+      if (await checkSpace(userId, "edit", spaceId)) return true;
+    }
+    return false;
   }
 
   function member(userId: string) {
@@ -515,6 +598,171 @@ export async function createSecurity({
   function isOwner(userId: string) {
     return String(member(userId)?.role ?? "").split(",").includes("owner");
   }
+
+  function findUser(email: string) {
+    return db.prepare(
+      'SELECT id, name, email FROM "user" WHERE lower(email) = lower(?)',
+    ).get(email.trim()) as Row | undefined;
+  }
+
+  // Signup without an invitation needs this token until the first account exists.
+  function setupURL() {
+    if (
+      !requireSetupToken || get("organization_id") ||
+      db.prepare('SELECT 1 FROM "user" LIMIT 1').get()
+    ) return null;
+    db.prepare(
+      "INSERT INTO okf_config (key, value) VALUES ('setup_token', ?) ON CONFLICT(key) DO NOTHING",
+    ).run(randomToken());
+    return `${baseURL}/?setup=${get("setup_token")}`;
+  }
+
+  // Returns false when the user already has the requested ownership.
+  async function setOwner(userId: string, enabled: boolean) {
+    const organizationId = get("organization_id");
+    if (!organizationId) throw new Error("Finish workspace setup first");
+    const membership = member(userId);
+    const roles = String(membership?.role ?? "").split(",").filter(Boolean);
+    if (roles.includes("owner") === enabled) return false;
+    const owners = (db.prepare(
+      "SELECT role FROM member WHERE organizationId = ?",
+    ).all(organizationId) as Row[]).filter((row) =>
+      String(row.role).split(",").includes("owner")
+    ).length;
+    if (!enabled && owners <= 1) {
+      throw new Error("The workspace must keep at least one owner");
+    }
+    const ownerTuple = {
+      user: `user:${userId}`,
+      relation: "owner",
+      object: `source:${SOURCE}`,
+    };
+    if (enabled) {
+      await writeTuples([ownerTuple]);
+      if (!membership) {
+        await authCall(() =>
+          auth.api.addMember({
+            body: { userId, organizationId, role: "owner" },
+          })
+        );
+        return true;
+      }
+    } else {
+      // Former owners keep editor access instead of losing the workspace.
+      const editorTeamId = get("editor_team_id");
+      const joinEditors = editorTeamId &&
+        !db.prepare("SELECT 1 FROM teamMember WHERE userId = ? AND teamId = ?")
+          .get(userId, editorTeamId);
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...(joinEditors
+            ? {
+              writes: {
+                tuple_keys: [{
+                  user: `user:${userId}`,
+                  relation: "member",
+                  object: `group:${editorTeamId}`,
+                }],
+              },
+            }
+            : {}),
+          deletes: { tuple_keys: [ownerTuple] },
+          authorization_model_id: modelId,
+        }),
+      });
+      if (joinEditors) {
+        await authCall(() =>
+          authContext.adapter.create({
+            model: "teamMember",
+            data: { teamId: editorTeamId, userId, createdAt: new Date() },
+          })
+        );
+      }
+    }
+    const role = enabled
+      ? [...roles, "owner"]
+      : roles.filter((item) => item !== "owner");
+    await authCall(() =>
+      authContext.adapter.update({
+        model: "member",
+        where: [{ field: "id", value: String(membership!.id) }],
+        update: { role: role.join(",") || "member" },
+      })
+    );
+    return true;
+  }
+
+  // Host-only operations for server/admin.ts. Never route these from handle().
+  const operator = {
+    findUser,
+    workspaceReady: () => Boolean(get("organization_id")),
+    users: () =>
+      (db.prepare(
+        `SELECT u.id, u.name, u.email, u.createdAt, m.role
+         FROM "user" u LEFT JOIN member m ON m.userId = u.id
+         ORDER BY u.createdAt`,
+      ).all() as Row[]).map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        email: String(row.email),
+        owner: String(row.role ?? "").split(",").includes("owner"),
+        createdAt: new Date(row.createdAt as string).toISOString(),
+      })),
+    async createAccount(email: string, name = "") {
+      const clean = email.trim().toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(clean)) throw new Error("Enter a valid email");
+      if (findUser(clean)) throw new Error(`${clean} already has an account`);
+      allowedSignups.add(clean);
+      try {
+        const user = await authCall(() =>
+          authContext.internalAdapter.createUser({
+            email: clean,
+            name: name.trim() || clean.split("@")[0],
+            emailVerified: true,
+          })
+        );
+        return String(user.id);
+      } finally {
+        allowedSignups.delete(clean);
+      }
+    },
+    async resetPassword(userId: string) {
+      const password = randomToken(16);
+      const hash = await authContext.password.hash(password);
+      await authCall(async () => {
+        const adapter = authContext.internalAdapter;
+        const accounts = await adapter.findAccounts(userId);
+        if (accounts.some((account) => account.providerId === "credential")) {
+          await adapter.updatePassword(userId, hash);
+        } else {
+          await adapter.linkAccount({
+            userId,
+            providerId: "credential",
+            accountId: userId,
+            password: hash,
+          });
+        }
+        // The operator vouches for the address, so login links keep this password.
+        await adapter.updateUser(userId, { emailVerified: true });
+        await adapter.deleteUserSessions(userId);
+      });
+      set(`password_change:${userId}`, "1");
+      return password;
+    },
+    async loginLink(email: string) {
+      capturedLoginLink = "";
+      await authCall(() =>
+        auth.api.signInMagicLink({
+          body: { email: email.trim().toLowerCase(), callbackURL: "/" },
+          headers: new Headers(),
+        })
+      );
+      if (!capturedLoginLink) throw new Error("Login link was not created");
+      return capturedLoginLink;
+    },
+  };
 
   async function setup(
     current: NonNullable<Session>,
@@ -669,31 +917,84 @@ export async function createSecurity({
     });
   }
 
+  async function setSpaceManager(
+    spaceId: string,
+    userId: string,
+    enabled: boolean,
+  ) {
+    const key = `space_manager:${spaceId}:${userId}`;
+    const tuple = {
+      user: `user:${userId}`,
+      relation: "manager",
+      object: `space:${spaceId}`,
+    };
+    if (enabled) {
+      await ensureHubSpace(spaceId);
+      await writeTuples([tuple]);
+      set(key, "1");
+    } else {
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          deletes: { tuple_keys: [tuple] },
+          authorization_model_id: modelId,
+        }),
+      });
+      unset(key);
+    }
+  }
+
+  function spaceManagers(spaceId: string) {
+    const prefix = `space_manager:${spaceId}:`;
+    return (db.prepare(
+      "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ? ORDER BY key",
+    ).all(prefix.length, prefix) as Row[])
+      .map((row) => String(row.key).slice(prefix.length)).filter(hasMember);
+  }
+
+  function hasMember(userId: string) {
+    return Boolean(member(userId));
+  }
+
   async function deleteHubSpace(spaceId: string) {
     const viewerTeamId = get("viewer_team_id");
     if (!viewerTeamId) throw new Error("Finish organization setup first");
+    const prefix = `space_manager:${spaceId}:`;
+    const managers = db.prepare(
+      "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ?",
+    ).all(prefix.length, prefix) as Row[];
     const { storeId, modelId } = await authorization();
     await fga(`/stores/${storeId}/write`, {
       method: "POST",
       body: JSON.stringify({
         deletes: {
-          tuple_keys: [{
-            user: `source:${SOURCE}`,
-            relation: "parent",
-            object: `space:${spaceId}`,
-          }, {
-            user: `group:${viewerTeamId}#member`,
-            relation: "viewer",
-            object: `space:${spaceId}`,
-          }],
+          tuple_keys: [
+            {
+              user: `source:${SOURCE}`,
+              relation: "parent",
+              object: `space:${spaceId}`,
+            },
+            {
+              user: `group:${viewerTeamId}#member`,
+              relation: "viewer",
+              object: `space:${spaceId}`,
+            },
+            ...managers.map((row) => ({
+              user: `user:${String(row.key).slice(prefix.length)}`,
+              relation: "manager",
+              object: `space:${spaceId}`,
+            })),
+          ],
         },
         authorization_model_id: modelId,
       }),
     });
     unset(`openfga_hub_space:${spaceId}`);
+    for (const row of managers) unset(String(row.key));
   }
 
-  async function ensureImportedConcept(sourceId: string, conceptId: string) {
+  async function ensureImportedSource(sourceId: string) {
     const viewerTeamId = get("viewer_team_id");
     const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
     const spaceKey = `openfga_imported_space:${sourceId}`;
@@ -710,6 +1011,11 @@ export async function createSecurity({
       }]);
       set(spaceKey, "1");
     }
+  }
+
+  async function ensureImportedConcept(sourceId: string, conceptId: string) {
+    await ensureImportedSource(sourceId);
+    const importedSpace = `${IMPORTED_SPACE}-${sourceId}`;
     const key = `openfga_imported_concept_v2:${conceptId}`;
     if (get(key)) return;
     const tuple = {
@@ -741,6 +1047,133 @@ export async function createSecurity({
     set(key, "1");
   }
 
+  function sourceAccess(sourceId: string): SourceAccess {
+    const prefix = `source_grant:${sourceId}:`;
+    const grants = (db.prepare(
+      "SELECT key, value FROM okf_config WHERE substr(key, 1, ?) = ? ORDER BY key",
+    ).all(prefix.length, prefix) as Row[]).map((row) => {
+      const subject = String(row.key).slice(prefix.length);
+      const split = subject.indexOf(":");
+      return {
+        type: subject.slice(0, split) as SourceGrant["type"],
+        id: subject.slice(split + 1),
+        role: String(row.value) as SourceGrant["role"],
+      };
+    });
+    return get(`source_access:${sourceId}`) === "restricted"
+      ? { mode: "restricted", grants }
+      : { mode: "workspace", grants: [] };
+  }
+
+  // The imported space's access tuples are a pure function of stored access.
+  function sourceAccessTuples(sourceId: string, access: SourceAccess) {
+    const object = `space:${IMPORTED_SPACE}-${sourceId}`;
+    if (access.mode === "workspace") {
+      const viewerTeamId = get("viewer_team_id");
+      return [
+        { user: `source:${SOURCE}`, relation: "parent", object },
+        ...viewerTeamId
+          ? [{
+            user: `group:${viewerTeamId}#member`,
+            relation: "viewer",
+            object,
+          }]
+          : [],
+      ];
+    }
+    return [
+      { user: `source:${SOURCE}`, relation: "workspace", object },
+      ...access.grants.map((grant) => ({
+        user: grant.type === "user"
+          ? `user:${grant.id}`
+          : `group:${grant.id}#member`,
+        relation: grant.role,
+        object,
+      })),
+    ];
+  }
+
+  function isAccessGroup(groupId: string) {
+    const access = get(`group_access:${groupId}`);
+    return access === "editor" || access === "viewer";
+  }
+
+  // Idempotent: only tuples that differ from the stored access are written.
+  async function setSourceAccess(
+    actorUserId: string,
+    sourceId: string,
+    requested: SourceAccess,
+  ) {
+    const grants = requested.mode === "workspace" ? [] : [
+      ...new Map(
+        requested.grants.map((grant) => [`${grant.type}:${grant.id}`, grant]),
+      ).values(),
+    ];
+    for (const grant of grants) {
+      if (
+        !["viewer", "editor"].includes(grant.role) ||
+        !(grant.type === "user"
+          ? hasMember(grant.id)
+          : grant.type === "group" && isAccessGroup(grant.id))
+      ) throw new Error("Choose workspace members or groups");
+    }
+    const next: SourceAccess = { mode: requested.mode, grants };
+    await ensureImportedSource(sourceId);
+    const previous = sourceAccess(sourceId);
+    const key = (tuple: { user: string; relation: string }) =>
+      `${tuple.user} ${tuple.relation}`;
+    const before = sourceAccessTuples(sourceId, previous);
+    const after = sourceAccessTuples(sourceId, next);
+    const writes = after.filter((tuple) =>
+      !before.some((item) => key(item) === key(tuple))
+    );
+    const deletes = before.filter((tuple) =>
+      !after.some((item) => key(item) === key(tuple))
+    );
+    if (writes.length || deletes.length) {
+      // shortcut: one atomic write fits OpenFGA's 100-tuple limit only because routes cap grants at 45; batch if that cap grows.
+      const { storeId, modelId } = await authorization();
+      await fga(`/stores/${storeId}/write`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...writes.length ? { writes: { tuple_keys: writes } } : {},
+          ...deletes.length ? { deletes: { tuple_keys: deletes } } : {},
+          authorization_model_id: modelId,
+        }),
+      });
+    }
+    const prefix = `source_grant:${sourceId}:`;
+    db.prepare(
+      "DELETE FROM okf_config WHERE substr(key, 1, ?) = ?",
+    ).run(prefix.length, prefix);
+    for (const grant of grants) {
+      set(`${prefix}${grant.type}:${grant.id}`, grant.role);
+    }
+    next.mode === "restricted"
+      ? set(`source_access:${sourceId}`, "restricted")
+      : unset(`source_access:${sourceId}`);
+    if (previous.mode !== next.mode) {
+      audit(
+        actorUserId,
+        next.mode === "restricted"
+          ? "source.access_restricted"
+          : "source.access_opened",
+        `source:${sourceId}`,
+      );
+    }
+    const label = (grant: SourceGrant) =>
+      `source:${sourceId}:${grant.type}:${grant.id}:${grant.role}`;
+    const was = new Set(previous.grants.map(label));
+    const now = new Set(grants.map(label));
+    for (const item of now) {
+      if (!was.has(item)) audit(actorUserId, "source.access_granted", item);
+    }
+    for (const item of was) {
+      if (!now.has(item)) audit(actorUserId, "source.access_revoked", item);
+    }
+    return next;
+  }
+
   async function deleteImportedSource(sourceId: string, conceptIds: string[]) {
     const deletes = [];
     const settings = [];
@@ -767,20 +1200,14 @@ export async function createSecurity({
     }
     const spaceKey = `openfga_imported_space:${sourceId}`;
     if (get(spaceKey)) {
-      const viewerTeamId = get("viewer_team_id");
-      deletes.push({
-        user: `source:${SOURCE}`,
-        relation: "parent",
-        object: `space:${importedSpace}`,
-      });
-      if (viewerTeamId) {
-        deletes.push({
-          user: `group:${viewerTeamId}#member`,
-          relation: "viewer",
-          object: `space:${importedSpace}`,
-        });
-      }
-      settings.push(spaceKey);
+      deletes.push(...sourceAccessTuples(sourceId, sourceAccess(sourceId)));
+      settings.push(spaceKey, `source_access:${sourceId}`);
+      const prefix = `source_grant:${sourceId}:`;
+      settings.push(
+        ...(db.prepare(
+          "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ?",
+        ).all(prefix.length, prefix) as Row[]).map((row) => String(row.key)),
+      );
     }
     if (!deletes.length) return;
     const { storeId, modelId } = await authorization();
@@ -792,6 +1219,13 @@ export async function createSecurity({
       }),
     });
     for (const key of settings) unset(key);
+  }
+
+  function pendingInvitationFor(email: string) {
+    const row = db.prepare(
+      "SELECT id FROM invitation WHERE lower(email) = lower(?) AND status = 'pending' ORDER BY createdAt DESC LIMIT 1",
+    ).get(email) as Row | undefined;
+    return row ? String(row.id) : undefined;
   }
 
   async function bootstrap(current: NonNullable<Session>) {
@@ -896,21 +1330,20 @@ export async function createSecurity({
       : [];
     const invitations = owner
       ? db.prepare(
-        `SELECT d.invitationId, d.email, d.access, d.url, i.status FROM okf_invite_delivery d JOIN invitation i ON i.id = d.invitationId ORDER BY i.createdAt DESC`,
+        `SELECT d.invitationId, d.email, d.access, d.url, i.status FROM okf_invite_delivery d JOIN invitation i ON i.id = d.invitationId WHERE i.status = 'pending' ORDER BY i.createdAt DESC`,
       ).all()
       : [];
+    const pendingInvitationId = pendingInvitationFor(current.user.email);
     return json({
       user: current.user,
       access,
       canView,
       canEdit,
       setupRequired: !configured && (owner || !organizationExists),
-      invitationRequired: !membership &&
-        Boolean(
-          db.prepare(
-            "SELECT 1 FROM invitation WHERE email = ? AND status = 'pending'",
-          ).get(current.user.email),
-        ),
+      passwordChangeRequired: Boolean(
+        get(`password_change:${current.user.id}`),
+      ),
+      invitationRequired: !membership && Boolean(pendingInvitationId),
       invitations,
       workspace,
       members,
@@ -924,9 +1357,26 @@ export async function createSecurity({
       url.pathname === "/api/auth/sign-up/email" && request.method === "POST"
     ) {
       const body = await request.clone().json().catch(() => ({})) as Row;
-      if (get("organization_id")) {
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const setupToken = String(body.setupToken ?? "");
+      delete body.setupToken;
+      let allowed = false;
+      if (!get("organization_id")) {
+        const expected = setupURL() && get("setup_token");
+        if (requireSetupToken && (!expected || setupToken !== expected)) {
+          return json({
+            error:
+              "Open the setup link from the server logs to create the first account",
+          }, 403);
+        }
+        if (expected) {
+          // Single use: consumed before the account exists, restored if signup fails.
+          unset("setup_token");
+          allowedSignups.add(email);
+          allowed = true;
+        }
+      } else {
         const invitationId = String(body.invitationId ?? "");
-        const email = String(body.email ?? "").trim().toLowerCase();
         const invitation = invitationId
           ? db.prepare(
             "SELECT email, status FROM invitation WHERE id = ?",
@@ -944,13 +1394,42 @@ export async function createSecurity({
       delete body.invitationId;
       const headers = new Headers(request.headers);
       headers.delete("content-length");
-      return auth.handler(
-        new Request(request.url, {
-          method: request.method,
-          headers,
-          body: JSON.stringify(body),
-        }),
-      );
+      try {
+        const response = await auth.handler(
+          new Request(request.url, {
+            method: request.method,
+            headers,
+            body: JSON.stringify(body),
+          }),
+        );
+        if (allowed && !response.ok) set("setup_token", setupToken);
+        if (allowed && response.ok) {
+          const created = findUser(email);
+          if (created) {
+            audit(String(created.id), "setup.account_created", "workspace");
+          }
+        }
+        return response;
+      } finally {
+        if (allowed) allowedSignups.delete(email);
+      }
+    }
+    // Login links are minted only by the host operator CLI.
+    if (
+      url.pathname.toLowerCase().replace(/\/+/g, "/").replace(/\/$/, "") ===
+        "/api/auth/sign-in/magic-link"
+    ) {
+      return json({ error: "Not found" }, 404);
+    }
+    if (
+      url.pathname === "/api/auth/change-password" && request.method === "POST"
+    ) {
+      const current = await session(request);
+      const response = await auth.handler(request);
+      if (current && response.ok) {
+        unset(`password_change:${current.user.id}`);
+      }
+      return response;
     }
     if (url.pathname.startsWith("/api/auth/")) return auth.handler(request);
     if (!url.pathname.startsWith("/api/")) return null;
@@ -962,7 +1441,9 @@ export async function createSecurity({
     if (url.pathname === "/api/bootstrap" && request.method === "GET") {
       return current ? await bootstrap(current) : json({
         user: null,
-        signupAllowed: !get("organization_id"),
+        signupAllowed: !get("organization_id") &&
+          (!requireSetupToken || Boolean(setupURL())),
+        setupTokenRequired: requireSetupToken && !get("organization_id"),
         ssoProviders: ssoProviders.map(({ providerId, name, type }) => ({
           providerId,
           name,
@@ -1017,6 +1498,34 @@ export async function createSecurity({
       logo ? set("workspace_logo", logo) : unset("workspace_logo");
       audit(current.user.id, "workspace.updated", "workspace:company");
       return await bootstrap(current);
+    }
+    const ownerRoute = url.pathname.match(/^\/api\/members\/([^/]+)\/owner$/);
+    if (ownerRoute && request.method === "PUT") {
+      if (!isOwner(current.user.id)) {
+        return json({ error: "Owner access required" }, 403);
+      }
+      const userId = decodeURIComponent(ownerRoute[1]);
+      const body = await request.json().catch(() => ({})) as Row;
+      if (typeof body.owner !== "boolean" || !hasMember(userId)) {
+        return json({ error: "Choose a workspace member" }, 400);
+      }
+      if (userId === current.user.id) {
+        return json({ error: "Ask another owner to change your access" }, 400);
+      }
+      try {
+        if (await setOwner(userId, body.owner)) {
+          audit(
+            current.user.id,
+            body.owner ? "member.owner_granted" : "member.owner_revoked",
+            `user:${userId}`,
+          );
+        }
+        return await bootstrap(current);
+      } catch (error) {
+        return json({
+          error: error instanceof Error ? error.message : "Update failed",
+        }, 409);
+      }
     }
     if (url.pathname === "/api/groups" && request.method === "POST") {
       if (!isOwner(current.user.id)) {
@@ -1114,12 +1623,17 @@ export async function createSecurity({
       url.pathname === "/api/invitations/accept" && request.method === "POST"
     ) {
       const body = await request.json().catch(() => ({})) as Row;
-      const invitationId = String(body.invitationId ?? "");
+      // Without an id, fall back to the invitation issued to the signed-in email.
+      const invitationId = String(
+        body.invitationId ?? pendingInvitationFor(current.user.email) ?? "",
+      );
       const invitation = db.prepare(
         "SELECT email, teamId, status FROM invitation WHERE id = ?",
       ).get(invitationId) as Row | undefined;
       if (
-        !invitation || invitation.email !== current.user.email ||
+        !invitation ||
+        String(invitation.email).toLowerCase() !==
+          current.user.email.toLowerCase() ||
         invitation.status !== "pending"
       ) return json({ error: "Invitation not found" }, 404);
       try {
@@ -1198,8 +1712,15 @@ export async function createSecurity({
     authenticate,
     check,
     checkSpace,
+    canEditAnywhere,
     handle,
     isOwner,
+    hasMember,
+    setOwner,
+    setupURL,
+    operator,
+    setSpaceManager,
+    spaceManagers,
     audit,
     activity,
     ensureHubSpace,
@@ -1207,7 +1728,10 @@ export async function createSecurity({
     moveHubConcept,
     deleteHubSpace,
     ensureImportedConcept,
+    ensureImportedSource,
     deleteImportedSource,
+    sourceAccess,
+    setSourceAccess,
     close: () => db.close(),
   };
 }

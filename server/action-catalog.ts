@@ -3,6 +3,7 @@ export type JsonSchema = Record<string, unknown>;
 export type ActionContext = {
   userId: string;
   userName: string;
+  scopes?: string[];
 };
 
 export type ActionDefinition = {
@@ -10,6 +11,7 @@ export type ActionDefinition = {
   tag:
     | "Knowledge"
     | "Documents"
+    | "Spaces"
     | "Templates"
     | "Sources"
     | "Apps"
@@ -18,6 +20,7 @@ export type ActionDefinition = {
   description: string;
   mode: "query" | "mutation";
   approval: "none" | "confirm";
+  requiredScopes?: string[];
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
   run: (context: ActionContext, input: Record<string, unknown>) => unknown;
@@ -107,6 +110,9 @@ export function createActionCatalog(definitions: ActionDefinition[]) {
   if (actions.size !== definitions.length) {
     throw new Error("Action names must be unique");
   }
+  const allowed = (scopes: string[], action: ActionDefinition) =>
+    actionAllowed(scopes, action.name) &&
+    (action.requiredScopes ?? []).every((name) => actionAllowed(scopes, name));
   const describe = (action: ActionDefinition) => ({
     name: action.name,
     tag: action.tag,
@@ -119,7 +125,7 @@ export function createActionCatalog(definitions: ActionDefinition[]) {
   });
   return {
     list(scopes = ["*"]) {
-      return definitions.filter((action) => actionAllowed(scopes, action.name))
+      return definitions.filter((action) => allowed(scopes, action))
         .map(describe);
     },
     async invoke(
@@ -129,12 +135,12 @@ export function createActionCatalog(definitions: ActionDefinition[]) {
       scopes = ["*"],
     ) {
       const action = actions.get(name);
-      if (!action || !actionAllowed(scopes, name)) {
+      if (!action || !allowed(scopes, action)) {
         throw new ActionError("Action not found", 404);
       }
       const error = schemaError(action.inputSchema, input);
       if (error) throw new ActionError(error);
-      return await action.run(context, input);
+      return await action.run({ ...context, scopes }, input);
     },
     openApi(basePath = "/api/v1/actions") {
       return {
@@ -148,6 +154,7 @@ export function createActionCatalog(definitions: ActionDefinition[]) {
         tags: [
           { name: "Knowledge", description: "Find accessible knowledge." },
           { name: "Documents", description: "Create and manage documents." },
+          { name: "Spaces", description: "Find accessible knowledge spaces." },
           { name: "Templates", description: "Reuse document structures." },
           { name: "Sources", description: "Inspect connected sources." },
           { name: "Apps", description: "Manage governed document Apps." },

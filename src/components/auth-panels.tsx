@@ -33,8 +33,9 @@ import {
 } from "./ui/table.tsx";
 
 export function AuthScreen(
-  { signupAllowed, ssoProviders, onAuthenticated }: {
+  { signupAllowed, setupTokenRequired, ssoProviders, onAuthenticated }: {
     signupAllowed: boolean;
+    setupTokenRequired: boolean;
     ssoProviders: {
       providerId: string;
       name: string;
@@ -46,8 +47,13 @@ export function AuthScreen(
   const invitationId = new URLSearchParams(globalThis.location.search).get(
     "invitation",
   );
+  const setupToken = new URLSearchParams(globalThis.location.search).get(
+    "setup",
+  );
   const invited = Boolean(invitationId);
-  const canSignUp = signupAllowed || invited;
+  const awaitingSetupLink = signupAllowed && setupTokenRequired &&
+    !setupToken;
+  const canSignUp = (signupAllowed && !awaitingSetupLink) || invited;
   const [mode, setMode] = useState<"sign-in" | "sign-up">(
     canSignUp ? "sign-up" : "sign-in",
   );
@@ -85,6 +91,7 @@ export function AuthScreen(
     const body = Object.fromEntries(form);
     if (mode === "sign-in") delete body.name;
     if (mode === "sign-up" && invitationId) body.invitationId = invitationId;
+    if (mode === "sign-up" && setupToken) body.setupToken = setupToken;
     const response = await api(`/api/auth/${mode}/email`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -94,6 +101,9 @@ export function AuthScreen(
       setError(result.message ?? result.error ?? "Authentication failed");
       setBusy(false);
       return;
+    }
+    if (setupToken) {
+      globalThis.history.replaceState({}, "", globalThis.location.pathname);
     }
     await onAuthenticated();
   };
@@ -172,6 +182,7 @@ export function AuthScreen(
         </form>
         {canSignUp && (
           <Button
+            variant="link"
             className="text-button"
             type="button"
             onClick={() => setMode(mode === "sign-up" ? "sign-in" : "sign-up")}
@@ -180,6 +191,18 @@ export function AuthScreen(
               ? "Already have an account? Sign in"
               : "Need an account? Sign up"}
           </Button>
+        )}
+        {awaitingSetupLink && (
+          <p className="auth-hint">
+            New hub? Open the setup link printed in the server logs, or run{" "}
+            <code>deno task admin setup-url</code>.
+          </p>
+        )}
+        {mode === "sign-in" && (
+          <p className="auth-hint">
+            Locked out? Ask your host operator to run{" "}
+            <code>deno task admin login-link you@example.com</code>.
+          </p>
         )}
       </section>
     </main>
@@ -271,6 +294,87 @@ export function WorkspaceOnboarding(
   );
 }
 
+export function PasswordChangeGate(
+  { onComplete, onSignOut }: {
+    onComplete: () => Promise<void>;
+    onSignOut: () => void;
+  },
+) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    const response = await api("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: form.get("currentPassword"),
+        newPassword: form.get("newPassword"),
+        revokeOtherSessions: true,
+      }),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      setError(result.message ?? result.error ?? "Password change failed");
+      setBusy(false);
+      return;
+    }
+    await onComplete();
+  };
+  return (
+    <main className="auth-shell">
+      <section className="auth-card">
+        <a className="brand" href="/" aria-label="OKF Hub home">
+          <span>O</span> OKF Hub
+        </a>
+        <p className="eyebrow">Temporary password</p>
+        <h1>Choose a new password</h1>
+        <p>Your host operator reset this account. Set your own password.</p>
+        <form onSubmit={(event) => void submit(event)}>
+          <Label>
+            <span>Temporary password</span>
+            <Input
+              name="currentPassword"
+              type="password"
+              autoComplete="current-password"
+              required
+            />
+          </Label>
+          <Label>
+            <span>New password</span>
+            <Input
+              name="newPassword"
+              type="password"
+              minLength={8}
+              autoComplete="new-password"
+              required
+            />
+          </Label>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <Button
+            variant="default"
+            className="primary"
+            type="submit"
+            disabled={busy}
+          >
+            {busy ? "Saving…" : "Save password"}
+          </Button>
+        </form>
+        <Button
+          variant="link"
+          className="text-button"
+          type="button"
+          onClick={onSignOut}
+        >
+          Sign out
+        </Button>
+      </section>
+    </main>
+  );
+}
+
 export function AccessGate(
   { invited, onAccepted, onSignOut }: {
     invited: boolean;
@@ -285,7 +389,7 @@ export function AccessGate(
     );
     const response = await api("/api/invitations/accept", {
       method: "POST",
-      body: JSON.stringify({ invitationId }),
+      body: JSON.stringify({ invitationId: invitationId || undefined }),
     });
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
@@ -348,11 +452,16 @@ export function AccessPanel({
   invitations,
   members = [],
   groups = [],
+  currentUserId,
 }: {
   invitations: Invitation[];
   members?: Member[];
   groups?: AccessGroup[];
+  currentUserId?: string;
 }) {
+  const [memberItems, setMemberItems] = useState(members);
+  const ownerCount =
+    memberItems.filter((member) => member.access === "owner").length;
   const [email, setEmail] = useState("");
   const [inviteTarget, setInviteTarget] = useState("viewer");
   const [groupAccess, setGroupAccess] = useState<"editor" | "viewer">(
@@ -393,6 +502,17 @@ export function AccessPanel({
       status: "pending",
     }, ...items]);
     setEmail("");
+    void loadAudit();
+  };
+  const setOwner = async (member: Member, owner: boolean) => {
+    setError("");
+    const response = await api(
+      `/api/members/${encodeURIComponent(member.id)}/owner`,
+      { method: "PUT", body: JSON.stringify({ owner }) },
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) return setError(result.error ?? "Update failed");
+    setMemberItems(result.members ?? memberItems);
     void loadAudit();
   };
   const createGroup = async (event: FormEvent<HTMLFormElement>) => {
@@ -497,8 +617,10 @@ export function AccessPanel({
           <Users />
           <CardTitle>Members</CardTitle>
           <CardDescription>
-            {members.length} {members.length === 1 ? "person" : "people"}{" "}
-            in this workspace.
+            {memberItems.length}{" "}
+            {memberItems.length === 1 ? "person" : "people"} in this workspace,
+            {" "}
+            {ownerCount} {ownerCount === 1 ? "owner" : "owners"}.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -507,10 +629,13 @@ export function AccessPanel({
               <TableRow>
                 <TableHead>Member</TableHead>
                 <TableHead>Access</TableHead>
+                <TableHead>
+                  <span className="sr-only">Ownership</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {members.map((member) => (
+              {memberItems.map((member) => (
                 <TableRow key={member.id}>
                   <TableCell>
                     <strong>{member.name}</strong>
@@ -518,6 +643,22 @@ export function AccessPanel({
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{member.access}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    {member.id !== currentUserId && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        disabled={member.access === "owner" && ownerCount <= 1}
+                        onClick={() =>
+                          void setOwner(member, member.access !== "owner")}
+                      >
+                        {member.access === "owner"
+                          ? "Remove owner"
+                          : "Make owner"}
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

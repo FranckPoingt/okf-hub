@@ -1,0 +1,71 @@
+.document-toolbar .document-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+  font-size: .75rem;
+}
+
+.draft-change-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.document-save-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 4px;
+  color: var(--muted-foreground);
+  font-size: .75rem;
+  white-space: nowrap;
+}
+
+.document-save-status[data-state="failed"] {
+  color: var(--destructive);
+}
+
+.workspace-header.editor-workspace-header .workspace-header-status {
+  display: flex;
+  max-width: 24rem;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+}
+
+@media (max-width: 1200px) {
+  .workspace-header.editor-workspace-header[data-has-actions="true"] {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    padding-block: 8px;
+  }
+  .editor-workspace-header .document-toolbar {
+    flex-wrap: wrap;
+    flex-basis: 100%;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 800px) {
+  .workspace-header.editor-workspace-header[data-has-actions="true"] nav {
+    display: flex;
+  }
+  /* Outside documents the page heading already names the context. */
+  .workspace-header.editor-workspace-header:not([data-has-actions="true"]) .workspace-header-status {
+    display: none;
+  }
+  .workspace-header.editor-workspace-header[data-has-actions="true"] .workspace-header-status {
+    display: flex;
+    flex-basis: 100%;
+    order: 1;
+  }
+  .editor-workspace-header .document-toolbar {
+    order: 2;
+  }
+  .document-toolbar .document-presence {
+    display: none;
+  }
+}

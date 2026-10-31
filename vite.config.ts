@@ -19,6 +19,10 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: true,
         },
+        "/app-files": {
+          target,
+          changeOrigin: true,
+        },
         "/collab": {
           target,
           changeOrigin: true,

@@ -6,8 +6,13 @@ import type {
   SearchResponse,
   WorkTrace,
 } from "../lib/models.ts";
+import {
+  formatReviewDate,
+  freshnessExplanation,
+} from "./knowledge-freshness.tsx";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { TrustBadge } from "./trust-badge.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
 import { Input } from "./ui/input.tsx";
 import { Label } from "./ui/label.tsx";
@@ -27,10 +32,19 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { Textarea } from "./ui/textarea.tsx";
-import { Search, SlidersHorizontal, X } from "lucide-react";
+import { Blocks, Search, SearchX, SlidersHorizontal, X } from "lucide-react";
+import { EmptyState } from "./empty-state.tsx";
+
+const attentionFilterLabels: Record<string, string> = {
+  "": "Any ownership or review status",
+  unowned: "Unassigned owner",
+  overdue: "Review overdue",
+  unreviewed: "Needs review",
+};
 
 export function SearchPanel(
-  { onOpenHub, onOpenImported }: {
+  { onOpenHub, onOpenImported, onAsk }: {
+    onAsk: () => void;
     onOpenHub: (id: string) => void;
     onOpenImported: (
       sourceId: string,
@@ -41,6 +55,7 @@ export function SearchPanel(
   const [query, setQuery] = useState("");
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
+  const [attention, setAttention] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
@@ -68,6 +83,7 @@ export function SearchPanel(
     if (query.trim()) params.set("q", query.trim());
     if (type) params.set("type", type);
     if (tag) params.set("tag", tag);
+    if (attention) params.set("attention", attention);
     if (includeArchived) params.set("includeArchived", "true");
     void load(params);
   };
@@ -75,8 +91,9 @@ export function SearchPanel(
     event.preventDefault();
     runSearch();
   };
+  const displayedResults = result?.results ?? [];
   const activeFilters = Number(Boolean(type)) + Number(Boolean(tag)) +
-    Number(includeArchived);
+    Number(includeArchived) + Number(Boolean(attention));
   const open = (item: SearchRelationship) => {
     if (item.kind === "hub-native") return onOpenHub(item.id);
     if (item.sourceId !== "hub" && item.path) {
@@ -99,7 +116,11 @@ export function SearchPanel(
               size="xs"
               key={item.id}
               type="button"
-              title={item.sourceLabel}
+              title={item.kind === "hub-native" && item.freshness
+                ? `${item.sourceLabel} · ${
+                  freshnessExplanation(item.freshness)
+                }`
+                : item.sourceLabel}
               onClick={() => open(item)}
             >
               {item.title}
@@ -112,9 +133,9 @@ export function SearchPanel(
   return (
     <section className="search-panel" aria-labelledby="search-heading">
       <div className="source-page-heading">
-        <p className="eyebrow">Permission-aware discovery</p>
         <h1 id="search-heading">Advanced search</h1>
         <p>Search every source you can access, then narrow the results.</p>
+        <Button type="button" onClick={onAsk}>Ask OKF</Button>
       </div>
       <form
         className="my-7 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex"
@@ -165,7 +186,7 @@ export function SearchPanel(
                     setType(value === "all" ? "" : value ?? "")}
                 >
                   <SelectTrigger id="search-type" className="w-full">
-                    <SelectValue />
+                    <SelectValue>{type || "All types"}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All types</SelectItem>
@@ -183,7 +204,7 @@ export function SearchPanel(
                     setTag(value === "all" ? "" : value ?? "")}
                 >
                   <SelectTrigger id="search-tag" className="w-full">
-                    <SelectValue />
+                    <SelectValue>{tag || "All tags"}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All tags</SelectItem>
@@ -193,6 +214,32 @@ export function SearchPanel(
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="search-attention">Needs attention</Label>
+              <Select
+                value={attention || "all"}
+                onValueChange={(value) =>
+                  setAttention(value === "all" ? "" : value ?? "")}
+              >
+                <SelectTrigger id="search-attention" className="w-full">
+                  <SelectValue>{attentionFilterLabels[attention]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    {attentionFilterLabels[""]}
+                  </SelectItem>
+                  <SelectItem value="unowned">Unassigned owner</SelectItem>
+                  <SelectItem value="overdue">Review overdue</SelectItem>
+                  <SelectItem value="unreviewed">Needs review</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Ownership and review filters apply to active published workspace
+                knowledge.
+                {attention === "unreviewed" &&
+                  " Needs review finds published revisions that haven’t been reviewed."}
+              </p>
             </div>
             {result?.canIncludeArchived && (
               <Label className="rounded-lg border px-3 py-2.5">
@@ -213,6 +260,7 @@ export function SearchPanel(
                 onClick={() => {
                   setType("");
                   setTag("");
+                  setAttention("");
                   setIncludeArchived(false);
                 }}
               >
@@ -241,12 +289,12 @@ export function SearchPanel(
       </form>
       {error && <p className="source-error" role="alert">{error}</p>}
       <div className="mb-2.5 text-xs text-muted-foreground" aria-live="polite">
-        {busy ? "Checking access…" : `${result?.results.length ?? 0} results`}
+        {busy ? "Checking access…" : `${displayedResults.length} results`}
       </div>
       <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
-        {result?.results.map((item) => {
+        {displayedResults.map((item) => {
           const detailCount = item.tags.length + item.links.length +
-            item.backlinks.length;
+            item.backlinks.length + item.alsoDefinedIn.length;
           return (
             <article className="border-b last:border-b-0" key={item.id}>
               <div className="px-4 py-3.5">
@@ -254,16 +302,34 @@ export function SearchPanel(
                   <Button
                     variant="ghost"
                     type="button"
-                    className="h-auto min-w-0 justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
+                    className="h-auto min-w-0 shrink justify-start p-0 text-left text-[.95rem] font-semibold whitespace-normal hover:bg-transparent hover:text-primary"
                     onClick={() => open(item)}
                   >
                     {item.title}
                   </Button>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <Badge variant="outline">{item.type}</Badge>
-                    {item.trust !== "current" && (
-                      <Badge variant="destructive">
-                        {item.trust.replace("_", " ")}
+                  <div className="flex max-w-[55%] shrink-0 flex-wrap justify-end gap-1.5">
+                    <Badge variant="outline">
+                      {item.type.toLocaleLowerCase() === "artifact" && (
+                        <Blocks />
+                      )}
+                      {item.type}
+                    </Badge>
+                    <TrustBadge
+                      trust={item.trust}
+                      reason={item.trustReason}
+                      freshness={item.kind === "hub-native"
+                        ? item.freshness
+                        : undefined}
+                      reviewDueDate={item.reviewDueDate}
+                    />
+                    {item.kind === "hub-native" &&
+                      Boolean(item.publishedRevision) &&
+                      item.hasUnpublishedChanges === true && (
+                      <Badge
+                        variant="outline"
+                        title="Editors see unpublished writing. Review status refers to the published revision."
+                      >
+                        Draft changes
                       </Badge>
                     )}
                     {item.status === "archived" && (
@@ -276,7 +342,7 @@ export function SearchPanel(
                     {item.snippet}
                   </p>
                 )}
-                <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                   <span>
                     {item.kind === "hub-native" ? "Workspace" : "Imported"}
                   </span>
@@ -285,7 +351,31 @@ export function SearchPanel(
                     {item.sourceLabel}
                   </span>
                   <span aria-hidden="true">·</span>
-                  <span className="shrink-0">{item.owner}</span>
+                  <span className="min-w-0 break-words">
+                    {item.kind === "hub-native"
+                      ? `Owner: ${item.owner || "Unassigned"}`
+                      : item.owner}
+                  </span>
+                  {item.kind === "hub-native" && item.reviewDueDate && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        Review due {formatReviewDate(item.reviewDueDate)}
+                      </span>
+                    </>
+                  )}
+                  {item.kind === "imported" && item.importedAt && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <time
+                        dateTime={item.importedAt}
+                        title={new Date(item.importedAt).toLocaleString()}
+                      >
+                        Snapshot updated{" "}
+                        {new Date(item.importedAt).toLocaleDateString()}
+                      </time>
+                    </>
+                  )}
                 </div>
               </div>
               {detailCount > 0 && (
@@ -306,16 +396,19 @@ export function SearchPanel(
                     )}
                     {relationships("Links to", item.links)}
                     {relationships("Linked from", item.backlinks)}
+                    {relationships("Also defined in", item.alsoDefinedIn)}
                   </div>
                 </details>
               )}
             </article>
           );
         })}
-        {!busy && result?.results.length === 0 && (
-          <p className="p-10 text-center text-sm text-muted-foreground">
-            No accessible knowledge matches these filters.
-          </p>
+        {!busy && result && displayedResults.length === 0 && (
+          <EmptyState
+            icon={<SearchX />}
+            title="No results"
+            description="No accessible knowledge matches these filters. Try fewer words or clear the filters."
+          />
         )}
       </div>
     </section>

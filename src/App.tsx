@@ -1,3 +1,4 @@
+import { SuggestChange } from "./components/suggest-change.tsx";
 import { MilkdownProvider } from "@milkdown/react";
 import {
   FolderOpen,
@@ -5,6 +6,7 @@ import {
   Lock,
   MessageSquare,
   Presentation,
+  Sparkles,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -14,26 +16,35 @@ import {
   useState,
 } from "react";
 import { AppSidebar } from "./components/app-sidebar.tsx";
+import { AskOKF, type AskSession } from "./components/ask-okf.tsx";
+import {
+  ArtifactFirstView,
+  ArtifactGallery,
+  canOpenArtifactFirst,
+} from "./components/artifact-panels.tsx";
 import { CommandPalette } from "./components/command-palette.tsx";
 import { DeveloperApiDocumentation } from "./components/developer-panel.tsx";
 import {
   AccessGate,
   AuthScreen,
+  PasswordChangeGate,
   WorkspaceOnboarding,
 } from "./components/auth-panels.tsx";
-import {
-  DocumentEditor,
-  DocumentPreview,
-} from "./components/editor/document-editor.tsx";
+import { DocumentEditor } from "./components/editor/document-editor.tsx";
 import {
   type CommentAnchor,
   type CommentSelection,
   DocumentComments,
 } from "./components/editor/document-comments.tsx";
+import { deriveFreshness } from "./lib/governance.ts";
+import { DocumentGovernance } from "./components/editor/document-governance.tsx";
 import { DocumentProperties } from "./components/editor/document-properties.tsx";
 import { DocumentReferences } from "./components/editor/document-references.tsx";
+import { KnowledgeDocument } from "./components/editor/knowledge-document.tsx";
 import { PresentationMode } from "./components/editor/presentation-mode.tsx";
 import { RevisionHistory } from "./components/editor/revision-history.tsx";
+import { DraftReview } from "./components/editor/draft-review.tsx";
+import { DraftSaveQueue, type SaveState } from "./lib/draft-save.ts";
 import {
   type DocumentMode,
   type DocumentSurface,
@@ -48,9 +59,11 @@ import { WorkspaceHeader } from "./components/workspace-header.tsx";
 import { SearchPanel, WorkTracePanel } from "./components/workspace-panels.tsx";
 import {
   NewDocumentDialog,
+  type TemplateDraftCache,
   WorkspaceSettings,
 } from "./components/workspace-settings.tsx";
 import { Badge } from "./components/ui/badge.tsx";
+import { TrustBadge } from "./components/trust-badge.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { Label } from "./components/ui/label.tsx";
@@ -68,7 +81,9 @@ import { api, conceptPath, SERVICE } from "./lib/api.ts";
 import { enableEmbedConnectors } from "./lib/embeds.ts";
 import type { ConnectorDefinition } from "./lib/connectors.ts";
 import type {
+  AIConfig,
   Artifact,
+  ArtifactState,
   Bootstrap,
   Concept,
   DocumentTemplate,
@@ -83,7 +98,6 @@ import type {
 import {
   type AppRoute,
   parseAppRoute,
-  resolveImportedLink,
   routePath,
   type SettingsSection,
 } from "./routes.ts";
@@ -113,6 +127,8 @@ export default function App() {
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [newDocumentSpaceId, setNewDocumentSpaceId] = useState<string>();
   const [newDocumentParentId, setNewDocumentParentId] = useState<string>();
+  const [newDocumentType, setNewDocumentType] = useState<string>();
+  const [newDocumentIntent, setNewDocumentIntent] = useState<string>();
   const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
   const [spaceDialogIcon, setSpaceDialogIcon] = useState("");
   const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
@@ -120,9 +136,14 @@ export default function App() {
   const [markdown, setMarkdown] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [saveState, setSaveState] = useState<"saved" | "failed">(
-    "saved",
-  );
+  const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [draftSavedAt, setDraftSavedAt] = useState("");
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [newDocumentTemplateId, setNewDocumentTemplateId] = useState<string>();
+  const [templateSnapshot, setTemplateSnapshot] = useState<
+    { title: string; body: string } | null
+  >(null);
+  const [templateSaved, setTemplateSaved] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(
     "general",
   );
@@ -143,6 +164,13 @@ export default function App() {
     string | null
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askWorkspace, setAskWorkspace] = useState(false);
+  const [aiConfig, setAIConfig] = useState<AIConfig>({
+    enabled: false,
+    provider: "",
+    model: "",
+  });
   const [actionError, setActionError] = useState("");
   const [editorVersion, setEditorVersion] = useState(0);
   const [repositories, setRepositories] = useState<RepositorySource[]>([]);
@@ -152,6 +180,13 @@ export default function App() {
   const [imports, setImports] = useState<ImportedConcept[]>([]);
   const [imported, setImported] = useState<ImportedConcept | null>(null);
   const [homeOpen, setHomeOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [spaceArtifactsIdOpen, setSpaceArtifactsIdOpen] = useState<
+    string | null
+  >(null);
+  const [conceptApps, setConceptApps] = useState<Artifact[]>([]);
+  const [canPublishConceptApps, setCanPublishConceptApps] = useState(false);
+  const [artifactFirstOpen, setArtifactFirstOpen] = useState(true);
   const [spaceIdOpen, setSpaceIdOpen] = useState<string | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -166,9 +201,151 @@ export default function App() {
   const [sourceError, setSourceError] = useState("");
   const [sharedError, setSharedError] = useState("");
   const [notionError, setNotionError] = useState("");
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
+  const latestMarkdown = useRef(markdown);
+  latestMarkdown.current = markdown;
+  const documentSnapshot = useRef<(() => string | null) | null>(null);
+  const handleDraftSnapshot = useCallback(
+    (read: (() => string | null) | null) => {
+      documentSnapshot.current = read;
+    },
+    [],
   );
+  const activeConceptId = useRef<string | null>(null);
+  const latestConcept = useRef(concept);
+  latestConcept.current = concept;
+  const navigationVersion = useRef(0);
+  const lastRoutePath = useRef(
+    globalThis.location.pathname + globalThis.location.search,
+  );
+  const recordRoute = (
+    route: Exclude<AppRoute, { kind: "not_found" }>,
+    replace = false,
+  ) => {
+    lastRoutePath.current = routePath(route);
+    setBrowserRoute(route, replace);
+  };
+  const metadataFlush = useRef<(() => Promise<void>) | null>(null);
+  const governanceFlush = useRef<(() => Promise<void>) | null>(null);
+  const handleGovernanceSaveReady = useCallback(
+    (flush: (() => Promise<void>) | null) => {
+      governanceFlush.current = flush;
+    },
+    [],
+  );
+  const handleGovernanceUpdate = useCallback((updated: Concept) => {
+    const governance = {
+      ownerUserId: updated.ownerUserId,
+      owner: updated.owner,
+      reviewDueDate: updated.reviewDueDate,
+      reviewedRevision: updated.reviewedRevision,
+      reviewedAt: updated.reviewedAt,
+      reviewedBy: updated.reviewedBy,
+      reviewer: updated.reviewer,
+    };
+    const merge = (current: Concept) => {
+      const next = { ...current, ...governance };
+      return { ...next, freshness: deriveFreshness(next) };
+    };
+    if (latestConcept.current?.id === updated.id) {
+      latestConcept.current = merge(latestConcept.current);
+    }
+    setConcept((current) =>
+      current?.id === updated.id ? merge(current) : current
+    );
+    setConcepts((current) =>
+      current.map((item) => item.id === updated.id ? merge(item) : item)
+    );
+  }, []);
+  const askSessions = useRef(new Map<string, AskSession>());
+  const templateDraftCache = useRef<TemplateDraftCache>(new Map());
+  const [saveQueue] = useState(() =>
+    new DraftSaveQueue(async (id, content) => {
+      const response = await api(conceptPath(id), {
+        method: "PUT",
+        body: content,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          ...(latestConcept.current?.id === id
+            ? {
+              "x-okf-collab-epoch": String(latestConcept.current.collabEpoch),
+            }
+            : {}),
+        },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        throw new Error(result.error ?? "Could not save draft");
+      }
+      const changed =
+        response.headers.get("x-okf-unpublished-changes") === "true";
+      setConcept((current) =>
+        current?.id === id
+          ? { ...current, hasUnpublishedChanges: changed }
+          : current
+      );
+      setConcepts((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, hasUnpublishedChanges: changed } : item
+        )
+      );
+    }, (id, state) => {
+      if (activeConceptId.current === id) {
+        setSaveState(state);
+        if (state === "saved") setDraftSavedAt(new Date().toISOString());
+      }
+    })
+  );
+
+  const finishDraft = useCallback(async () => {
+    try {
+      await metadataFlush.current?.();
+      await governanceFlush.current?.();
+      const content = documentSnapshot.current?.();
+      const id = activeConceptId.current;
+      if (
+        id && content != null && content !== latestMarkdown.current &&
+        saveQueue.differs(id, content)
+      ) {
+        latestMarkdown.current = content;
+        setMarkdown(content);
+        saveQueue.stage(id, content);
+      }
+      if (!await saveQueue.flush(id)) {
+        throw new Error(
+          saveQueue.error(id) ??
+            "Your changes could not be saved. Retry saving before leaving this document.",
+        );
+      }
+      setActionError("");
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Your changes could not be saved.",
+      );
+      return false;
+    }
+  }, [saveQueue]);
+
+  useEffect(() => {
+    const protectDraft = (event: BeforeUnloadEvent) => {
+      const content = documentSnapshot.current?.();
+      const id = activeConceptId.current;
+      const unstaged = content != null && content !== latestMarkdown.current &&
+        (!id || saveQueue.differs(id, content));
+      if (
+        !unstaged && !saveQueue.hasPending() && !templateDraftCache.current.size
+      ) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    globalThis.addEventListener("beforeunload", protectDraft);
+    return () => globalThis.removeEventListener("beforeunload", protectDraft);
+  }, [saveQueue]);
+
   const referenceInserter = useRef<
     ((title: string, href: string) => void) | null
   >(null);
@@ -222,14 +399,56 @@ export default function App() {
     if (!response.ok) throw new Error(result.error ?? "Templates unavailable");
     setTemplates(result);
   }, []);
+  const loadAIConfig = useCallback(async () => {
+    const response = await api("/api/ai/config");
+    const result = await response.json() as AIConfig & { error?: string };
+    if (!response.ok) {
+      throw new Error(result.error ?? "AI settings unavailable");
+    }
+    setAIConfig(result);
+  }, []);
+  const loadConceptApps = useCallback(async (id: string) => {
+    const response = await api(
+      `/api/apps?conceptId=${encodeURIComponent(id)}`,
+    );
+    if (!response.ok) {
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
+      return [];
+    }
+    const body = await response.json() as ArtifactState;
+    const apps = body.apps ?? body.artifacts ?? [];
+    setConceptApps(apps);
+    setCanPublishConceptApps(Boolean(body.canPublish));
+    return apps;
+  }, []);
   const openHubConcept = useCallback(async (id: string, record = true) => {
+    const requestVersion = ++navigationVersion.current;
+    if (!await finishDraft()) return false;
+    if (requestVersion !== navigationVersion.current) return false;
     setConceptLoaded(false);
     setRouteError("");
     const response = await api(conceptPath(id));
     const result = await response.json() as Concept & { error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Concept unavailable");
+    if (requestVersion !== navigationVersion.current) return false;
+    if (!response.ok) {
+      setConceptLoaded(true);
+      throw new Error(result.error ?? "Concept unavailable");
+    }
+    activeConceptId.current = id;
+    setDraftSavedAt(result.updatedAt);
+    setSaveState(saveQueue.state(id));
+    setReviewOpen(false);
+    if (result.type === "Artifact") {
+      await loadConceptApps(id);
+      if (requestVersion !== navigationVersion.current) return false;
+    } else {
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
+    }
     setConcept(result);
     const content = bootstrap?.canEdit ? result.draft : result.published;
+    if (bootstrap?.canEdit) saveQueue.accept(id, content ?? "");
     setInitialMarkdown(content ?? null);
     setMarkdown(content ?? "");
     setView(bootstrap?.canEdit ? "draft" : "published");
@@ -241,6 +460,8 @@ export default function App() {
     setCommentAnchor(null);
     setImported(null);
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
@@ -249,13 +470,20 @@ export default function App() {
     const requestedSurface = !record
       ? new URLSearchParams(globalThis.location.search).get("surface")
       : null;
+    setArtifactFirstOpen(
+      requestedSurface !== "document" && requestedSurface !== "artifacts" &&
+        requestedSurface !== "activity",
+    );
     setSurface(
       requestedSurface === "artifacts" || requestedSurface === "activity"
         ? requestedSurface
         : "document",
     );
-    if (record) setBrowserRoute({ kind: "concept", id });
-  }, [bootstrap?.canEdit]);
+    if (record) recordRoute({ kind: "concept", id });
+    else {lastRoutePath.current = globalThis.location.pathname +
+        globalThis.location.search;}
+    return true;
+  }, [bootstrap?.canEdit, finishDraft, loadConceptApps, saveQueue]);
   const refreshHubLists = useCallback(async () => {
     const [spacesResponse, conceptsResponse] = await Promise.all([
       api("/api/spaces"),
@@ -292,15 +520,31 @@ export default function App() {
     );
   }, [bootstrap?.canView, loadSources]);
   useEffect(() => {
+    if (!bootstrap?.canView) return;
+    void loadAIConfig().catch((error) => setActionError(error.message));
+  }, [bootstrap?.canView, loadAIConfig]);
+  useEffect(() => {
     if (!bootstrap?.canEdit) return;
     void loadTemplates().catch((error) => setActionError(error.message));
   }, [bootstrap?.canEdit, loadTemplates]);
 
-  const signOut = () => {
-    void api("/api/auth/sign-out", { method: "POST" }).finally(() => {
+  const signOut = async () => {
+    if (!await finishDraft() || !await saveQueue.flushAll()) return;
+    try {
+      const response = await api("/api/auth/sign-out", { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Could not sign out. Please try again.");
+      }
+      navigationVersion.current++;
+      saveQueue.clear();
+      askSessions.current.clear();
+      templateDraftCache.current.clear();
+      activeConceptId.current = null;
+      setTemplateSnapshot(null);
       setBootstrap({ user: null });
       setConcept(null);
       setConcepts([]);
+      setTemplates([]);
       setSpaces([]);
       setConceptLoaded(false);
       setHubReady(false);
@@ -315,67 +559,101 @@ export default function App() {
       setImports([]);
       setImported(null);
       setHomeOpen(false);
+      setArtifactsOpen(false);
+      setSpaceArtifactsIdOpen(null);
+      setConceptApps([]);
+      setCanPublishConceptApps(false);
       setSpaceIdOpen(null);
       setSearchOpen(false);
-    });
+      setAskOpen(false);
+      setAIConfig({ enabled: false, provider: "", model: "" });
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not sign out. Please try again.",
+      );
+    }
   };
   const saveMarkdown = useCallback((content: string) => {
     if (!bootstrap?.canEdit || !concept || concept.lockedAt) return;
+    latestMarkdown.current = content;
     setMarkdown(content);
-    setSaveState("saved");
-    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
-    saveTimer.current = globalThis.setTimeout(() => {
-      api(conceptPath(concept.id), {
-        method: "PUT",
-        body: content,
-        headers: { "content-type": "text/markdown; charset=utf-8" },
-      }).then((response) => {
-        if (!response.ok) throw new Error("save failed");
-        setSaveState("saved");
-      }).catch(() => setSaveState("failed"));
-    }, 300);
-  }, [bootstrap?.canEdit, concept]);
+    const changed = !concept.publishedRevision ||
+      content.trimEnd() !== (concept.published ?? "").trimEnd();
+    setConcepts((current) =>
+      current.map((item) =>
+        item.id === concept.id
+          ? {
+            ...item,
+            hasUnpublishedChanges: changed,
+            updatedAt: new Date().toISOString(),
+          }
+          : item
+      )
+    );
+    saveQueue.stage(concept.id, content);
+  }, [bootstrap?.canEdit, concept, saveQueue]);
 
   const lifecycle = async (path: string, body?: unknown) => {
     if (!concept) return null;
     setActionBusy(true);
     setActionError("");
-    if (saveTimer.current) globalThis.clearTimeout(saveTimer.current);
-    const response = await api(`${conceptPath(concept.id)}/${path}`, {
-      method: "POST",
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Action failed");
+    try {
+      if (!await finishDraft()) return null;
+      const response = await api(`${conceptPath(concept.id)}/${path}`, {
+        method: "POST",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Action failed");
+      saveQueue.accept(result.id, result.draft ?? "");
+      setConcept(result);
+      await refreshHubLists().catch(() => {});
+      return result;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Action failed. Please try again.",
+      );
       return null;
+    } finally {
+      setActionBusy(false);
     }
-    setConcept(result);
-    await refreshHubLists().catch(() => {});
-    return result;
   };
   const documentLifecycle = async (id: string, action: string) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`${conceptPath(id)}/${action}`, {
-      method: "POST",
-    });
-    const result = await response.json().catch(() => ({})) as Concept & {
-      error?: string;
-    };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Document action failed");
-      return;
+    try {
+      if (id === activeConceptId.current && !await finishDraft()) return;
+      setActionError("");
+      const response = await api(`${conceptPath(id)}/${action}`, {
+        method: "POST",
+      });
+      const result = await response.json().catch(() => ({})) as Concept & {
+        error?: string;
+      };
+      if (!response.ok) {
+        setActionError(result.error ?? "Document action failed");
+        return;
+      }
+      if (concept?.id === id) {
+        saveQueue.accept(result.id, result.draft ?? "");
+        setConcept(result);
+        setInitialMarkdown(result.draft ?? null);
+        setMarkdown(result.draft ?? "");
+        setEditorVersion((current) => current + 1);
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    if (concept?.id === id) {
-      setConcept(result);
-      setInitialMarkdown(result.draft ?? null);
-      setMarkdown(result.draft ?? "");
-      setEditorVersion((current) => current + 1);
-    }
-    await refreshHubLists();
   };
 
   const createSpace = async (event: FormEvent<HTMLFormElement>) => {
@@ -385,20 +663,30 @@ export default function App() {
     const name = String(fields.get("name") ?? "");
     const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/spaces", {
-      method: "POST",
-      body: JSON.stringify({ name, icon }),
-    });
-    const result = await response.json() as Space & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Creation failed");
+    try {
+      setActionError("");
+      const response = await api("/api/spaces", {
+        method: "POST",
+        body: JSON.stringify({ name, icon }),
+      });
+      const result = await response.json() as Space & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Creation failed");
+        return false;
+      }
+      form.reset();
+      await refreshHubLists();
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    form.reset();
-    await refreshHubLists();
-    return true;
   };
   const updateWorkspace = async (value: {
     name: string;
@@ -406,19 +694,29 @@ export default function App() {
     logo: string;
   }) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/workspace", {
-      method: "PUT",
-      body: JSON.stringify(value),
-    });
-    const result = await response.json() as Bootstrap & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Workspace update failed");
+    try {
+      setActionError("");
+      const response = await api("/api/workspace", {
+        method: "PUT",
+        body: JSON.stringify(value),
+      });
+      const result = await response.json() as Bootstrap & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Workspace update failed");
+        return false;
+      }
+      setBootstrap(result);
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    setBootstrap(result);
-    return true;
   };
 
   const renameSpace = async (
@@ -430,115 +728,205 @@ export default function App() {
     const name = String(fields.get("name") ?? "");
     const icon = String(fields.get("icon") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`/api/spaces/${space.id}`, {
-      method: "PUT",
-      body: JSON.stringify({ name, icon }),
-    });
-    const result = await response.json() as Space & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Rename failed");
-    if (concept?.spaceId === space.id) {
-      setConcept({ ...concept, space: result.name });
+    try {
+      setActionError("");
+      const response = await api(`/api/spaces/${space.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, icon }),
+      });
+      const result = await response.json() as Space & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Rename failed");
+      if (concept?.spaceId === space.id) {
+        setConcept({ ...concept, space: result.name });
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const deleteSpace = async (space: Space) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`/api/spaces/${space.id}`, {
-      method: "DELETE",
-    });
-    setActionBusy(false);
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as {
-        error?: string;
-      };
-      return setActionError(result.error ?? "Deletion failed");
+    try {
+      setActionError("");
+      const response = await api(`/api/spaces/${space.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        return setActionError(result.error ?? "Deletion failed");
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const createTemplate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (actionBusy) return false;
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
-    setActionError("");
-    const response = await api("/api/templates", {
-      method: "POST",
-      body: JSON.stringify({
-        name: fields.get("name"),
-        description: fields.get("description"),
-        body: fields.get("body"),
-      }),
-    });
-    const result = await response.json().catch(() => ({})) as {
-      error?: string;
-    };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Template creation failed");
+    try {
+      setActionError("");
+      const response = await api("/api/templates", {
+        method: "POST",
+        body: JSON.stringify({
+          name: fields.get("name"),
+          description: fields.get("description"),
+          body: fields.get("body"),
+        }),
+      });
+      const result = await response.json() as DocumentTemplate & {
+        error?: string;
+      };
+      if (!response.ok) {
+        setActionError(result.error ?? "Template creation failed");
+        return false;
+      }
+      setTemplates((
+        current,
+      ) => [...current.filter((item) => item.id !== result.id), result]);
+      form.reset();
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    form.reset();
-    await loadTemplates();
-    return true;
+  };
+
+  const updateTemplate = async (
+    id: string,
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (actionBusy) return false;
+    const fields = new FormData(event.currentTarget);
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const response = await api(`/api/templates/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: fields.get("name"),
+          description: fields.get("description"),
+          body: fields.get("body"),
+        }),
+      });
+      const result = await response.json() as DocumentTemplate & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "Template update failed");
+      }
+      setTemplates((current) =>
+        current.map((item) => item.id === result.id ? result : item)
+      );
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error ? cause.message : "Template update failed",
+      );
+      return false;
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const deleteTemplate = async (item: DocumentTemplate) => {
     setActionBusy(true);
-    setActionError("");
-    const response = await api(
-      `/api/templates/${encodeURIComponent(item.id)}`,
-      {
-        method: "DELETE",
-      },
-    );
-    setActionBusy(false);
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as {
-        error?: string;
-      };
-      return setActionError(result.error ?? "Template deletion failed");
+    try {
+      setActionError("");
+      const response = await api(
+        `/api/templates/${encodeURIComponent(item.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as {
+          error?: string;
+        };
+        return setActionError(result.error ?? "Template deletion failed");
+      }
+      setTemplates((current) =>
+        current.filter((template) => template.id !== item.id)
+      );
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await loadTemplates();
   };
 
   const createConcept = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     setActionBusy(true);
-    setActionError("");
-    const templateId = String(fields.get("templateId") ?? "");
-    const variables = Object.fromEntries(
-      Array.from(fields.entries())
-        .filter(([name]) => name.startsWith("variable:"))
-        .map((
-          [name, value],
-        ) => [name.slice("variable:".length), String(value)]),
-    );
-    const response = await api("/api/concepts", {
-      method: "POST",
-      body: JSON.stringify({
-        title: fields.get("title"),
-        type: fields.get("type"),
-        intent: fields.get("intent"),
-        spaceId: fields.get("spaceId"),
-        parentId: fields.get("parentId") || null,
-        ...(templateId ? { templateId, variables } : {}),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      setActionError(result.error ?? "Creation failed");
+    try {
+      setActionError("");
+      const templateId = String(fields.get("templateId") ?? "");
+      const variables = Object.fromEntries(
+        Array.from(fields.entries())
+          .filter(([name]) => name.startsWith("variable:"))
+          .map((
+            [name, value],
+          ) => [name.slice("variable:".length), String(value)]),
+      );
+      const response = await api("/api/concepts", {
+        method: "POST",
+        body: JSON.stringify({
+          title: fields.get("title"),
+          type: fields.get("type"),
+          intent: fields.get("intent"),
+          spaceId: fields.get("spaceId"),
+          parentId: fields.get("parentId") || null,
+          ...(templateId ? { templateId, variables } : {}),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Creation failed");
+        return false;
+      }
+      await refreshHubLists();
+      await openHubConcept(result.id);
+      return true;
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
       return false;
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
-    await openHubConcept(result.id);
-    return true;
   };
 
   const updateConcept = async (event: FormEvent<HTMLFormElement>) => {
@@ -547,29 +935,62 @@ export default function App() {
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
+    try {
+      setActionError("");
+      const response = await api(`${conceptPath(concept.id)}/metadata`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: fields.get("title"),
+          type: fields.get("type"),
+          intent: fields.get("intent"),
+          spaceId: fields.get("spaceId"),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Update failed");
+      setConcept(result);
+      if (result.type === "Artifact") await loadConceptApps(result.id);
+      setDocumentSettingsOpen(false);
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const activateConceptApp = async (appId: string) => {
+    if (!concept) return;
+    setActionBusy(true);
     setActionError("");
-    const response = await api(`${conceptPath(concept.id)}/metadata`, {
-      method: "PUT",
-      body: JSON.stringify({
-        title: fields.get("title"),
-        type: fields.get("type"),
-        intent: fields.get("intent"),
-        spaceId: fields.get("spaceId"),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
+    const response = await api(
+      `/api/apps/${encodeURIComponent(appId)}/activate`,
+      {
+        method: "POST",
+      },
+    );
+    const result = await response.json().catch(() => ({})) as {
+      error?: string;
+    };
     setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Update failed");
-    setConcept(result);
-    setDocumentSettingsOpen(false);
-    await refreshHubLists();
+    if (!response.ok) {
+      setActionError(result.error ?? "Artifact activation failed");
+      return;
+    }
+    await loadConceptApps(concept.id);
   };
 
   const publish = async () => {
-    const result = await lifecycle("publish", { markdown });
+    const result = await lifecycle("publish");
     if (result) {
       setSaveState("saved");
+      setMarkdown(result.draft ?? "");
       setView("published");
+      setReviewOpen(false);
     }
   };
 
@@ -592,7 +1013,7 @@ export default function App() {
 
   const restoreRevision = async (number: number) => {
     const result = await lifecycle(`revisions/${number}/restore`);
-    if (!result?.draft) return;
+    if (result?.draft == null) return;
     setInitialMarkdown(result.draft);
     setMarkdown(result.draft);
     setEditorVersion((current) => current + 1);
@@ -606,24 +1027,33 @@ export default function App() {
     const form = event.currentTarget;
     const fields = new FormData(form);
     setActionBusy(true);
-    setActionError("");
-    const response = await api(`${conceptPath(concept.id)}/traces`, {
-      method: "POST",
-      body: JSON.stringify({
-        kind: fields.get("kind"),
-        title: fields.get("title"),
-        summary: fields.get("summary"),
-        occurredAt: fields.get("occurredAt"),
-        sourceUrl: fields.get("sourceUrl"),
-      }),
-    });
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) {
-      return setActionError(result.error ?? "Work trace failed");
+    try {
+      setActionError("");
+      const response = await api(`${conceptPath(concept.id)}/traces`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: fields.get("kind"),
+          title: fields.get("title"),
+          summary: fields.get("summary"),
+          occurredAt: fields.get("occurredAt"),
+          sourceUrl: fields.get("sourceUrl"),
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        return setActionError(result.error ?? "Work trace failed");
+      }
+      setConcept(result);
+      form.reset();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    setConcept(result);
-    form.reset();
   };
 
   const foldWorkTrace = async (
@@ -635,30 +1065,39 @@ export default function App() {
     const fields = new FormData(event.currentTarget);
     const targetConceptId = String(fields.get("targetConceptId") ?? "");
     setActionBusy(true);
-    setActionError("");
-    const response = await api(
-      `${conceptPath(concept.id)}/traces/${trace.id}/fold`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          targetConceptId,
-          knowledge: fields.get("knowledge"),
-          ...(targetConceptId === concept.id
-            ? { targetMarkdown: markdown }
-            : {}),
-        }),
-      },
-    );
-    const result = await response.json() as Concept & { error?: string };
-    setActionBusy(false);
-    if (!response.ok) return setActionError(result.error ?? "Fold failed");
-    setConcept(result);
-    if (targetConceptId === concept.id && result.draft) {
-      setInitialMarkdown(result.draft);
-      setMarkdown(result.draft);
-      setEditorVersion((current) => current + 1);
+    try {
+      setActionError("");
+      const response = await api(
+        `${conceptPath(concept.id)}/traces/${trace.id}/fold`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetConceptId,
+            knowledge: fields.get("knowledge"),
+            ...(targetConceptId === concept.id
+              ? { targetMarkdown: markdown }
+              : {}),
+          }),
+        },
+      );
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) return setActionError(result.error ?? "Fold failed");
+      setConcept(result);
+      if (targetConceptId === concept.id && result.draft) {
+        setInitialMarkdown(result.draft);
+        setMarkdown(result.draft);
+        setEditorVersion((current) => current + 1);
+      }
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
     }
-    await refreshHubLists();
   };
 
   const connectRepository = async (
@@ -887,56 +1326,87 @@ export default function App() {
     path: string,
     record = true,
   ) => {
+    const requestVersion = ++navigationVersion.current;
+    if (!await finishDraft()) return false;
+    if (requestVersion !== navigationVersion.current) return null;
     setSourceError("");
     setRouteError("");
-    const response = await api(
-      `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
-    );
-    const result = await response.json() as ImportedConcept & {
-      error?: string;
-    };
-    if (!response.ok) {
-      setSourceError(result.error ?? "Import unavailable");
+    try {
+      const response = await api(
+        `/api/imported?source=${sourceId}&path=${encodeURIComponent(path)}`,
+      );
+      const result = await response.json() as ImportedConcept & {
+        error?: string;
+      };
+      if (requestVersion !== navigationVersion.current) return null;
+      if (!response.ok) {
+        setSourceError(result.error ?? "Import unavailable");
+        return false;
+      }
+      setImported(result);
+      setHomeOpen(false);
+      setArtifactsOpen(false);
+      setSpaceArtifactsIdOpen(null);
+      setSpaceIdOpen(null);
+      setSourceOpen(false);
+      setSearchOpen(false);
+      setDeveloperOpen(false);
+      setPresenting(false);
+      if (record) recordRoute({ kind: "imported", sourceId, path });
+      return true;
+    } catch (cause) {
+      if (requestVersion !== navigationVersion.current) return null;
+      setSourceError(
+        cause instanceof Error ? cause.message : "Import unavailable",
+      );
       return false;
     }
-    setImported(result);
-    setHomeOpen(false);
-    setSpaceIdOpen(null);
-    setSourceOpen(false);
-    setSearchOpen(false);
-    setDeveloperOpen(false);
-    setPresenting(false);
-    if (record) setBrowserRoute({ kind: "imported", sourceId, path });
-    return true;
   };
 
-  const showHubConcept = (id?: string, record = true) => {
+  const showHubConcept = async (id?: string, record = true) => {
+    if (id && id !== concept?.id) {
+      try {
+        await openHubConcept(id, record);
+      } catch (error) {
+        setConceptLoaded(true);
+        setActionError(
+          error instanceof Error ? error.message : "Document unavailable",
+        );
+      }
+      return;
+    }
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
     setRouteError("");
     setImported(null);
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (id && id !== concept?.id) {
-      void openHubConcept(id, record).catch((error) =>
-        setActionError(error.message)
-      );
-    } else if (id && record) {
-      setBrowserRoute({ kind: "concept", id });
+    if (id && record) {
+      setArtifactFirstOpen(true);
+      recordRoute({ kind: "concept", id });
     } else if (!id && concept) {
-      if (record) setBrowserRoute({ kind: "concept", id: concept.id });
+      if (record) recordRoute({ kind: "concept", id: concept.id });
     } else if (!id) {
       setHomeOpen(true);
-      if (record) setBrowserRoute({ kind: "home" });
+      if (record) recordRoute({ kind: "home" });
     }
   };
-  const showHome = (record = true) => {
+  const showHome = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(true);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(false);
@@ -944,12 +1414,53 @@ export default function App() {
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (record) setBrowserRoute({ kind: "home" });
+    if (record) recordRoute({ kind: "home" });
   };
-  const showSpace = (id: string, record = true) => {
+  const showArtifacts = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
+    setPresenting(false);
+    setRouteError("");
+    setArtifactsOpen(true);
+    setSpaceArtifactsIdOpen(null);
+    setHomeOpen(false);
+    setSpaceIdOpen(null);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(false);
+    setDocumentSettingsOpen(false);
+    if (record) recordRoute({ kind: "artifacts" });
+  };
+  const showSpaceArtifacts = async (id: string, record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
+    setPresenting(false);
+    setRouteError("");
+    setSpaceArtifactsIdOpen(id);
+    setArtifactsOpen(false);
+    setHomeOpen(false);
+    setSpaceIdOpen(null);
+    setImported(null);
+    setSourceOpen(false);
+    setSearchOpen(false);
+    setCreateOpen(false);
+    setDeveloperOpen(false);
+    setDocumentSettingsOpen(false);
+    if (record) recordRoute({ kind: "space_artifacts", id });
+  };
+  const showSpace = async (id: string, record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setSpaceIdOpen(id);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setHomeOpen(false);
     setImported(null);
     setSourceOpen(false);
@@ -957,41 +1468,59 @@ export default function App() {
     setCreateOpen(false);
     setDeveloperOpen(false);
     setDocumentSettingsOpen(false);
-    if (record) setBrowserRoute({ kind: "space", id });
+    if (record) recordRoute({ kind: "space", id });
   };
-  const showSearch = (record = true) => {
+  const showSearch = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setSearchOpen(true);
     setSourceOpen(false);
     setImported(null);
     setCreateOpen(false);
     setDeveloperOpen(false);
-    if (record) setBrowserRoute({ kind: "search" });
+    if (record) recordRoute({ kind: "search" });
   };
   const openGlobalSearch = () => setSearchPaletteOpen(true);
-  const showSources = (record = true) => {
+  const showSources = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(true);
     setSearchOpen(false);
     setCreateOpen(false);
     setDeveloperOpen(false);
-    if (record) setBrowserRoute({ kind: "sources" });
+    if (record) recordRoute({ kind: "sources" });
   };
-  const showCreate = (
+  const showCreate = async (
     section: SettingsSection = "general",
     record = true,
   ) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
+    if (section === "members" && bootstrap?.access !== "owner") {
+      section = "general";
+    }
     setSettingsSection(section);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setCreateOpen(true);
     setDocumentSettingsOpen(false);
@@ -1000,23 +1529,44 @@ export default function App() {
     setSearchOpen(false);
     setDeveloperOpen(false);
     setActionError("");
-    if (record) setBrowserRoute({ kind: "manage", section });
+    if (record) recordRoute({ kind: "manage", section });
   };
-  const showDeveloper = (record = true) => {
+  const showDeveloper = async (record = true) => {
+    if (!await finishDraft()) return;
+    navigationVersion.current++;
+    setConceptLoaded(true);
     setPresenting(false);
     setRouteError("");
     setHomeOpen(false);
+    setArtifactsOpen(false);
+    setSpaceArtifactsIdOpen(null);
     setSpaceIdOpen(null);
     setImported(null);
     setSourceOpen(false);
     setSearchOpen(false);
     setCreateOpen(false);
     setDeveloperOpen(true);
-    if (record) setBrowserRoute({ kind: "developer" });
+    if (record) recordRoute({ kind: "developer" });
   };
-  const openNewDocument = (spaceId?: string, parentId?: string) => {
+  const openNewDocument = (
+    spaceId?: string,
+    parentId?: string,
+    templateId?: string,
+  ) => {
+    setNewDocumentTemplateId(templateId);
+    setNewDocumentType(undefined);
+    setNewDocumentIntent(undefined);
     setNewDocumentSpaceId(spaceId);
     setNewDocumentParentId(parentId);
+    setActionError("");
+    setNewDocumentOpen(true);
+  };
+  const openNewArtifact = (spaceId?: string) => {
+    setNewDocumentTemplateId(undefined);
+    setNewDocumentType("Artifact");
+    setNewDocumentIntent("working");
+    setNewDocumentSpaceId(spaceId);
+    setNewDocumentParentId(undefined);
     setActionError("");
     setNewDocumentOpen(true);
   };
@@ -1062,6 +1612,7 @@ export default function App() {
       return;
     }
     pendingReference.current = { title, href };
+    setArtifactFirstOpen(false);
     setDocumentMode("edit");
     setSurface("document");
   }, [documentMode, surface]);
@@ -1083,6 +1634,8 @@ export default function App() {
       if (!active) return;
       setRouteError("This knowledge page is unavailable.");
       setHomeOpen(false);
+      setArtifactsOpen(false);
+      setSpaceArtifactsIdOpen(null);
       setSpaceIdOpen(null);
       setSearchOpen(false);
       setSourceOpen(false);
@@ -1093,14 +1646,27 @@ export default function App() {
     };
     const apply = async () => {
       const route = parseAppRoute(globalThis.location.pathname);
+      if (!await finishDraft()) {
+        globalThis.history.replaceState({}, "", lastRoutePath.current);
+        return;
+      }
+      if (route.kind !== "not_found") {
+        lastRoutePath.current = globalThis.location.pathname +
+          globalThis.location.search;
+      }
       try {
         if (route.kind === "home") return showHome(false);
+        if (route.kind === "artifacts") return showArtifacts(false);
+        if (route.kind === "space_artifacts") {
+          if (!spaceRouteVersion.split("\0").includes(route.id)) {
+            return unavailable();
+          }
+          return showSpaceArtifacts(route.id, false);
+        }
         if (route.kind === "search") return showSearch(false);
         if (route.kind === "sources") return showSources(false);
-        if (route.kind === "developer") {
-          if (!bootstrap.canEdit) return unavailable();
-          return showDeveloper(false);
-        }
+        // API keys are per-user and bounded by the user's own permissions.
+        if (route.kind === "developer") return showDeveloper(false);
         if (route.kind === "space") {
           if (!spaceRouteVersion.split("\0").includes(route.id)) {
             return unavailable();
@@ -1114,7 +1680,7 @@ export default function App() {
             ? "general"
             : route.section;
           if (section !== route.section) {
-            setBrowserRoute({ kind: "manage", section }, true);
+            recordRoute({ kind: "manage", section }, true);
           }
           return showCreate(section, false);
         }
@@ -1123,7 +1689,7 @@ export default function App() {
           return;
         }
         if (route.kind === "imported") {
-          if (!await openImported(route.sourceId, route.path, false)) {
+          if (await openImported(route.sourceId, route.path, false) === false) {
             unavailable();
           }
           return;
@@ -1178,21 +1744,22 @@ export default function App() {
     return (
       <AuthScreen
         signupAllowed={Boolean(bootstrap.signupAllowed)}
+        setupTokenRequired={Boolean(bootstrap.setupTokenRequired)}
         ssoProviders={bootstrap.ssoProviders ?? []}
         onAuthenticated={refresh}
       />
     );
   }
+  if (bootstrap.passwordChangeRequired) {
+    return <PasswordChangeGate onComplete={refresh} onSignOut={signOut} />;
+  }
   if (bootstrap.setupRequired) {
     return <WorkspaceOnboarding onComplete={refresh} onSignOut={signOut} />;
   }
-  const invitationId = new URLSearchParams(globalThis.location.search).get(
-    "invitation",
-  );
   if (!bootstrap.canView) {
     return (
       <AccessGate
-        invited={Boolean(invitationId && bootstrap.invitationRequired)}
+        invited={Boolean(bootstrap.invitationRequired)}
         onAccepted={refresh}
         onSignOut={signOut}
       />
@@ -1222,8 +1789,15 @@ export default function App() {
   const activeSpace = spaceIdOpen
     ? spaces.find((item) => item.id === spaceIdOpen) ?? null
     : null;
+  const activeSpaceArtifacts = spaceArtifactsIdOpen
+    ? spaces.find((item) => item.id === spaceArtifactsIdOpen) ?? null
+    : null;
   const activeView = homeOpen
     ? "home"
+    : artifactsOpen
+    ? "artifacts"
+    : activeSpaceArtifacts
+    ? "space_artifacts"
     : activeSpace
     ? "space"
     : searchOpen
@@ -1241,15 +1815,23 @@ export default function App() {
     ? "Settings"
     : developerOpen
     ? "Developer"
-    : activeSpace
+    : activeSpace || activeSpaceArtifacts
     ? "Spaces"
-    : homeOpen || searchOpen || sourceOpen
+    : homeOpen || artifactsOpen || searchOpen || sourceOpen
     ? "Company knowledge"
     : imported
     ? importedSourceLabel
     : concept?.space ?? "Hub-native knowledge";
+  const displayedConcept =
+    concept && view === "published" && concept.publishedMetadata
+      ? { ...concept, ...concept.publishedMetadata }
+      : concept;
   const pageTitle = homeOpen
     ? "Home"
+    : artifactsOpen
+    ? "Artifacts"
+    : activeSpaceArtifacts
+    ? `${activeSpaceArtifacts.name} · Artifacts`
     : activeSpace
     ? activeSpace.name
     : searchOpen
@@ -1260,10 +1842,28 @@ export default function App() {
     ? "Workspace"
     : developerOpen
     ? "API documentation"
-    : imported?.title ?? concept?.title ?? "Hub-native knowledge";
+    : imported?.title ?? displayedConcept?.title ?? "Hub-native knowledge";
+  // Editors of this document may see draft Artifacts; readers only activated ones.
+  const isArtifactOwner = concept?.draft != null;
+  const isArtifactFirstEligible = canOpenArtifactFirst(
+    concept,
+    conceptApps,
+    view,
+    isArtifactOwner,
+  );
+  const isConceptRouteActive = Boolean(
+    concept && !routeError && !homeOpen && !artifactsOpen &&
+      !activeSpaceArtifacts && !activeSpace && !searchOpen && !sourceOpen &&
+      !createOpen && !developerOpen && !imported,
+  );
+  const showArtifactFirst = Boolean(
+    conceptLoaded && isConceptRouteActive && isArtifactFirstEligible &&
+      artifactFirstOpen,
+  );
   const statusTone =
-    homeOpen || activeSpace || searchOpen || sourceOpen || createOpen ||
-      developerOpen
+    homeOpen || artifactsOpen || activeSpaceArtifacts || activeSpace ||
+      searchOpen || sourceOpen || createOpen || developerOpen ||
+      showArtifactFirst
       ? "online"
       : imported
       ? imported.source?.status === "sync_failed" ? "offline" : "online"
@@ -1274,16 +1874,12 @@ export default function App() {
       : status === "syncing"
       ? "connecting"
       : status;
-  const statusLabel = searchOpen || homeOpen
-    ? "permission filtered"
-    : activeSpace
+  // Overview pages say nothing here: the page title already names them.
+  const statusLabel = activeSpace
     ? `${activeSpace.count} documents`
-    : sourceOpen
-    ? "connected sources"
-    : createOpen
-    ? "hub management"
-    : developerOpen
-    ? "developer API"
+    : searchOpen || homeOpen || artifactsOpen || activeSpaceArtifacts ||
+        sourceOpen || createOpen || developerOpen || showArtifactFirst
+    ? ""
     : imported
     ? "read only"
     : concept?.status === "archived"
@@ -1293,18 +1889,10 @@ export default function App() {
     : bootstrap.canEdit && view === "draft"
     ? status
     : "published";
-  const statusDetail = homeOpen
-    ? "Knowledge overview"
-    : activeSpace
-    ? "Space overview"
-    : searchOpen
-    ? "Authorised results"
-    : sourceOpen
-    ? "Source overview"
-    : createOpen
-    ? "Workspace and developer settings"
-    : developerOpen
-    ? "Self-hosted API reference"
+  const statusDetail = activeSpace || homeOpen || artifactsOpen ||
+      activeSpaceArtifacts || searchOpen || sourceOpen || createOpen ||
+      developerOpen || showArtifactFirst
+    ? ""
     : imported
     ? imported.sourceId === "shared"
       ? "Shared-store owned"
@@ -1329,20 +1917,42 @@ export default function App() {
     ? {
       key: `${concept.id}-${view}`,
       markdown: view === "draft" ? markdown : concept.published ?? "",
-      meta: `${concept.type} · ${concept.space}`,
-      title: concept.title,
+      meta: `${displayedConcept!.type} · ${concept.space}`,
+      title: displayedConcept!.title,
     }
     : null;
+  const openAISettings = bootstrap.canEdit
+    ? () => {
+      setReferencesOpen(false);
+      showCreate("ai");
+    }
+    : undefined;
   const canEditDocument = Boolean(
     bootstrap.canEdit && concept?.lockedAt === null,
   );
+  const documentGovernance = concept
+    ? (
+      <DocumentGovernance
+        key={concept.id}
+        concept={concept}
+        canManage={Boolean(bootstrap.canEdit && concept.status === "active")}
+        view={view}
+        onConceptUpdate={handleGovernanceUpdate}
+        onSaveReady={handleGovernanceSaveReady}
+        onViewPublished={() =>
+          void finishDraft().then((saved) => {
+            if (saved) setView("published");
+          })}
+      />
+    )
+    : null;
   return (
     <SidebarProvider className={focusMode ? "focus-mode" : undefined}>
       {!focusMode && (
         <AppSidebar
           access={bootstrap.access}
           activeImportId={imported?.id}
-          activeSpaceId={activeSpace?.id}
+          activeSpaceId={activeSpace?.id ?? activeSpaceArtifacts?.id}
           activeView={activeView}
           canEdit={Boolean(bootstrap.canEdit)}
           concepts={concepts}
@@ -1385,9 +1995,11 @@ export default function App() {
           }}
           onCreateApp={() => {
             if (!concept) return;
+            setArtifactFirstOpen(false);
             setSurface("artifacts");
             showHubConcept(concept.id);
           }}
+          onCreateArtifact={openNewArtifact}
           onCreateDocument={openNewDocument}
           onCreateSpace={() => {
             setActionError("");
@@ -1413,6 +2025,7 @@ export default function App() {
           onManageAccess={() => {
             showCreate("members");
           }}
+          onOpenArtifacts={showArtifacts}
           onOpenDeveloper={() => {
             showDeveloper();
           }}
@@ -1421,6 +2034,7 @@ export default function App() {
           onOpenImported={(sourceId, path) => void openImported(sourceId, path)}
           onOpenSearch={openGlobalSearch}
           onOpenSpace={showSpace}
+          onOpenSpaceArtifacts={showSpaceArtifacts}
           onOpenSources={showSources}
           onSignOut={() => void signOut()}
         />
@@ -1434,9 +2048,22 @@ export default function App() {
             statusTone={statusTone}
             title={pageTitle}
             onSearch={openGlobalSearch}
-            actions={concept && !homeOpen && !activeSpace && !searchOpen &&
-                !sourceOpen &&
-                !createOpen && !developerOpen && !imported
+            actions={imported || showArtifactFirst
+              ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 px-2.5 text-xs"
+                  onClick={() => {
+                    setAskWorkspace(false);
+                    setAskOpen(true);
+                  }}
+                >
+                  <Sparkles className="size-3.5" /> Ask OKF
+                </Button>
+              )
+              : isConceptRouteActive && concept
               ? (
                 <DocumentToolbar
                   actionBusy={actionBusy}
@@ -1446,15 +2073,52 @@ export default function App() {
                   exportHref={concept.publishedRevision
                     ? `${SERVICE}${conceptPath(concept.id)}/export`
                     : undefined}
-                  hasPublished={Boolean(concept.published)}
+                  hasPublished={Boolean(concept.publishedRevision)}
+                  hasUnpublishedChanges={!concept.publishedRevision ||
+                    markdown.trimEnd() !==
+                      (concept.published ?? "").trimEnd() ||
+                    concept.hasUnpublishedChanges}
+                  saveState={saveState}
+                  onReviewChanges={() =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setReviewOpen(true);
+                    })}
+                  onRetrySave={() => void finishDraft()}
+                  onSaveAsTemplate={() => {
+                    setActionError("");
+                    setTemplateSaved(false);
+                    void finishDraft().then((saved) => {
+                      const current = latestConcept.current;
+                      if (saved && current) {
+                        setTemplateSnapshot({
+                          title: view === "published"
+                            ? current.publishedMetadata?.title ?? current.title
+                            : current.title,
+                          body: view === "published"
+                            ? current.published ?? ""
+                            : latestMarkdown.current,
+                        });
+                      }
+                    });
+                  }}
                   focusMode={focusMode}
                   mode={documentMode}
                   revisionCount={concept.revisions.length}
                   status={concept.status}
+                  trust={concept.trust}
+                  freshness={concept.freshness}
+                  reviewDueDate={concept.reviewDueDate}
+                  trustReason={concept.trustReason}
                   surface={surface}
                   view={view}
                   width={documentWidth}
                   onArchive={() => void lifecycle("archive")}
+                  onAsk={() =>
+                    void finishDraft().then((saved) => {
+                      if (!saved) return;
+                      setAskWorkspace(false);
+                      setAskOpen(true);
+                    })}
                   onComments={() => {
                     const editorAnchor = commentReader.current?.() ?? null;
                     const selection = globalThis.getSelection();
@@ -1477,22 +2141,43 @@ export default function App() {
                     setCommentsOpen(true);
                   }}
                   onHistory={() => setHistoryOpen((open) => !open)}
-                  onModeChange={setDocumentMode}
+                  onModeChange={(mode) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setDocumentMode(mode);
+                    })}
+                  onOpenArtifactView={isArtifactFirstEligible
+                    ? () => setArtifactFirstOpen(true)
+                    : undefined}
                   onPublish={() => void publish()}
                   onPresent={() => setPresenting(true)}
                   onReferences={() => setReferencesOpen(true)}
                   onRestore={() => void lifecycle("restore")}
                   onSettings={() => setDocumentSettingsOpen(true)}
-                  onSurfaceChange={setSurface}
+                  onSurfaceChange={(next) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setSurface(next);
+                    })}
                   onFocusModeChange={setFocusMode}
-                  onViewChange={setView}
+                  onViewChange={(next) =>
+                    void finishDraft().then((saved) => {
+                      if (saved) setView(next);
+                    })}
                   onWidthChange={setDocumentWidth}
                 />
               )
               : undefined}
           />
         )}
-        <section className="workspace">
+        <section
+          className={showArtifactFirst
+            ? "workspace workspace-bleed"
+            : "workspace"}
+        >
+          {actionError &&
+            (homeOpen || artifactsOpen || activeSpaceArtifacts || activeSpace ||
+              searchOpen || sourceOpen ||
+              developerOpen) &&
+            <p className="action-error" role="alert">{actionError}</p>}
           {focusMode && (
             <Button
               type="button"
@@ -1528,11 +2213,25 @@ export default function App() {
                 shared={sharedSource}
                 notion={notionSource}
                 canEdit={Boolean(bootstrap.canEdit)}
+                isOwner={bootstrap.access === "owner"}
+                canConnectSources={bootstrap.access === "owner"}
                 onOpenConcept={showHubConcept}
                 onOpenImported={openImported}
                 onCreate={() => openNewDocument()}
                 onSearch={openGlobalSearch}
                 onSources={showSources}
+              />
+            )
+            : artifactsOpen || activeSpaceArtifacts
+            ? (
+              <ArtifactGallery
+                space={activeSpaceArtifacts}
+                spaces={spaces}
+                canEdit={Boolean(bootstrap.canEdit)}
+                onCreateArtifact={openNewArtifact}
+                onOpenArtifacts={showArtifacts}
+                onOpenSpaceArtifacts={showSpaceArtifacts}
+                onOpenConcept={showHubConcept}
               />
             )
             : activeSpace
@@ -1542,6 +2241,7 @@ export default function App() {
                 concepts={concepts}
                 canEdit={Boolean(bootstrap.canEdit)}
                 onCreate={() => openNewDocument(activeSpace.id)}
+                onOpenArtifacts={() => showSpaceArtifacts(activeSpace.id)}
                 onOpenConcept={showHubConcept}
               />
             )
@@ -1550,21 +2250,25 @@ export default function App() {
             : createOpen && bootstrap.canEdit
             ? (
               <WorkspaceSettings
+                aiConfig={aiConfig}
                 workspace={bootstrap.workspace ?? {
                   name: "OKF Hub",
                   tagline: "Company knowledge",
                   logo: "",
                 }}
                 spaces={spaces}
+                templateDraftCache={templateDraftCache.current}
                 templates={templates}
                 invitations={bootstrap.invitations ?? []}
                 members={bootstrap.members ?? []}
                 groups={bootstrap.groups ?? []}
+                currentUserId={bootstrap.user.id}
                 connectors={connectors}
                 repositories={repositories}
                 sharedSource={sharedSource}
                 notionSource={notionSource}
                 canExportWorkspace={bootstrap.access === "owner"}
+                canManageMembers={bootstrap.access === "owner"}
                 canManageConnectors={bootstrap.access === "owner"}
                 connectorBusy={sourceBusy || sharedBusy || notionBusy}
                 busy={actionBusy}
@@ -1572,12 +2276,15 @@ export default function App() {
                 initialSection={settingsSection}
                 onSectionChange={(section) => {
                   setSettingsSection(section);
-                  setBrowserRoute({ kind: "manage", section });
+                  recordRoute({ kind: "manage", section });
                 }}
                 onCreateSpace={createSpace}
                 onRenameSpace={renameSpace}
                 onDeleteSpace={deleteSpace}
                 onCreateTemplate={createTemplate}
+                onUpdateTemplate={updateTemplate}
+                onUseTemplate={(id) =>
+                  openNewDocument(undefined, undefined, id)}
                 onDeleteTemplate={deleteTemplate}
                 onUpdateWorkspace={updateWorkspace}
                 onConnectConnector={connectConnector}
@@ -1590,6 +2297,10 @@ export default function App() {
             : searchOpen
             ? (
               <SearchPanel
+                onAsk={() => {
+                  setAskWorkspace(true);
+                  setAskOpen(true);
+                }}
                 onOpenHub={showHubConcept}
                 onOpenImported={openImported}
               />
@@ -1603,6 +2314,8 @@ export default function App() {
                 connectors={connectors}
                 imports={imports}
                 canManage={bootstrap.access === "owner"}
+                members={bootstrap.members ?? []}
+                groups={bootstrap.groups ?? []}
                 sourceBusy={sourceBusy}
                 sharedBusy={sharedBusy}
                 notionBusy={notionBusy}
@@ -1631,11 +2344,31 @@ export default function App() {
                   <div className="imported-document-primary">
                     <div className="imported-document-location">
                       <Badge variant="outline">{imported.type}</Badge>
+                      <TrustBadge
+                        trust={imported.stale ? "stale" : "current"}
+                        reason={imported.stale
+                          ? `Described code changed in ${
+                            imported.stale.from.slice(0, 7)
+                          }..${imported.stale.to.slice(0, 7)}: ${
+                            imported.stale.paths.join(", ")
+                          }`
+                          : undefined}
+                      />
                       <span>
                         <FolderOpen /> {importedFolder}
                       </span>
                     </div>
                     <div className="imported-document-actions">
+                      {imported.source && "repositoryUrl" in imported.source &&
+                        (
+                          <SuggestChange
+                            key={imported.id}
+                            sourceId={imported.sourceId}
+                            path={imported.path}
+                            markdown={imported.markdown}
+                            revision={imported.sourceRevision}
+                          />
+                        )}
                       <Button
                         type="button"
                         size="sm"
@@ -1663,25 +2396,44 @@ export default function App() {
                       <code>{imported.sourceRevision.slice(0, 12)}</code>
                     </span>
                     <span>{imported.revisionCount} imported revisions</span>
+                    {imported.owner && <span>Owner {imported.owner}</span>}
+                    {imported.describedOwners?.length
+                      ? (
+                        <span title={imported.describes?.join(", ")}>
+                          Code owners {imported.describedOwners.join(" ")}
+                        </span>
+                      )
+                      : null}
                     <span>
-                      Synced {new Date(imported.importedAt).toLocaleString()}
+                      Snapshot updated{" "}
+                      {new Date(imported.importedAt).toLocaleString()}
                     </span>
+                    {imported.source?.lastSyncedAt && (
+                      <span>
+                        Source checked {new Date(imported.source.lastSyncedAt)
+                          .toLocaleString()}
+                      </span>
+                    )}
+                    {imported.owner && (
+                      <span>Source owner: {imported.owner}</span>
+                    )}
                   </div>
+                  {imported.source?.status === "sync_failed" && (
+                    <p className="mt-3 text-sm text-destructive" role="status">
+                      The latest source check failed. This is the retained
+                      snapshot from{" "}
+                      {new Date(imported.importedAt).toLocaleString()}.
+                    </p>
+                  )}
                 </section>
                 <div className="editor-frame read-only imported-editor">
-                  <DocumentPreview
+                  <KnowledgeDocument
+                    documentId={imported.id}
                     markdown={imported.markdown}
-                    onLinkOpen={(href) => {
-                      const path = resolveImportedLink(imported.path, href);
-                      if (!path) return false;
-                      const target = imports.find((item) =>
-                        item.sourceId === imported.sourceId &&
-                        (item.path === path || item.path === `${path}.md`)
-                      );
-                      if (!target) return false;
-                      void openImported(target.sourceId, target.path);
-                      return true;
-                    }}
+                    imported
+                    onOpenHub={showHubConcept}
+                    onOpenImported={openImported}
+                    onOpenSettings={openAISettings}
                   />
                 </div>
               </MilkdownProvider>
@@ -1710,6 +2462,25 @@ export default function App() {
                 )}
                 {actionError && <p className="form-error">{actionError}</p>}
               </section>
+            )
+            : showArtifactFirst
+            ? (
+              <ArtifactFirstView
+                concept={concept}
+                apps={conceptApps}
+                markdown={markdown}
+                view={view}
+                isOwner={isArtifactOwner}
+                canPublishApp={canPublishConceptApps}
+                activating={actionBusy}
+                onActivateApp={activateConceptApp}
+                onOpenAsDocument={() => {
+                  setArtifactFirstOpen(false);
+                  setSurface("document");
+                }}
+                onOpenConcept={showHubConcept}
+                onViewChange={setView}
+              />
             )
             : (
               <MilkdownProvider
@@ -1808,11 +2579,34 @@ export default function App() {
                   onInsert={insertReference}
                   onOpenChange={setReferencesOpen}
                   onOpenConcept={showHubConcept}
+                  onOpenImported={openImported}
+                  onOpenSettings={openAISettings}
                 />
 
+                <DraftReview
+                  open={reviewOpen}
+                  onOpenChange={setReviewOpen}
+                  onKeepEditing={() => {
+                    setReviewOpen(false);
+                    setView("draft");
+                  }}
+                  publishedMarkdown={concept.published}
+                  draftMarkdown={markdown}
+                  documentTitle={concept.title}
+                  documentType={concept.type}
+                  publishedMetadata={concept.publishedMetadata}
+                  busy={actionBusy}
+                  canPublish={canEditDocument}
+                  error={actionError}
+                  onPublish={() => void publish()}
+                />
                 <RevisionHistory
                   conceptId={concept.id}
                   revisions={concept.revisions}
+                  publishedRevision={concept.publishedRevision}
+                  reviewedRevision={concept.reviewedRevision}
+                  reviewedAt={concept.reviewedAt}
+                  reviewer={concept.reviewer}
                   open={historyOpen && Boolean(bootstrap.canEdit)}
                   canRestore={concept.status !== "archived" &&
                     !concept.lockedAt}
@@ -1855,7 +2649,7 @@ export default function App() {
                       ? (
                         <section className="lifecycle-empty">
                           <p className="eyebrow">Archived</p>
-                          <h1>Incident communication is out of discovery</h1>
+                          <h1>{concept.title} is out of discovery</h1>
                           <p>
                             Its published revisions remain preserved and can be
                             restored.
@@ -1868,20 +2662,61 @@ export default function App() {
                       ? (
                         <div
                           className={`canvas-container document-width-${documentWidth}`}
+                          inert={actionBusy ? true : undefined}
                         >
                           <DocumentProperties
+                            onSaveReady={(flush) => {
+                              metadataFlush.current = flush;
+                            }}
                             concept={concept}
                             spaces={spaces}
                             canEdit={canEditDocument}
                             onConceptUpdate={(updated) => {
                               const next = updated as Concept;
-                              setConcept(next);
+                              const merge = (current: Concept) => {
+                                const merged = {
+                                  ...next,
+                                  ownerUserId: current.ownerUserId,
+                                  owner: current.owner,
+                                  reviewDueDate: current.reviewDueDate,
+                                  reviewedRevision: current.reviewedRevision,
+                                  reviewedAt: current.reviewedAt,
+                                  reviewedBy: current.reviewedBy,
+                                  reviewer: current.reviewer,
+                                };
+                                return {
+                                  ...merged,
+                                  freshness: deriveFreshness(merged),
+                                };
+                              };
+                              if (latestConcept.current?.id === next.id) {
+                                latestConcept.current = merge(
+                                  latestConcept.current,
+                                );
+                              }
+                              setConcept((current) =>
+                                current?.id === next.id
+                                  ? merge(current)
+                                  : current
+                              );
                               setConcepts((current) =>
                                 current.map((item) =>
-                                  item.id === next.id ? next : item
+                                  item.id === next.id ? merge(item) : item
                                 )
                               );
+                              if (
+                                next.type.toLocaleLowerCase() === "artifact"
+                              ) {
+                                void loadConceptApps(next.id);
+                              }
                             }}
+                          />
+                          {documentGovernance}
+                          <KnowledgeDocument
+                            documentId={concept.id}
+                            onOpenHub={showHubConcept}
+                            onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
                           />
                           <DocumentEditor
                             key={editorVersion}
@@ -1891,6 +2726,9 @@ export default function App() {
                             user={user}
                             canEdit={canEditDocument}
                             onMarkdown={saveMarkdown}
+                            onSnapshotReady={handleDraftSnapshot}
+                            onLoaded={(content) =>
+                              saveQueue.accept(concept.id, content)}
                             onStatus={setStatus}
                             onCollaborators={setCollaborators}
                             onReferenceReady={handleReferenceReady}
@@ -1906,12 +2744,17 @@ export default function App() {
                           className={`canvas-container document-width-${documentWidth}`}
                         >
                           <DocumentProperties
-                            concept={concept}
+                            concept={displayedConcept!}
                             spaces={spaces}
                             canEdit={false}
                             onConceptUpdate={() => {}}
                           />
-                          <DocumentPreview
+                          {documentGovernance}
+                          <KnowledgeDocument
+                            documentId={concept.id}
+                            onOpenHub={showHubConcept}
+                            onOpenImported={openImported}
+                            onOpenSettings={openAISettings}
                             key={`${concept.publishedRevision}-${view}`}
                             conceptId={concept.id}
                             markdown={view === "draft"
@@ -1935,6 +2778,10 @@ export default function App() {
                     onInsertReference={bootstrap.canEdit
                       ? insertArtifactReference
                       : undefined}
+                    onStateChange={(apps, canPublish) => {
+                      setConceptApps(apps);
+                      setCanPublishConceptApps(canPublish);
+                    }}
                   />
                 )}
                 {surface === "activity" && (
@@ -1969,6 +2816,54 @@ export default function App() {
             <MessageSquare /> Comment
           </Button>
         )}
+        {(askWorkspace || imported || concept) && (
+          <AskOKF
+            key={askWorkspace ? "workspace" : "document"}
+            workspaceOnly={askWorkspace}
+            open={askOpen}
+            onOpenChange={setAskOpen}
+            target={askWorkspace
+              ? undefined
+              : imported
+              ? { kind: "imported", importId: imported.id, state: "source" }
+              : {
+                kind: "concept",
+                conceptId: concept!.id,
+                state: bootstrap.canEdit ? view : "published",
+              }}
+            documentTitle={(imported ?? displayedConcept)?.title}
+            config={aiConfig}
+            documentHref={askWorkspace ? undefined : imported
+              ? routePath({
+                kind: "imported",
+                sourceId: imported.sourceId,
+                path: imported.path,
+              })
+              : routePath({ kind: "concept", id: concept!.id })}
+            documentVersion={askWorkspace
+              ? undefined
+              : imported
+              ? `Source revision ${imported.sourceRevision}`
+              : view === "published"
+              ? `Published revision ${concept!.publishedRevision}`
+              : saveState === "saved"
+              ? `Saved draft · ${
+                new Date(draftSavedAt || concept!.updatedAt)
+                  .toLocaleTimeString()
+              }`
+              : "Save your latest draft changes"}
+            sessions={askSessions.current}
+            documentReady={Boolean(
+              imported || view === "published" || saveState === "saved",
+            )}
+            onOpenSettings={bootstrap.canEdit
+              ? () => {
+                setAskOpen(false);
+                showCreate("ai");
+              }
+              : undefined}
+          />
+        )}
         {concept && (
           <DocumentComments
             conceptId={concept.id}
@@ -1993,12 +2888,111 @@ export default function App() {
           templates={templates}
           initialSpaceId={newDocumentSpaceId}
           initialParentId={newDocumentParentId}
+          initialTemplateId={newDocumentTemplateId}
+          initialType={newDocumentType}
+          initialIntent={newDocumentIntent}
           busy={actionBusy}
           error={actionError}
           onOpenChange={setNewDocumentOpen}
           onCreate={createConcept}
         />
       )}
+      <Dialog
+        open={Boolean(templateSnapshot)}
+        onOpenChange={(open) => {
+          if (!open && !actionBusy) setTemplateSnapshot(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {templateSaved ? "Template saved" : "Save as template"}
+            </DialogTitle>
+            <DialogDescription>
+              {templateSaved
+                ? "Your reusable copy is ready in the template library."
+                : "Create a reusable copy of this document for workspace editors."}
+            </DialogDescription>
+          </DialogHeader>
+          {templateSaved
+            ? (
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setTemplateSnapshot(null)}
+                >
+                  Done
+                </Button>
+                <Button
+                  onClick={() => {
+                    setTemplateSnapshot(null);
+                    void showCreate("templates");
+                  }}
+                >
+                  Open template library
+                </Button>
+              </DialogFooter>
+            )
+            : (
+              <form
+                className="grid gap-4"
+                onSubmit={(event) =>
+                  void createTemplate(event).then((saved) => {
+                    if (saved) setTemplateSaved(true);
+                  })}
+              >
+                <input
+                  type="hidden"
+                  name="body"
+                  value={templateSnapshot?.body ?? ""}
+                />
+                <div className="grid gap-2">
+                  <Label htmlFor="document-template-name">Template name</Label>
+                  <Input
+                    id="document-template-name"
+                    name="name"
+                    defaultValue={(templateSnapshot?.title ?? "").slice(0, 80)}
+                    disabled={actionBusy}
+                    required
+                    maxLength={80}
+                    autoFocus
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="document-template-description">
+                    Description
+                  </Label>
+                  <Input
+                    id="document-template-description"
+                    name="description"
+                    disabled={actionBusy}
+                    maxLength={240}
+                    placeholder="When should someone use this template?"
+                  />
+                </div>
+                {actionError && (
+                  <p className="form-error" role="alert">{actionError}</p>
+                )}
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={actionBusy}
+                    onClick={() => setTemplateSnapshot(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={actionBusy || !templateSnapshot?.body.trim()}
+                  >
+                    {actionBusy ? "Saving…" : "Save template"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={spaceDialogOpen} onOpenChange={setSpaceDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -2058,20 +3052,25 @@ export default function App() {
       {!presenting && (
         <CommandPalette
           canEdit={Boolean(bootstrap.canEdit)}
-          concept={concept && !homeOpen && !searchOpen && !sourceOpen &&
+          concept={concept && !homeOpen && !artifactsOpen &&
+              !activeSpaceArtifacts && !searchOpen && !sourceOpen &&
               !createOpen && !imported
             ? concept
             : null}
           open={searchPaletteOpen}
           onCreate={() => openNewDocument()}
           onFocus={() => setFocusMode(true)}
+          onOpenArtifacts={showArtifacts}
           onOpenChange={setSearchPaletteOpen}
           onOpenConcept={showHubConcept}
           onOpenHome={showHome}
           onOpenImported={openImported}
           onOpenReferences={() => setReferencesOpen(true)}
           onOpenSearch={showSearch}
-          onOpenSurface={setSurface}
+          onOpenSurface={(next) => {
+            setArtifactFirstOpen(false);
+            setSurface(next);
+          }}
           onPresent={() => setPresenting(true)}
         />
       )}

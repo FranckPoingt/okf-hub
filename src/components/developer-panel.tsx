@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { api, SERVICE } from "../lib/api.ts";
+import { useTheme } from "../lib/theme.ts";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -76,8 +77,12 @@ const ScalarApiReference = lazy(() =>
   ]).then(([{ ApiReferenceReact }]) => ({ default: ApiReferenceReact }))
 );
 
+// Scalar sets its own mode class on <body>; outrank it so app tokens (and
+// dark mode) apply.
 const scalarTheme = `
-:root {
+:root,
+body.light-mode,
+body.dark-mode {
   --scalar-font: "Geist Variable", Arial, sans-serif;
   --scalar-font-code: ui-monospace, SFMono-Regular, Menlo, monospace;
   --scalar-background-1: var(--card);
@@ -97,6 +102,7 @@ const scalarTheme = `
 `;
 
 function ApiDocumentation() {
+  const { resolved } = useTheme();
   return (
     <div className="scalar-reference">
       <Suspense
@@ -118,7 +124,7 @@ function ApiDocumentation() {
             mcp: { disabled: true },
             hideClientButton: true,
             hideDarkModeToggle: true,
-            forceDarkModeState: "light",
+            forceDarkModeState: resolved,
             documentDownloadType: "direct",
             defaultOpenFirstTag: true,
             hideSearch: true,
@@ -136,6 +142,9 @@ function ApiDocumentation() {
 }
 
 export function DeveloperApiDocumentation() {
+  // Keys belong to the signed-in user and never exceed their access, so every
+  // member manages them here rather than in editor-only workspace settings.
+  const [managingKeys, setManagingKeys] = useState(false);
   return (
     <section
       className="developer-api-page"
@@ -143,24 +152,34 @@ export function DeveloperApiDocumentation() {
     >
       <header className="developer-api-heading">
         <div>
-          <p className="eyebrow">Developer</p>
-          <h1 id="developer-api-title">API documentation</h1>
-          <p>Explore and test the permission-filtered OKF Hub API.</p>
+          <h1 id="developer-api-title">
+            {managingKeys ? "API keys" : "API documentation"}
+          </h1>
+          <p>
+            {managingKeys
+              ? "Keys act with your own access and can be limited to specific actions."
+              : "Explore and test the permission-filtered OKF Hub API."}
+          </p>
         </div>
-        <a
-          href="/settings/developer"
-          className={buttonVariants({ variant: "outline" })}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setManagingKeys(!managingKeys)}
         >
-          <KeyRound /> Manage API keys
-        </a>
+          <KeyRound /> {managingKeys ? "API documentation" : "Manage API keys"}
+        </Button>
       </header>
-      <ApiDocumentation />
+      {managingKeys ? <DeveloperSettings embedded /> : <ApiDocumentation />}
     </section>
   );
 }
 
-export function DeveloperSettings() {
+// `embedded` leaves the heading to a parent page that already has one.
+export function DeveloperSettings(
+  { embedded = false }: { embedded?: boolean },
+) {
   const [actions, setActions] = useState<Action[]>([]);
+  const [canEdit, setCanEdit] = useState(true);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -183,6 +202,7 @@ export function DeveloperSettings() {
       );
     }
     setActions(actionBody.actions);
+    setCanEdit(actionBody.canEdit !== false);
     setKeys(keyBody.keys);
   }, []);
   useEffect(() => {
@@ -250,22 +270,24 @@ export function DeveloperSettings() {
 
   return (
     <div className="settings-section developer-settings">
-      <div className="settings-section-heading">
-        <div>
-          <p className="eyebrow">Developer</p>
-          <h2>Developer API</h2>
-          <p>
-            Build integrations and agent workflows on the same
-            permission-filtered operations used by OKF Hub.
-          </p>
+      {!embedded && (
+        <div className="settings-section-heading">
+          <div>
+            <p className="eyebrow">Developer</p>
+            <h2>Developer API</h2>
+            <p>
+              Build integrations and agent workflows on the same
+              permission-filtered operations used by OKF Hub.
+            </p>
+          </div>
+          <a
+            href="/developer/api"
+            className={buttonVariants({ variant: "outline" })}
+          >
+            <BookOpen /> API documentation
+          </a>
         </div>
-        <a
-          href="/developer/api"
-          className={buttonVariants({ variant: "outline" })}
-        >
-          <BookOpen /> API documentation
-        </a>
-      </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -405,6 +427,12 @@ export function DeveloperSettings() {
                     Select the smallest useful set. Access is still limited by
                     your OKF permissions.
                   </p>
+                  {!canEdit && (
+                    <p>
+                      You have view access only, so write operations won't be
+                      usable with this key.
+                    </p>
+                  )}
                   <div className="developer-scope-grid">
                     {actions.map((action) => (
                       <Label className="developer-scope" key={action.name}>

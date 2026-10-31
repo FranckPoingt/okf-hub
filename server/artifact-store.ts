@@ -1,5 +1,6 @@
 /// <reference lib="deno.ns" />
 
+import { encodeFile, validateDependencies } from "./artifact-bundle.ts";
 import { DatabaseSync } from "node:sqlite";
 
 // ponytail: SQLite-backed bundles cap at 8 MiB; move assets to object storage
@@ -48,10 +49,20 @@ type AppBundle = { entry: string; files: BundleFile[] };
 
 export class ArtifactInputError extends Error {}
 
+// Measure content bounds rather than viewport-sized scrollHeight so an App can shrink.
+const APP_BRIDGE = `<script>(()=>{
+const pending=new Map();addEventListener("message",event=>{const message=event.data;if(message?.type!=="okf:result")return;const request=pending.get(message.id);if(!request)return;pending.delete(message.id);message.error?request.reject(new Error(message.error)):request.resolve(message.result)});
+function action(name,input={}){return new Promise((resolve,reject)=>{const id=crypto.randomUUID();pending.set(id,{resolve,reject});parent.postMessage({type:"okf:action",id,name,input},"*")})}
+window.okf={action,data:{list:(collection)=>action("app.data.list",{collection}),get:(collection,key)=>action("app.data.get",{collection,key}),set:(collection,key,value)=>action("app.data.set",{collection,key,value}),remove:(collection,key)=>action("app.data.remove",{collection,key})}};
+let queued=false,lastHeight=0;
+function measure(){queued=false;const body=document.body;if(!body)return;const range=document.createRange();range.selectNodeContents(body);const bounds=range.getBoundingClientRect();const style=getComputedStyle(body);const bottomSpace=[style.paddingBottom,style.borderBottomWidth,style.marginBottom].reduce((sum,value)=>sum+(parseFloat(value)||0),0);const height=Math.ceil(bounds.bottom+window.scrollY+bottomSpace)+1;if(Number.isFinite(height)&&height>0&&height!==lastHeight){lastHeight=height;parent.postMessage({type:"okf:size",height},"*")}}
+function schedule(){if(!queued){queued=true;requestAnimationFrame(measure)}}
+function observe(){if(!document.body)return;new ResizeObserver(schedule).observe(document.body);new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,characterData:true});schedule()}
+if(document.readyState==="loading")addEventListener("DOMContentLoaded",observe,{once:true});else observe();addEventListener("load",schedule);addEventListener("resize",schedule);
+})();</script>`;
+
 function inlineDocument(content: string) {
-  const bridge =
-    `<script>(()=>{const pending=new Map();addEventListener("message",event=>{const message=event.data;if(message?.type!=="okf:result")return;const request=pending.get(message.id);if(!request)return;pending.delete(message.id);message.error?request.reject(new Error(message.error)):request.resolve(message.result)});function action(name,input={}){return new Promise((resolve,reject)=>{const id=crypto.randomUUID();pending.set(id,{resolve,reject});parent.postMessage({type:"okf:action",id,name,input},"*")})}window.okf={action,data:{list:(collection)=>action("app.data.list",{collection}),get:(collection,key)=>action("app.data.get",{collection,key}),set:(collection,key,value)=>action("app.data.set",{collection,key,value}),remove:(collection,key)=>action("app.data.remove",{collection,key})}}})();</script>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${INLINE_CSP}"><meta name="referrer" content="no-referrer"><style>html{color-scheme:light dark}body{margin:0;font-family:system-ui,sans-serif}</style></head><body>${bridge}${content}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${INLINE_CSP}"><meta name="referrer" content="no-referrer"><style>html{color-scheme:light dark}body{margin:0;font-family:system-ui,sans-serif}</style></head><body>${APP_BRIDGE}${content}</body></html>`;
 }
 
 function safeBundlePath(value: string) {
@@ -119,11 +130,12 @@ function bundleBytes(file: BundleFile) {
   }
 }
 
+export const BUNDLE_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
 function bundleDocument(source: string) {
-  const bridge =
-    `<script>(()=>{const pending=new Map();addEventListener("message",event=>{const message=event.data;if(message?.type!=="okf:result")return;const request=pending.get(message.id);if(!request)return;pending.delete(message.id);message.error?request.reject(new Error(message.error)):request.resolve(message.result)});function action(name,input={}){return new Promise((resolve,reject)=>{const id=crypto.randomUUID();pending.set(id,{resolve,reject});parent.postMessage({type:"okf:action",id,name,input},"*")})}window.okf={action,data:{list:(collection)=>action("app.data.list",{collection}),get:(collection,key)=>action("app.data.get",{collection,key}),set:(collection,key,value)=>action("app.data.set",{collection,key,value}),remove:(collection,key)=>action("app.data.remove",{collection,key})}}})();</script>`;
   const security =
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'"><meta name="referrer" content="no-referrer">${bridge}`;
+    `<meta http-equiv="Content-Security-Policy" content="${BUNDLE_CSP}"><meta name="referrer" content="no-referrer">${APP_BRIDGE}`;
   return /<head(?:\s[^>]*)?>/i.test(source)
     ? source.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${security}`)
     : `${security}${source}`;
@@ -202,7 +214,7 @@ export function createArtifactStore(
       clean.length > 20 ||
       clean.some((grant) => !/^[a-z][a-z0-9-]*(?:\.[a-z0-9*-]+)+$/.test(grant))
     ) {
-      throw new ArtifactInputError("Choose valid app capabilities");
+      throw new ArtifactInputError("Choose valid Artifact capabilities");
     }
     return clean;
   }
@@ -223,7 +235,21 @@ export function createArtifactStore(
       throw new ArtifactInputError("App bundle exceeds 8 MiB");
     }
     if (type === "inline_html") {
-      parseBundle(content);
+      const bundle = parseBundle(content);
+      try {
+        validateDependencies(
+          bundle?.files ??
+            [encodeFile(
+              "index.html",
+              "text/html",
+              new TextEncoder().encode(content),
+            )],
+        );
+      } catch (error) {
+        throw new ArtifactInputError(
+          error instanceof Error ? error.message : "Invalid dependencies",
+        );
+      }
       return content;
     }
     let url: URL;
@@ -296,6 +322,9 @@ export function createArtifactStore(
   }
 
   return {
+    bundleContent(appId: string, number: number) {
+      return version(appId, number)?.content;
+    },
     allowedHosts,
     list(conceptId: string, canEdit: boolean) {
       return (db.prepare(
@@ -433,10 +462,12 @@ export function createArtifactStore(
       const item = artifact(id);
       return item ? JSON.parse(item.grants) as string[] : null;
     },
-    file(id: string, requestedPath: string, canEdit: boolean) {
+    file(id: string, requestedPath: string, canEdit: boolean, pin?: number) {
       const item = artifact(id);
       const number = item && (canEdit ? item.draftVersion : item.liveVersion);
-      if (!item || !number) return null;
+      if (!item || !number || (pin !== undefined && pin !== number)) {
+        return null;
+      }
       const selected = version(id, number);
       const bundle = selected ? parseBundle(selected.content) : null;
       if (!bundle) return null;

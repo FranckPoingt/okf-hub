@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useRef,
@@ -23,11 +24,15 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { OkfDraftPanel } from "./okf-draft-panel.tsx";
+import { SourceAccess } from "./source-access.tsx";
+import { StatusBadge } from "./status-badge.tsx";
 import { api, SERVICE } from "../lib/api.ts";
 import type {
   Artifact,
   ArtifactState,
   AutomationState,
+  Bootstrap,
   ImportedConcept,
   NotionSource,
   RepositorySource,
@@ -286,8 +291,8 @@ function GitHubConnectPanel({
     const result = await response.json();
     setLoading(false);
     if (!response.ok) return setError(result.error ?? "Folders unavailable");
-    setFolders(result.folders);
-    setFolder(result.folders.includes("okf") ? "okf" : result.folders[0] ?? "");
+    setFolders(Array.from(new Set(["okf", ...result.folders])));
+    setFolder("okf");
   };
 
   if (!config && !error) {
@@ -442,13 +447,7 @@ function SyncHistory({ source }: { source: RepositorySource }) {
                   </TableCell>
                   <TableCell>{sync.trigger}</TableCell>
                   <TableCell>
-                    <Badge
-                      variant={sync.status === "failed"
-                        ? "destructive"
-                        : "outline"}
-                    >
-                      {sync.status}
-                    </Badge>
+                    <StatusBadge status={sync.status} />
                   </TableCell>
                   <TableCell>
                     <code>{sync.revision?.slice(0, 12) ?? "—"}</code>
@@ -476,6 +475,7 @@ export function RepositoryPanel(
     onDisconnect,
     onOpen,
     onSchedule,
+    access,
   }: {
     source: RepositorySource | null;
     imports: ImportedConcept[];
@@ -497,6 +497,7 @@ export function RepositoryPanel(
       path: string,
     ) => Promise<unknown>;
     onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+    access?: ReactNode;
   },
 ) {
   const headingId = source
@@ -567,13 +568,7 @@ export function RepositoryPanel(
             </div>
           </div>
           <CardAction className="source-connection-actions">
-            <Badge
-              variant={source.status === "sync_failed"
-                ? "destructive"
-                : "outline"}
-            >
-              {source.status.replace("_", " ")}
-            </Badge>
+            <StatusBadge status={source.status} />
             {canManage && (
               <Button
                 variant="outline"
@@ -649,6 +644,11 @@ export function RepositoryPanel(
               onOpen={onOpen}
             />
             <SyncHistory source={source} />
+            <OkfDraftPanel
+              sourceId={source.id}
+              github={source.kind === "github"}
+            />
+            {access}
             {canManage && (
               <details className="source-settings">
                 <summary>
@@ -719,6 +719,7 @@ export function SharedStorePanel(
     onRefresh,
     onOpen,
     onSchedule,
+    access,
   }: {
     source: SharedSource | null;
     imports: ImportedConcept[];
@@ -733,6 +734,7 @@ export function SharedStorePanel(
       path: string,
     ) => Promise<unknown>;
     onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+    access?: ReactNode;
   },
 ) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
@@ -837,8 +839,8 @@ export function SharedStorePanel(
             <dl className="source-provenance">
               <div>
                 <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
+                <dd>
+                  <StatusBadge status={source.status} />
                 </dd>
               </div>
               <div>
@@ -892,6 +894,7 @@ export function SharedStorePanel(
       {source && (
         <ImportList sourceId="shared" imports={imports} onOpen={onOpen} />
       )}
+      {source && access}
     </section>
   );
 }
@@ -907,6 +910,7 @@ function NotionPanel({
   onRefresh,
   onOpen,
   onSchedule,
+  access,
 }: {
   source: NotionSource | null;
   imports: ImportedConcept[];
@@ -918,6 +922,7 @@ function NotionPanel({
   onRefresh: () => Promise<void>;
   onOpen: (sourceId: string, path: string) => Promise<unknown>;
   onSchedule: (sourceId: string, intervalMinutes: number) => Promise<void>;
+  access?: ReactNode;
 }) {
   const connect = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -973,8 +978,8 @@ function NotionPanel({
             <dl className="source-provenance">
               <div>
                 <dt>Status</dt>
-                <dd className={`source-status ${source.status}`}>
-                  {source.status.replace("_", " ")}
+                <dd>
+                  <StatusBadge status={source.status} />
                 </dd>
               </div>
               <div>
@@ -1022,6 +1027,7 @@ function NotionPanel({
       {source && (
         <ImportList sourceId="notion" imports={imports} onOpen={onOpen} />
       )}
+      {source && access}
     </section>
   );
 }
@@ -1186,13 +1192,7 @@ function ConnectorCatalog({
                           {source.detail}
                         </span>
                       </div>
-                      <Badge
-                        variant={source.status === "current"
-                          ? "secondary"
-                          : "outline"}
-                      >
-                        {source.status.replace("_", " ")}
-                      </Badge>
+                      <StatusBadge status={source.status} />
                     </div>
                   ))}
                 </div>
@@ -1359,9 +1359,7 @@ export function AutomationPanel() {
         {state?.runs.map((run, index) => (
           <details key={run.id} open={index === 0}>
             <summary>
-              <strong className={`automation-status ${run.status}`}>
-                {run.status}
-              </strong>
+              <StatusBadge status={run.status} />
               <span>{run.trigger}</span>
               <time>{new Date(run.startedAt).toLocaleString()}</time>
             </summary>
@@ -1437,6 +1435,8 @@ export function SourceWorkspace(
     onSetConnectorEnabled,
     onUpdateSchedule,
     onOpen,
+    members,
+    groups,
   }: {
     repositories: RepositorySource[];
     sharedSource: SharedSource | null;
@@ -1479,8 +1479,14 @@ export function SourceWorkspace(
       intervalMinutes: number,
     ) => Promise<void>;
     onOpen: (sourceId: string, path: string) => Promise<unknown>;
+    members: NonNullable<Bootstrap["members"]>;
+    groups: NonNullable<Bootstrap["groups"]>;
   },
 ) {
+  const access = (sourceId: string) =>
+    canManage && (
+      <SourceAccess sourceId={sourceId} members={members} groups={groups} />
+    );
   const connectedCount = repositories.length + Number(Boolean(sharedSource)) +
     Number(Boolean(notionSource));
   const healthyCount =
@@ -1502,7 +1508,6 @@ export function SourceWorkspace(
     <div className="source-panel source-workspace">
       <header className="source-page-heading">
         <div>
-          <p className="eyebrow">Connected knowledge</p>
           <h1>Knowledge sources</h1>
           <p>
             Bring authoritative OKF into one permission-aware index. Imported
@@ -1584,6 +1589,7 @@ export function SourceWorkspace(
                     onDisconnect={onDisconnectRepository}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access(source.id)}
                   />
                 ))}
                 {sharedSource && (
@@ -1598,6 +1604,7 @@ export function SourceWorkspace(
                     onRefresh={onRefreshShared}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access("shared")}
                   />
                 )}
                 {notionSource && (
@@ -1612,6 +1619,7 @@ export function SourceWorkspace(
                     onRefresh={onRefreshNotion}
                     onOpen={onOpen}
                     onSchedule={onUpdateSchedule}
+                    access={access("notion")}
                   />
                 )}
               </div>
@@ -1666,7 +1674,7 @@ const BUNDLE_PREFIX = "okf-bundle-v1:";
 type BrowserFile = File & { webkitRelativePath?: string };
 
 async function appBundle(files: File[]) {
-  if (!files.length) throw new Error("Choose an app folder or files");
+  if (!files.length) throw new Error("Choose an Artifact folder or files");
   const paths = files.map((file) =>
     (file as BrowserFile).webkitRelativePath || file.name
   );
@@ -1689,7 +1697,7 @@ async function appBundle(files: File[]) {
   }));
   const entry = packed.find((file) => file.path.toLowerCase() === "index.html")
     ?.path;
-  if (!entry) throw new Error("The app folder needs an index.html file");
+  if (!entry) throw new Error("The Artifact folder needs an index.html file");
   return {
     content: `${BUNDLE_PREFIX}${JSON.stringify({ entry, files: packed })}`,
     entry,
@@ -1705,11 +1713,6 @@ const formatBytes = (bytes: number) =>
     : bytes < 1024 * 1024
     ? `${(bytes / 1024).toFixed(1)} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-
-const appFileUrl = (artifact: Artifact) =>
-  `${SERVICE}/api/apps/${encodeURIComponent(artifact.id)}/files/${
-    artifact.bundle?.entry.split("/").map(encodeURIComponent).join("/") ?? ""
-  }`;
 
 function CapabilityPicker({
   actions,
@@ -1751,7 +1754,7 @@ function CapabilityPicker({
       <div className="app-builder-section-heading">
         <div>
           <h3>Capabilities</h3>
-          <p>Apps can only call operations you explicitly grant.</p>
+          <p>Artifacts can only call operations you explicitly grant.</p>
         </div>
         <Badge variant="outline">
           <ShieldCheck /> Least privilege
@@ -1765,8 +1768,36 @@ function CapabilityPicker({
   );
 }
 
-function AppFrame({ artifact }: { artifact: Artifact }) {
+export function AppFrame(
+  { artifact, fullBleed = false, preferLive = false }: {
+    artifact: Artifact;
+    fullBleed?: boolean;
+    preferLive?: boolean;
+  },
+) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(280);
+  const [bundleUrl, setBundleUrl] = useState<string>();
+  const bundled = Boolean(artifact.bundle);
+  useEffect(() => setHeight(280), [artifact.id, artifact.version]);
+  // Each load mints a short-lived capability URL the opaque-origin sandbox can fetch.
+  useEffect(() => {
+    setBundleUrl(undefined);
+    if (!bundled) return;
+    let active = true;
+    api(`/api/apps/${encodeURIComponent(artifact.id)}/capability`, {
+      method: "POST",
+      body: JSON.stringify({ live: preferLive }),
+    })
+      .then((response) => response.ok ? response.json() : {})
+      .then((body: { url?: string }) => {
+        if (active && body.url) setBundleUrl(`${SERVICE}${body.url}`);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [artifact.id, artifact.version, bundled, preferLive]);
   useEffect(() => {
     const receive = async (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return;
@@ -1775,7 +1806,17 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
         id?: unknown;
         name?: unknown;
         input?: unknown;
+        height?: unknown;
       };
+      if (message?.type === "okf:size") {
+        if (
+          !fullBleed &&
+          artifact.type === "inline_html" &&
+          typeof message.height === "number" &&
+          Number.isFinite(message.height) && message.height > 0
+        ) setHeight(Math.max(280, Math.min(1200, Math.ceil(message.height))));
+        return;
+      }
       if (
         message?.type !== "okf:action" || typeof message.id !== "string" ||
         typeof message.name !== "string"
@@ -1787,7 +1828,7 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
           ...body,
         }, "*");
       if (!grantAllows(artifact.grants, message.name)) {
-        reply({ error: `App is not allowed to call ${message.name}` });
+        reply({ error: `Artifact is not allowed to call ${message.name}` });
         return;
       }
       const input = message.input && typeof message.input === "object" &&
@@ -1806,23 +1847,29 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
       reply(
         response.ok
           ? { result: result.result }
-          : { error: result.error ?? "App action failed" },
+          : { error: result.error ?? "Artifact action failed" },
       );
     };
     globalThis.addEventListener("message", receive);
     return () => globalThis.removeEventListener("message", receive);
-  }, [artifact.grants, artifact.id]);
+  }, [artifact.grants, artifact.id, artifact.type, fullBleed]);
   return (
     <iframe
+      key={`${artifact.id}:${artifact.version}:${
+        preferLive ? "live" : "default"
+      }`}
       ref={frame}
-      className="artifact-frame"
+      className={fullBleed
+        ? "artifact-frame artifact-frame-bleed"
+        : "artifact-frame"}
+      style={fullBleed ? undefined : { height }}
       title={artifact.title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       allow=""
-      loading="lazy"
+      loading={fullBleed ? undefined : "lazy"}
       src={artifact.bundle
-        ? appFileUrl(artifact)
+        ? bundleUrl
         : artifact.type === "https_url"
         ? artifact.url
         : undefined}
@@ -1834,10 +1881,11 @@ function AppFrame({ artifact }: { artifact: Artifact }) {
 }
 
 export function AppPanel(
-  { conceptId, conceptActive, onInsertReference }: {
+  { conceptId, conceptActive, onInsertReference, onStateChange }: {
     conceptId: string;
     conceptActive: boolean;
     onInsertReference?: (artifact: Artifact) => void;
+    onStateChange?: (apps: Artifact[], canPublish: boolean) => void;
   },
 ) {
   const [state, setState] = useState<ArtifactState | null>(null);
@@ -1854,13 +1902,19 @@ export function AppPanel(
   const [grants, setGrants] = useState<string[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const stateListener = useRef(onStateChange);
+  stateListener.current = onStateChange;
   const load = useCallback(async () => {
     const response = await api(
       `/api/apps?conceptId=${encodeURIComponent(conceptId)}`,
     );
     const result = await response.json() as ArtifactState & { error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Apps unavailable");
+    if (!response.ok) throw new Error(result.error ?? "Artifacts unavailable");
     setState(result);
+    stateListener.current?.(
+      result.apps ?? result.artifacts ?? [],
+      Boolean(result.canPublish),
+    );
   }, [conceptId]);
   useEffect(() => {
     load().catch((cause) => setError(cause.message));
@@ -1901,7 +1955,7 @@ export function AppPanel(
       setError("");
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "App bundle is invalid",
+        cause instanceof Error ? cause.message : "Artifact bundle is invalid",
       );
     }
   };
@@ -1909,7 +1963,7 @@ export function AppPanel(
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (type === "inline_html" && !content.startsWith(BUNDLE_PREFIX)) {
-      setError("Choose an app folder containing index.html");
+      setError("Choose an Artifact folder containing index.html");
       return;
     }
     setBusy(editing?.id ?? "create");
@@ -1933,7 +1987,8 @@ export function AppPanel(
     setBusy("");
     if (!response.ok) {
       setError(
-        result.error ?? (editing ? "App update failed" : "App creation failed"),
+        result.error ??
+          (editing ? "Artifact update failed" : "Artifact creation failed"),
       );
       return;
     }
@@ -1951,7 +2006,7 @@ export function AppPanel(
     };
     setBusy("");
     if (!response.ok) {
-      setError(result.error ?? "App activation failed");
+      setError(result.error ?? "Artifact activation failed");
       return;
     }
     await load();
@@ -1960,7 +2015,7 @@ export function AppPanel(
   if (!state) {
     return error
       ? <p className="source-error" role="alert">{error}</p>
-      : <div className="artifact-loading">Loading Apps…</div>;
+      : <div className="artifact-loading">Loading Artifacts…</div>;
   }
   if (!state.canEdit && state.artifacts.length === 0) return null;
   const apps = state.apps ?? state.artifacts;
@@ -1968,11 +2023,11 @@ export function AppPanel(
     <section className="artifact-panel" aria-labelledby="artifact-heading">
       <div className="artifact-heading">
         <div>
-          <p className="eyebrow">Document apps</p>
+          <p className="eyebrow">Document Artifacts</p>
           <h2 id="artifact-heading">Tools for this knowledge</h2>
           <p>
             Add focused tools without putting executable code in the document.
-            Every App is sandboxed, versioned, and explicitly approved.
+            Every Artifact is sandboxed, versioned, and explicitly approved.
           </p>
         </div>
         {state.canEdit && conceptActive && (
@@ -1980,18 +2035,32 @@ export function AppPanel(
             type="button"
             onClick={() => openBuilder()}
           >
-            <Plus /> Add App
+            <Plus /> Add Artifact
           </Button>
         )}
       </div>
       {error && <p className="source-error" role="alert">{error}</p>}
+      {state.usage && (
+        <p className="text-sm text-muted-foreground">
+          Reuse: {state.usage.viewers30d} other{" "}
+          {state.usage.viewers30d === 1 ? "person" : "people"} in 30 days (
+          {state.usage.viewersAllTime} all time) · {state.usage.othersSaves}
+          {" "}
+          {state.usage.othersSaves === 1 ? "save" : "saves"} by others ·{" "}
+          {state.usage.lastOpenedAt
+            ? `last opened ${
+              new Date(state.usage.lastOpenedAt).toLocaleDateString()
+            }`
+            : "not opened yet"}
+        </p>
+      )}
       {!apps.length && (
         <Card className="app-empty-state">
           <CardContent>
             <span className="app-empty-icon">
               <Sparkles />
             </span>
-            <h3>No Apps attached</h3>
+            <h3>No Artifacts attached</h3>
             <p>
               Upload a folder of static files, or connect a hosted tool. Readers
               only see versions you activate.
@@ -2001,7 +2070,7 @@ export function AppPanel(
                 type="button"
                 onClick={() => openBuilder()}
               >
-                <Plus /> Add your first App
+                <Plus /> Add your first Artifact
               </Button>
             )}
           </CardContent>
@@ -2019,11 +2088,7 @@ export function AppPanel(
                 {artifact.description || "No purpose has been added yet."}
               </CardDescription>
               <CardAction className="app-card-badges">
-                <Badge
-                  variant={artifact.status === "live" ? "default" : "secondary"}
-                >
-                  {artifact.status.replace("_", " ")}
-                </Badge>
+                <StatusBadge status={artifact.status} />
                 <Badge variant="outline">v{artifact.version}</Badge>
               </CardAction>
             </CardHeader>
@@ -2067,12 +2132,12 @@ export function AppPanel(
         <DialogContent className="app-builder-dialog sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>
-              {editing ? `Configure ${editing.title}` : "Add an App"}
+              {editing ? `Configure ${editing.title}` : "Add an Artifact"}
             </DialogTitle>
             <DialogDescription>
               {editing
                 ? "Saving creates a reviewable version. The live version is unchanged until activation."
-                : "Upload a folder or select its files. OKF keeps them together as one reviewable App version."}
+                : "Upload a folder or select its files. OKF keeps them together as one reviewable Artifact version."}
             </DialogDescription>
           </DialogHeader>
           <form className="app-builder" onSubmit={(event) => void save(event)}>
@@ -2082,7 +2147,7 @@ export function AppPanel(
             >
               <TabsList className="app-kind-tabs">
                 <TabsTrigger value="https_url">
-                  <AppWindow /> Hosted app
+                  <AppWindow /> Hosted Artifact
                 </TabsTrigger>
                 <TabsTrigger value="inline_html">
                   <FolderOpen /> Upload bundle
@@ -2121,7 +2186,7 @@ export function AppPanel(
                     <Badge variant="secondary">Recommended</Badge>
                   </div>
                   <Label>
-                    <span>App URL</span>
+                    <span>Artifact URL</span>
                     <Input
                       type="url"
                       value={content}
@@ -2140,7 +2205,7 @@ export function AppPanel(
                 <section className="app-bundle-workbench">
                   <div className="app-builder-section-heading">
                     <div>
-                      <h3>App bundle</h3>
+                      <h3>Artifact bundle</h3>
                       <p>
                         Upload a folder of static web files. It must include
                         index.html.
@@ -2165,7 +2230,7 @@ export function AppPanel(
                       <FileUp />
                     </span>
                     <div>
-                      <h4>Drop or paste an app folder</h4>
+                      <h4>Drop or paste an Artifact folder</h4>
                       <p>
                         No build pipeline or configuration file. Static assets
                         are kept together as one reviewed version.
@@ -2247,7 +2312,7 @@ export function AppPanel(
                   ? "Saving…"
                   : editing
                   ? "Save new version"
-                  : "Create draft App"}
+                  : "Create draft Artifact"}
               </Button>
             </DialogFooter>
           </form>

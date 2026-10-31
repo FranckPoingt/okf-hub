@@ -1,6 +1,8 @@
+import { CompareDefinitions } from "./compare-definitions.tsx";
 import { ArrowUpRight, Link2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api.ts";
+import { portableKnowledgeLink } from "../../lib/knowledge-links.ts";
 import type {
   SearchRelationship,
   SearchResponse,
@@ -23,6 +25,8 @@ export function DocumentReferences({
   onInsert,
   onOpenChange,
   onOpenConcept,
+  onOpenImported,
+  onOpenSettings,
 }: {
   canEdit: boolean;
   conceptId: string;
@@ -30,6 +34,8 @@ export function DocumentReferences({
   onInsert: (title: string, href: string) => void;
   onOpenChange: (open: boolean) => void;
   onOpenConcept: (id: string) => void;
+  onOpenImported: (sourceId: string, path: string) => Promise<unknown>;
+  onOpenSettings?: () => void;
 }) {
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [query, setQuery] = useState("");
@@ -48,18 +54,18 @@ export function DocumentReferences({
   const candidates = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return result?.results.filter((item) =>
-      item.kind === "hub-native" && item.id !== conceptId &&
+      item.id !== conceptId &&
       (!needle ||
         `${item.title} ${item.type}`.toLocaleLowerCase().includes(needle))
     ) ?? [];
   }, [conceptId, query, result]);
   const openPage = (item: SearchRelationship) => {
-    if (item.kind !== "hub-native") return;
     onOpenChange(false);
-    onOpenConcept(item.id);
+    if (item.kind === "hub-native") onOpenConcept(item.id);
+    else if (item.path) void onOpenImported(item.sourceId, item.path);
   };
   const insert = (item: SearchResult) => {
-    onInsert(item.title, `/knowledge/${encodeURIComponent(item.id)}`);
+    onInsert(item.title, portableKnowledgeLink(item));
     onOpenChange(false);
   };
   const relationships = (label: string, items: SearchRelationship[] = []) => (
@@ -77,7 +83,7 @@ export function DocumentReferences({
             onClick={() => openPage(item)}
           >
             <Link2 className="size-3.5" />
-            <span className="truncate">{item.title}</span>
+            <span className="truncate">{item.title} · {item.sourceLabel}</span>
             <ArrowUpRight className="ml-auto size-3.5" />
           </Button>
         ))
@@ -99,6 +105,11 @@ export function DocumentReferences({
           {error && <p className="source-error" role="alert">{error}</p>}
           {relationships("Links to", current?.links)}
           {relationships("Linked from", current?.backlinks)}
+          {relationships("Also defined in", current?.alsoDefinedIn)}
+          <CompareDefinitions
+            current={current}
+            onOpenSettings={onOpenSettings}
+          />
           {canEdit && (
             <section className="grid gap-3 border-t pt-5">
               <h3 className="text-sm font-semibold">Insert a page reference</h3>
@@ -118,7 +129,9 @@ export function DocumentReferences({
                     onClick={() => insert(item)}
                   >
                     <Plus className="size-3.5" />
-                    <span className="truncate">{item.title}</span>
+                    <span className="truncate">
+                      {item.title} · {item.sourceLabel}
+                    </span>
                     <small className="ml-auto text-muted-foreground">
                       {item.type}
                     </small>
