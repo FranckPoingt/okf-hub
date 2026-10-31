@@ -708,6 +708,14 @@ export async function createSecurity({
     }
   }
 
+  function spaceManagers(spaceId: string) {
+    const prefix = `space_manager:${spaceId}:`;
+    return (db.prepare(
+      "SELECT key FROM okf_config WHERE substr(key, 1, ?) = ? ORDER BY key",
+    ).all(prefix.length, prefix) as Row[])
+      .map((row) => String(row.key).slice(prefix.length)).filter(hasMember);
+  }
+
   function hasMember(userId: string) {
     return Boolean(member(userId));
   }
@@ -1263,6 +1271,7 @@ export async function createSecurity({
     isOwner,
     hasMember,
     setSpaceManager,
+    spaceManagers,
     audit,
     activity,
     ensureHubSpace,

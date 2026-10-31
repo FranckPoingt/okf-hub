@@ -1,5 +1,12 @@
 /// <reference lib="deno.ns" />
 
+import {
+  createFrontmatterStore,
+  editableSources,
+  extensionFields,
+  extensionYaml,
+  typeYaml,
+} from "./document-frontmatter.ts";
 import { artifactSaveAction } from "./artifact-save.ts";
 import { createMcpHandler } from "./mcp.ts";
 
@@ -497,12 +504,14 @@ export function publishedMarkdown(
   title = "Incident communication",
   type = "Policy",
   stableId?: string,
+  fields: Record<string, unknown> = {},
+  intent?: string,
 ) {
-  return `---\ntype: ${type}\ntitle: ${JSON.stringify(title)}\n${
+  return `---\n${typeYaml(type)}title: ${JSON.stringify(title)}\n${
     stableId ? `id: ${JSON.stringify(stableId)}\n` : ""
-  }status: stable\ngenerated: { by: "human:${actorUserId}", at: "${publishedAt}" }\n---\n\n${
-    bodyOnly(body).trimEnd()
-  }\n`;
+  }status: stable\ngenerated: { by: "human:${actorUserId}", at: "${publishedAt}" }\n${
+    extensionYaml(fields)
+  }${intent ? `intent: ${intent}\n` : ""}---\n\n${bodyOnly(body).trimEnd()}\n`;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -1047,6 +1056,7 @@ export async function createCollabApp({
   const artifactStore = createArtifactStore(db, allowedArtifactHosts);
   const artifactUsage = createArtifactUsage(db);
   const freshness = createFreshnessStore(db);
+  const frontmatter = createFrontmatterStore(db);
   const connectors = createConnectorRegistry({
     git: repositorySync,
     s3: sharedSourceSync,
@@ -1882,6 +1892,11 @@ export async function createCollabApp({
       if (!(error instanceof Deno.errors.NotFound)) throw error;
       markdown = fallback ?? "";
     }
+    const fields = extensionFields(markdown);
+    if (fields) {
+      frontmatter.set(row.id, fields);
+      freshness.setSources(row.id, documentSources(markdown) ?? []);
+    }
     const cleanMarkdown = bodyOnly(markdown);
     if (cleanMarkdown !== markdown) {
       markdown = `${cleanMarkdown.trimEnd()}\n`;
@@ -1929,6 +1944,8 @@ export async function createCollabApp({
       throw new DocumentLocked("Unlock the document to edit it");
     }
     const live = await loadDocument(row);
+    const fields = extensionFields(next);
+    if (fields) frontmatter.set(conceptId, fields);
     const sources = documentSources(next);
     if (sources) freshness.setSources(conceptId, sources);
     live.markdown = `${bodyOnly(next).trimEnd()}\n`;
@@ -2015,10 +2032,16 @@ export async function createCollabApp({
       const metadata = published.match(
         /^---\r?\n([\s\S]*?)\r?\n---\r?\n/,
       )?.[1] ?? "";
-      const sameMetadata =
-        metadata.match(/^type:\s*(.+)$/m)?.[1] === row.type &&
+      const sameMetadata = metadata.match(/^type:\s*(.+)$/m)?.[1] ===
+          typeYaml(row.type).slice(6).trimEnd() &&
         metadata.match(/^title:\s*(.+)$/m)?.[1] === JSON.stringify(row.title);
-      if (sameMetadata && bodyOnly(published) === live.markdown) {
+      if (
+        sameMetadata &&
+        extensionYaml(extensionFields(published) ?? {}) ===
+          extensionYaml(frontmatter.get(conceptId)) &&
+        metadata.match(/^intent:\s*(.+)$/m)?.[1] === row.intent &&
+        bodyOnly(published) === live.markdown
+      ) {
         return await payload(concept(conceptId)!, true, userId);
       }
     }
@@ -2041,6 +2064,8 @@ export async function createCollabApp({
         row.title,
         row.type,
         row.id,
+        frontmatter.get(row.id),
+        row.intent,
       ),
     );
     db.exec("BEGIN");
@@ -2086,6 +2111,9 @@ export async function createCollabApp({
       : null;
     return {
       ...row,
+      sources: editableSources(
+        canEdit ? frontmatter.get(row.id) : extensionFields(published ?? ""),
+      ),
       openCommentCount: openCommentCount(row.id),
       ...await dependencyTrust(row.id, userId),
       space: space(row.spaceId)?.name ?? row.spaceId,
@@ -2186,18 +2214,21 @@ export async function createCollabApp({
         : null;
       const status = row.status === "archived"
         ? "deprecated"
-        : published && bodyOnly(published) === bodyOnly(draft)
+        : published && bodyOnly(published) === bodyOnly(draft) &&
+            extensionYaml(extensionFields(published) ?? {}) ===
+              extensionYaml(frontmatter.get(row.id)) &&
+            published.includes(`intent: ${row.intent}\n`) &&
+            published.includes(`title: ${JSON.stringify(row.title)}\n`) &&
+            published.includes(typeYaml(row.type))
         ? "stable"
         : "draft";
       files.push({
         path: `okf/${documentPath}.md`,
         body: `---\ntype: ${JSON.stringify(row.type)}\ntitle: ${
           JSON.stringify(row.title)
-        }\nid: ${
-          JSON.stringify(row.id)
-        }\nstatus: ${status}\nintent: ${row.intent}\n---\n\n${
-          bodyOnly(draft).trimEnd()
-        }\n`,
+        }\nid: ${JSON.stringify(row.id)}\nstatus: ${status}\n${
+          extensionYaml(frontmatter.get(row.id))
+        }intent: ${row.intent}\n---\n\n${bodyOnly(draft).trimEnd()}\n`,
       });
       const appNames = uniqueArchiveNames(
         apps.map((app) => ({ id: app.id, label: app.title })),
@@ -5049,11 +5080,13 @@ export async function createCollabApp({
       return Response.json({ reused }, { headers: cors(request) });
     }
     const spaceManager = url.pathname.match(
-      /^\/api\/spaces\/([a-z0-9-]+)\/managers\/([^/]+)$/,
+      /^\/api\/spaces\/([a-z0-9-]+)\/managers(?:\/([^/]+))?$/,
     );
     if (
       spaceManager &&
-      (request.method === "PUT" || request.method === "DELETE")
+      ((spaceManager[2] &&
+        (request.method === "PUT" || request.method === "DELETE")) ||
+        (!spaceManager[2] && request.method === "GET"))
     ) {
       const current = await security.session(request);
       if (!current) {
@@ -5067,6 +5100,17 @@ export async function createCollabApp({
           status: 403,
           headers: cors(request),
         });
+      }
+      if (!space(spaceManager[1])) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (request.method === "GET") {
+        return Response.json({
+          managers: security.spaceManagers(spaceManager[1]),
+        }, { headers: cors(request) });
       }
       const userId = decodeURIComponent(spaceManager[2]);
       if (!space(spaceManager[1]) || !security.hasMember(userId)) {
@@ -5852,6 +5896,18 @@ export async function createCollabApp({
         string,
         unknown
       >;
+      if (
+        Object.hasOwn(body, "sources") &&
+        (!Array.isArray(body.sources) || body.sources.length > 50 ||
+          body.sources.some((entry) =>
+            typeof entry !== "string" &&
+            (!entry || typeof entry !== "object" || Array.isArray(entry))
+          ))
+      ) {
+        return Response.json({
+          error: "Sources must be a list of at most 50 citations",
+        }, { status: 400, headers: cors(request) });
+      }
       const title = String(body.title ?? "").trim();
       const type = String(body.type ?? "").trim();
       const spaceId = String(body.spaceId ?? "");
@@ -5906,6 +5962,19 @@ export async function createCollabApp({
       }
       try {
         await security.moveHubConcept(conceptId, row.spaceId, spaceId);
+        if (Object.hasOwn(body, "sources")) {
+          const fields = {
+            ...frontmatter.get(conceptId),
+            sources: body.sources,
+          };
+          frontmatter.set(conceptId, fields);
+          freshness.setSources(
+            conceptId,
+            documentSources(`---
+${extensionYaml(fields)}---
+`) ?? [],
+          );
+        }
         db.prepare(
           "UPDATE okf_concept SET title = ?, type = ?, intent = ?, spaceId = ?, parentId = ?, updatedAt = ? WHERE id = ?",
         ).run(
@@ -6121,7 +6190,7 @@ export async function createCollabApp({
               headers: cors(request),
             });
           }
-          await saveDraft(conceptId, bodyOnly(await store.get(item.objectKey)));
+          await saveDraft(conceptId, await store.get(item.objectKey));
           return Response.json(
             await payload(concept(conceptId)!, true, current.user.id),
             {

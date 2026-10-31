@@ -163,6 +163,27 @@ Deno.test("cascades stale imported knowledge to dependent artifacts, never on fa
       "stale",
     );
 
+    const metadata = async (sources: string[]) => {
+      const response = await fetch(
+        `${base}/api/concepts/${artifact.id}/metadata`,
+        {
+          method: "PUT",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            title: artifact.title,
+            type: artifact.type,
+            spaceId: artifact.spaceId,
+            sources,
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      await response.body?.cancel();
+    };
+    await metadata([]);
+    assert.equal((await json(`/api/concepts/${artifact.id}`)).trust, "current");
+    await metadata(["billing.md"]);
+    assert.equal((await json(`/api/concepts/${artifact.id}`)).trust, "stale");
     await commit(
       "okf/billing.md",
       "---\ntype: Guide\ntitle: Billing rules\ndescribes: [src/billing/**]\n---\n\n# Billing v2\n",

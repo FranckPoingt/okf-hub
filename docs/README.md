@@ -314,3 +314,14 @@ For manual HTTPS Git sources there is no write access, so the Hub downloads a
 and submit it through your normal review process. Suggestions are recorded in
 the audit trail as `source.change-proposed` (pull request) or
 `source.change-patch-exported` (patch).
+
+## Space managers
+
+Workspace owners can add and remove managers in **Workspace settings → Spaces →
+Managers**. Choose a workspace member for each space. Managers can activate Apps
+in that space; ordinary editors cannot. Workspace owners retain activation
+access. This role does not grant general workspace ownership.
+
+The owner-only `GET /api/spaces/:id/managers` endpoint returns
+`{ managers: [userId, ...] }`. Assign or revoke with `PUT` or
+`DELETE /api/spaces/:id/managers/:userId`.

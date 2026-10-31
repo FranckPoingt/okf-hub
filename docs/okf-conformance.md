@@ -28,6 +28,16 @@ Publishing emits a concept document with:
 - `generated.at` using the publication time;
 - the canonical Markdown body.
 
+Draft saves preserve `sources`, `describes`, `owner`, `tags`, `description`, and
+unknown frontmatter fields. Body-only editor saves retain those fields. A save
+containing frontmatter replaces the preserved fields; omitted fields are
+removed. Published revisions and portable exports serialize them as YAML. The
+Hub controls `type`, `title`, `id`, `status`, `generated`, and `intent`;
+incoming frontmatter cannot override them. Sources can also be edited as a list
+in document Properties, keeping dependency freshness tracking in sync. Existing
+documents recover stored source references, but previously discarded citation
+details and other fields must be supplied again.
+
 Working intent remains an OKF extension field. Consumers must tolerate unknown
 fields, so `intent` does not weaken conformance.
 

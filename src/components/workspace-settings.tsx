@@ -36,6 +36,7 @@ import type { ConnectorDefinition } from "../lib/connectors.ts";
 import { AccessPanel } from "./auth-panels.tsx";
 import { DeveloperSettings } from "./developer-panel.tsx";
 import { ConnectorSettings } from "./source-panels.tsx";
+import { SpaceManagers } from "./space-managers.tsx";
 import { SpaceIconPicker } from "./space-icon-picker.tsx";
 import {
   DocumentPreview,
@@ -1182,6 +1183,16 @@ export function WorkspaceSettings({
                   ))}
                 </CardContent>
               </Card>
+              {canManageMembers && spaces.map((space) => (
+                <Card key={space.id}>
+                  <CardHeader>
+                    <CardTitle>{space.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <SpaceManagers spaceId={space.id} members={members} />
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           </SettingsPanel>
 

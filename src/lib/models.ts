@@ -66,6 +66,7 @@ export type WorkTrace = {
   foldedKnowledge: string | null;
 };
 export type Concept = {
+  sources?: Array<string | Record<string, unknown>>;
   id: string;
   spaceId: string;
   parentId: string | null;

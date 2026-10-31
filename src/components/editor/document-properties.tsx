@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, conceptPath } from "../../lib/api.ts";
 import { Alert, AlertDescription } from "../ui/alert.tsx";
 import { Button } from "../ui/button.tsx";
+import { Input } from "../ui/input.tsx";
 import { Label } from "../ui/label.tsx";
 import {
   Select,
@@ -16,6 +17,7 @@ import { Textarea } from "../ui/textarea.tsx";
 type DocumentIntent = "canonical" | "working" | "evidence" | "ephemeral";
 
 export type DocumentPropertiesConcept = {
+  sources?: Array<string | Record<string, unknown>>;
   id: string;
   intent: DocumentIntent;
   space: string;
@@ -47,6 +49,11 @@ export function DocumentProperties({
   spaces,
   onConceptUpdate,
 }: DocumentPropertiesProps) {
+  const [sources, setSources] = useState(concept.sources ?? []);
+  useEffect(() => setSources(concept.sources ?? []), [
+    concept.id,
+    concept.sources,
+  ]);
   const [title, setTitle] = useState(concept.title);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [error, setError] = useState("");
@@ -55,7 +62,10 @@ export function DocumentProperties({
 
   const saveMetadata = async (
     patch: Partial<
-      Pick<DocumentPropertiesConcept, "intent" | "spaceId" | "title" | "type">
+      Pick<
+        DocumentPropertiesConcept,
+        "intent" | "spaceId" | "title" | "type" | "sources"
+      >
     >,
   ) => {
     setError("");
@@ -142,6 +152,73 @@ export function DocumentProperties({
 
       {propertiesOpen && (
         <div className="frontmatter-block">
+          <div className="grid gap-2">
+            <Label>Sources</Label>
+            <p className="text-xs text-muted-foreground">
+              Document IDs, paths, or resource URLs.
+            </p>
+            {sources.map((source, index) => (
+              <div key={index} className="flex gap-2">
+                <Input
+                  aria-label={`Source ${index + 1}`}
+                  disabled={!canEdit}
+                  value={typeof source === "string"
+                    ? source
+                    : String(source.resource ?? source.id ?? "")}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSources((current) =>
+                      current.map((entry, i) =>
+                        i !== index
+                          ? entry
+                          : typeof entry === "string"
+                          ? value
+                          : {
+                            ...entry,
+                            [
+                              Object.hasOwn(entry, "resource")
+                                ? "resource"
+                                : "id"
+                            ]: value,
+                          }
+                      )
+                    );
+                  }}
+                />
+                {canEdit && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    aria-label={`Remove source ${index + 1}`}
+                    onClick={() =>
+                      setSources((current) =>
+                        current.filter((_, i) => i !== index)
+                      )}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            ))}
+            {canEdit && (
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setSources((current) => [...current, ""])}
+                >
+                  Add source
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void saveMetadata({ sources })}
+                >
+                  Save sources
+                </Button>
+              </div>
+            )}
+          </div>
+
           <div className="frontmatter-row">
             <Label htmlFor="document-space">Space</Label>
             {canEdit

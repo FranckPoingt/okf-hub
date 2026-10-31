@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import assert from "node:assert/strict";
+import { extensionFields } from "./document-frontmatter.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { AIRequest } from "./ai.ts";
 import { createCollabApp, DEFAULT_MARKDOWN } from "./main.ts";
@@ -150,8 +151,11 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
   await Deno.mkdir(folder);
   const source = new URL("../examples/sovereign-artifact/", import.meta.url);
   const originalHTML = await Deno.readTextFile(new URL("index.html", source));
-  const originalContext = await Deno.readTextFile(
+  const originalContext = (await Deno.readTextFile(
     new URL("context.md", source),
+  )).replace(
+    "---\n",
+    '---\nsources: [{ id: hub-design, resource: "https://example.com/design", title: "Design: evidence" }]\ncustom_provenance: { team: "Research: North", retained: true }\n',
   );
   await Deno.writeTextFile(`${folder}/index.html`, originalHTML);
   await Deno.writeTextFile(`${folder}/context.md`, originalContext);
@@ -335,6 +339,44 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     );
     assert.ok(knowledge);
     await inspectOkf(knowledge[0], decoder.decode(knowledge[1]));
+    const expectedFields = extensionFields(revisedContext)!;
+    assert.ok(expectedFields.sources);
+    assert.deepEqual(
+      extensionFields(decoder.decode(knowledge[1])),
+      expectedFields,
+    );
+    const publishedMarkdown = [...objects.values()].findLast((markdown) =>
+      markdown.includes("The second version preserves the same shared link.")
+    )!;
+    assert.deepEqual(extensionFields(publishedMarkdown), expectedFields);
+    await inspectOkf("artifact.md", publishedMarkdown);
+    // Metadata-only citation edits preserve unknown fields and trigger a revision.
+    const metadata = {
+      title: publishedDocument.title,
+      type: publishedDocument.type,
+      spaceId: publishedDocument.spaceId,
+      sources: ["/knowledge/incident-communication"],
+    };
+    const edited = await owner.request(
+      `/api/concepts/${first.documentId}/metadata`,
+      { method: "PUT", body: JSON.stringify(metadata) },
+    );
+    assert.equal(edited.status, 200);
+    assert.deepEqual((await edited.json()).sources, metadata.sources);
+    const republished = await owner.request(
+      `/api/concepts/${first.documentId}/publish`,
+      { method: "POST" },
+    );
+    assert.equal(republished.status, 200);
+    assert.equal((await republished.json()).publishedRevision, 3);
+    const updatedPublished = [...objects.values()].findLast((markdown) =>
+      markdown.includes("The second version preserves the same shared link.")
+    )!;
+    assert.deepEqual(extensionFields(updatedPublished), {
+      ...expectedFields,
+      sources: metadata.sources,
+    });
+
     const receipt = await Deno.readTextFile(`${folder}/.okf-artifact.json`);
     assert.ok(!receipt.includes(Deno.env.get("OKF_HUB_TOKEN")!));
     const mcp = async (
@@ -1255,7 +1297,7 @@ Deno.test("enforces access and preserves the published lifecycle", async () => {
     assert.equal(firstPublish.status, 200, await firstPublish.text());
     assert.match(
       objects.get("policies/incident-communication/revisions/1.md") ?? "",
-      /^---\ntype: Policy\ntitle: "Incident communication"\nid: "incident-communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\n---\n\n# First published draft\n$/,
+      /^---\ntype: Policy\ntitle: "Incident communication"\nid: "incident-communication"\nstatus: stable\ngenerated: \{ by: "human:[^"]+", at: "[^"]+" \}\nintent: canonical\n---\n\n# First published draft\n$/,
     );
     assert.equal(
       (await viewer.request("/api/concepts/incident-communication")).status,
@@ -3366,6 +3408,32 @@ Deno.test("lets space managers activate Apps and reports reuse by others", async
     );
     assert.equal((await setManager(spaceA, "manager")).status, 204);
     assert.equal((await setManager(spaceB, "otherManager")).status, 204);
+    assert.deepEqual(
+      await (await owner.request(`/api/spaces/${spaceA}/managers`)).json(),
+      { managers: [userIds.manager] },
+    );
+    assert.equal(
+      (await clients.manager.request(`/api/spaces/${spaceA}/managers`)).status,
+      403,
+    );
+    assert.equal(
+      (await clients.editor.request(`/api/spaces/${spaceA}/managers`)).status,
+      403,
+    );
+    assert.equal(
+      (await owner.request("/api/spaces/missing/managers")).status,
+      404,
+    );
+    assert.equal(
+      (await fetch(`${base}/api/spaces/${spaceA}/managers`)).status,
+      401,
+    );
+    assert.equal((await setManager(spaceA, "manager", "DELETE")).status, 204);
+    assert.deepEqual(
+      await (await owner.request(`/api/spaces/${spaceA}/managers`)).json(),
+      { managers: [] },
+    );
+    assert.equal((await setManager(spaceA, "manager")).status, 204);
 
     const document = await (await owner.request("/api/concepts", {
       method: "POST",
