@@ -221,6 +221,11 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
     "src/components/artifact-panels.tsx",
   );
   assert.match(artifactPanels, /from "\.\.\/hooks\/use-mobile\.ts"/);
+  // The sandbox badge must wrap inside the narrow mobile context sheet.
+  assert.match(
+    artifactPanels,
+    /max-w-full[^"]*whitespace-normal[^]*?sandboxLabel\(activeApp\.grants\.length\)/,
+  );
   const sourcePanels = await Deno.readTextFile(
     "src/components/source-panels.tsx",
   );

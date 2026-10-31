@@ -136,6 +136,11 @@ function SourceList({
   );
 }
 
+const sandboxLabel = (grants: number) =>
+  grants === 0
+    ? "Sandboxed · No Hub access"
+    : `Sandboxed · ${grants} ${grants === 1 ? "capability" : "capabilities"}`;
+
 function ContextPanelBody({
   concept,
   activeApp,
@@ -195,13 +200,12 @@ function ContextPanelBody({
                 </Badge>
               )}
             <TrustBadge trust={concept.trust} reason={concept.trustReason} />
-            <Badge variant="outline" className="gap-1">
-              <Lock className="size-3" />
-              {activeApp.grants.length === 0
-                ? "Sandboxed · No Hub access"
-                : `Sandboxed · ${activeApp.grants.length} ${
-                  activeApp.grants.length === 1 ? "capability" : "capabilities"
-                }`}
+            <Badge
+              variant="outline"
+              className="h-auto max-w-full shrink gap-1 py-0.5 text-left whitespace-normal"
+            >
+              <Lock className="size-3 shrink-0" />
+              {sandboxLabel(activeApp.grants.length)}
             </Badge>
           </dd>
         </div>
@@ -349,11 +353,7 @@ export function ArtifactFirstView({
   const canSwitchDraftLive = isOwner && activeApp.liveVersion !== null &&
     (activeApp.status === "changes_pending" ||
       Boolean(concept.published && concept.draft !== concept.published));
-  const grantsLabel = activeApp.grants.length === 0
-    ? "Sandboxed · No Hub access"
-    : `Sandboxed · ${activeApp.grants.length} ${
-      activeApp.grants.length === 1 ? "capability" : "capabilities"
-    }`;
+  const grantsLabel = sandboxLabel(activeApp.grants.length);
 
   return (
     <div className="artifact-first-shell">
