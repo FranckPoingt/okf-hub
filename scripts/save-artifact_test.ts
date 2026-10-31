@@ -522,3 +522,28 @@ Deno.test("missing publication scope fails before creating or changing Hub recor
     );
   });
 });
+
+Deno.test("CLI --vendor packs rewritten dependencies and a deterministic manifest", async () => {
+  assert.equal(parseArgs(["example", "--vendor"]).vendor, true);
+  await fixture(async (folder) => {
+    await Deno.writeTextFile(
+      join(folder, "index.html"),
+      '<script type="module">import{chart}from"https://cdn.jsdelivr.net/npm/chart/+esm";</script>',
+    );
+    const request: typeof fetch = () =>
+      Promise.resolve(
+        new Response("export const chart = 1;", {
+          headers: { "content-type": "application/javascript" },
+        }),
+      );
+    const first = await packArtifact(folder, true, request);
+    const second = await packArtifact(folder, true, request);
+    assert.equal(first.digest, second.digest);
+    assert.equal(first.manifest.length, 1);
+    assert.match(first.content, /vendor.json/);
+    assert.equal(
+      await Deno.readTextFile(join(folder, "index.html")),
+      '<script type="module">import{chart}from"https://cdn.jsdelivr.net/npm/chart/+esm";</script>',
+    );
+  });
+});

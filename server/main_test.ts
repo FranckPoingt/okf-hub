@@ -331,6 +331,59 @@ Deno.test("saves, revises, discovers, and exports a Codex artifact with its cont
     await inspectOkf(knowledge[0], decoder.decode(knowledge[1]));
     const receipt = await Deno.readTextFile(`${folder}/.okf-artifact.json`);
     assert.ok(!receipt.includes(Deno.env.get("OKF_HUB_TOKEN")!));
+    const uploadPath = "/api/artifact-uploads?spaceId=policies&name=chart.html";
+    assert.equal(
+      (await viewer.request(uploadPath, {
+        method: "POST",
+        body: "<h1>Chart</h1>",
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await fetch(`${base}${uploadPath}`, {
+        method: "POST",
+        body: "<h1>Chart</h1>",
+      })).status,
+      401,
+    );
+    const beforeUpload = await (await owner.request("/api/concepts")).json();
+    const rejected = await owner.request(
+      uploadPath + "&title=Bad&description=Bad",
+      {
+        method: "POST",
+        body: '<script src="https://unpkg.com/react"></script>',
+      },
+    );
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /--vendor/);
+    assert.equal(
+      (await (await owner.request("/api/concepts")).json()).length,
+      beforeUpload.length,
+    );
+    assert.equal(
+      (await (await owner.request(uploadPath, {
+        method: "POST",
+        body: "<h1>Chart</h1>",
+      })).json()).needsContext,
+      true,
+    );
+    const uploaded = await owner.request(
+      uploadPath + "&title=Uploaded%20chart&description=Company%20chart",
+      { method: "POST", body: "<h1>Chart</h1>" },
+    );
+    assert.equal(uploaded.status, 201, await uploaded.clone().text());
+    const uploadedIds = await uploaded.json();
+    const uploadedDocument =
+      await (await owner.request(`/api/concepts/${uploadedIds.documentId}`))
+        .json();
+    assert.equal(uploadedDocument.type, "Artifact");
+    assert.match(uploadedDocument.draft, /Company chart/);
+    const uploadedApps = await (await owner.request(
+      `/api/apps?conceptId=${uploadedIds.documentId}`,
+    )).json();
+    assert.equal(uploadedApps.apps[0].status, "draft");
+    assert.deepEqual(uploadedApps.apps[0].grants, []);
+    assert.match(uploadedApps.apps[0].content, /context.md/);
   } finally {
     if (previousToken === undefined) Deno.env.delete("OKF_HUB_TOKEN");
     else Deno.env.set("OKF_HUB_TOKEN", previousToken);

@@ -1,5 +1,6 @@
 /// <reference lib="deno.ns" />
 
+import { encodeFile, validateDependencies } from "./artifact-bundle.ts";
 import { DatabaseSync } from "node:sqlite";
 
 // ponytail: SQLite-backed bundles cap at 8 MiB; move assets to object storage
@@ -130,6 +131,18 @@ function bundleBytes(file: BundleFile) {
 }
 
 function bundleDocument(source: string) {
+  // Module fetches from the opaque sandbox need credentials for protected files.
+  // CORS still runs through the authenticated file route; sandbox/CSP stay intact.
+  source = source.replace(
+    /<script\b[^>]*>/gi,
+    (tag) =>
+      /\btype\s*=\s*(?:"module"|'module'|module(?=[\s>]))/i.test(tag)
+        ? tag.replace(
+          /\s+crossorigin(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/gi,
+          "",
+        ).replace(/>$/, ' crossorigin="use-credentials">')
+        : tag,
+  );
   const security =
     `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'"><meta name="referrer" content="no-referrer">${APP_BRIDGE}`;
   return /<head(?:\s[^>]*)?>/i.test(source)
@@ -231,7 +244,21 @@ export function createArtifactStore(
       throw new ArtifactInputError("App bundle exceeds 8 MiB");
     }
     if (type === "inline_html") {
-      parseBundle(content);
+      const bundle = parseBundle(content);
+      try {
+        validateDependencies(
+          bundle?.files ??
+            [encodeFile(
+              "index.html",
+              "text/html",
+              new TextEncoder().encode(content),
+            )],
+        );
+      } catch (error) {
+        throw new ArtifactInputError(
+          error instanceof Error ? error.message : "Invalid dependencies",
+        );
+      }
       return content;
     }
     let url: URL;

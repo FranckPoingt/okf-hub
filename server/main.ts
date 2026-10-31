@@ -9,6 +9,10 @@ import {
   ActionError,
   createActionCatalog,
 } from "./action-catalog.ts";
+import {
+  prepareArtifactUpload,
+  readArtifactUpload,
+} from "./artifact-upload.ts";
 import { ArtifactInputError, createArtifactStore } from "./artifact-store.ts";
 import { createConnectorRegistry } from "./connector-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
@@ -4927,6 +4931,65 @@ export async function createCollabApp({
         headers: cors(request),
       });
     }
+    if (url.pathname === "/api/artifact-uploads" && request.method === "POST") {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const spaceId = url.searchParams.get("spaceId") ?? "";
+      if (
+        !space(spaceId) ||
+        !await security.checkSpace(current.user.id, "edit", spaceId)
+      ) {
+        return Response.json({ error: "Edit access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      try {
+        const prepared = prepareArtifactUpload(
+          url.searchParams.get("name") ?? "",
+          await readArtifactUpload(request),
+          url.searchParams.get("title") ?? "",
+          url.searchParams.get("description") ?? "",
+        );
+        if (prepared.needsContext) {
+          return Response.json(prepared, { headers: cors(request) });
+        }
+        const document = await createConceptForUser(current.user.id, {
+          spaceId,
+          title: prepared.title,
+          type: "Artifact",
+          intent: "working",
+        });
+        await saveDraft(document.id, prepared.markdown);
+        const app = artifactStore.create({
+          conceptId: document.id,
+          title: prepared.title,
+          description: prepared.description,
+          type: "inline_html",
+          content: prepared.content,
+          grants: [],
+          actorUserId: current.user.id,
+        });
+        security.audit(current.user.id, "app.created", `app:${app!.id}`);
+        return Response.json({ documentId: document.id, appId: app!.id }, {
+          status: 201,
+          headers: cors(request),
+        });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Upload failed",
+        }, {
+          status: error instanceof ActionError ? error.status : 400,
+          headers: cors(request),
+        });
+      }
+    }
+
     if (url.pathname === "/api/concepts" && request.method === "POST") {
       const current = await security.session(request);
       if (!current) {

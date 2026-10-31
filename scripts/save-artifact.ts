@@ -2,30 +2,18 @@
 
 import { basename, extname, join, resolve } from "node:path";
 
+import {
+  bundleContent,
+  encodeFile,
+  MAX_BYTES,
+  MAX_FILES,
+  MIME,
+  sha256,
+  validateDependencies,
+} from "../server/artifact-bundle.ts";
+import { vendorDependencies } from "./vendor-artifact.ts";
+
 const RECEIPT = ".okf-artifact.json";
-const PREFIX = "okf-bundle-v1:";
-const MAX_BYTES = 8 * 1024 * 1024;
-const MAX_FILES = 200;
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".htm": "text/html",
-  ".css": "text/css",
-  ".js": "text/javascript",
-  ".json": "application/json",
-  ".md": "text/markdown",
-  ".txt": "text/plain",
-  ".csv": "text/csv",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-};
 
 export type SaveArtifactOptions = {
   folder: string;
@@ -34,6 +22,7 @@ export type SaveArtifactOptions = {
   spaceId?: string;
   title?: string;
   publish?: boolean;
+  vendor?: boolean;
 };
 type Receipt = {
   version: 1;
@@ -53,7 +42,11 @@ function excluded(name: string) {
     /\.(?:pem|key|p12|pfx|keystore)$/i.test(name);
 }
 
-export async function packArtifact(folder: string) {
+export async function packArtifact(
+  folder: string,
+  vendor = false,
+  request: typeof fetch = fetch,
+) {
   const root = resolve(folder);
   const info = await Deno.lstat(root);
   if (!info.isDirectory || info.isSymlink) {
@@ -63,7 +56,6 @@ export async function packArtifact(folder: string) {
   let total = 0;
   let sourceBytes = 0;
   let markdown = "";
-  const references: { path: string; target: string }[] = [];
   async function walk(directory: string, prefix = "") {
     const entries = [...Deno.readDirSync(directory)].sort((a, b) =>
       a.name.localeCompare(b.name)
@@ -92,72 +84,8 @@ export async function packArtifact(folder: string) {
       sourceBytes += stat.size;
       if (sourceBytes > MAX_BYTES) throw new Error("Artifact exceeds 8 MiB");
       const bytes = await Deno.readFile(diskPath);
-      if (["text/html", "text/css", "text/javascript"].includes(type)) {
-        const text = new TextDecoder().decode(bytes);
-        if (
-          /\b(?:fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|import\s*\()/m
-            .test(text)
-        ) {
-          throw new Error(
-            `Network APIs and dynamic imports are unsupported in this static artifact: ${path}`,
-          );
-        }
-        if (
-          /\bimport\s+(?:["'{*]|[A-Za-z_$][\w$]*\s*(?:,|\bfrom\b))|\bexport\s+(?:\*|\{)/m
-            .test(text)
-        ) {
-          throw new Error(
-            `ES module imports are unsupported in this static artifact: ${path}`,
-          );
-        }
-        if (type === "text/html") {
-          for (
-            const element of text.matchAll(
-              /<(?:script|link|img|source|audio|video|iframe)\b[^>]*>/gi,
-            )
-          ) {
-            for (
-              const attribute of element[0].matchAll(
-                /\b(src|href|poster|srcset|type)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi,
-              )
-            ) {
-              const name = attribute[1].toLowerCase();
-              const value = attribute[2] ?? attribute[3] ?? attribute[4];
-              if (
-                name === "srcset" ||
-                (name === "type" && value.toLowerCase() === "module")
-              ) {
-                throw new Error(
-                  `Module scripts and srcset are unsupported in this static artifact: ${path}`,
-                );
-              }
-              if (name !== "type") references.push({ path, target: value });
-            }
-          }
-        }
-        if (type === "text/css" || type === "text/html") {
-          for (
-            const reference of text.matchAll(
-              /url\(\s*["']?([^\s"')]+)["']?\s*\)/gi,
-            )
-          ) {
-            references.push({ path, target: reference[1] });
-          }
-          if (/@import\b/i.test(text)) {
-            throw new Error(
-              `Bundle stylesheet imports locally before saving: ${path}`,
-            );
-          }
-        }
-      }
       if (path === "context.md") markdown = new TextDecoder().decode(bytes);
-      let binary = "";
-      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-        binary += String.fromCharCode(
-          ...bytes.subarray(offset, offset + 0x8000),
-        );
-      }
-      files.push({ path, type, data: `data:${type};base64,${btoa(binary)}` });
+      files.push(encodeFile(path, type, bytes));
     }
   }
   await walk(root);
@@ -167,36 +95,11 @@ export async function packArtifact(folder: string) {
   if (!markdown.trim()) {
     throw new Error("Artifact folder needs non-empty context.md");
   }
-  const paths = new Set(files.map((file) => file.path));
-  for (const reference of references) {
-    if (
-      reference.target.startsWith("data:") || reference.target.startsWith("#")
-    ) continue;
-    const target = new URL(
-      reference.target,
-      `https://bundle.invalid/${reference.path}`,
-    );
-    if (
-      target.origin !== "https://bundle.invalid" ||
-      !paths.has(decodeURIComponent(target.pathname.slice(1)))
-    ) {
-      throw new Error(
-        `Artifact dependency must be included locally: ${reference.path}`,
-      );
-    }
-  }
-  const content = PREFIX + JSON.stringify({ entry: "index.html", files });
-  if (new TextEncoder().encode(content).length > MAX_BYTES) {
-    throw new Error("Packed artifact exceeds the Hub's 8 MiB limit");
-  }
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(content),
-  );
-  const digest = [...new Uint8Array(hash)].map((byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
-  return { root, content, markdown, digest };
+  const manifest = vendor ? await vendorDependencies(files, request) : [];
+  validateDependencies(files);
+  const content = bundleContent(files);
+  const digest = await sha256(new TextEncoder().encode(content));
+  return { root, content, markdown, digest, manifest };
 }
 
 function hubOrigin(value: string) {
@@ -236,7 +139,7 @@ export async function saveArtifact(
   if (options.space && options.spaceId) {
     throw new Error("Choose --space or --space-id");
   }
-  const packed = await packArtifact(options.folder);
+  const packed = await packArtifact(options.folder, options.vendor);
   const title = options.title ??
     packed.markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? basename(packed.root);
   if (!title || title.length > 100) {
@@ -448,7 +351,11 @@ export async function saveArtifact(
         kind: "outcome",
         title: `Saved ${title}`.slice(0, 100),
         summary:
-          `Saved Codex static artifact ${app.id}, version ${app.version}, with OKF context. ${marker}. No Hub capabilities granted.`,
+          `Saved Codex static artifact ${app.id}, version ${app.version}, with OKF context. ${marker}. No Hub capabilities granted. Vendored dependencies: ${
+            packed.manifest.length
+              ? `vendor.json (${packed.manifest.length} entries, covered by bundle SHA-256)`
+              : "none"
+          }. `,
         occurredAt: new Date().toISOString().slice(0, 10),
       });
     }
@@ -474,7 +381,8 @@ export function parseArgs(args: string[]): SaveArtifactOptions {
   const options: SaveArtifactOptions = { folder: "" };
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
-    if (argument === "--publish") options.publish = true;
+    if (argument === "--vendor") options.vendor = true;
+    else if (argument === "--publish") options.publish = true;
     else if (["--hub", "--space", "--space-id", "--title"].includes(argument)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) {
@@ -490,7 +398,7 @@ export function parseArgs(args: string[]): SaveArtifactOptions {
   }
   if (!options.folder) {
     throw new Error(
-      "Usage: save-artifact.ts <folder> [--hub URL] [--space NAME | --space-id ID] [--title TITLE] [--publish]",
+      "Usage: save-artifact.ts <folder> [--hub URL] [--space NAME | --space-id ID] [--title TITLE] [--publish] [--vendor]",
     );
   }
   return options;
