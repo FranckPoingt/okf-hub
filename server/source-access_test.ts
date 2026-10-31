@@ -256,7 +256,6 @@ Deno.test("restricts a source to selected members and groups through OpenFGA alo
     const mcpSearch = await client.mcp("knowledge.search", {
       query: "zebracorn",
     });
-    const asked = aiRequests.length;
     const ask = await client.json("/api/ai/chat", {
       scope: "workspace",
       messages: [{ role: "user", content: "zebracorn" }],
@@ -279,7 +278,8 @@ Deno.test("restricts a source to selected members and groups through OpenFGA alo
       mcpSearch: JSON.parse(mcpSearch.content[0].text).results.some((
         item: { id: string },
       ) => item.id === secret),
-      ask: aiRequests[asked].document.markdown.includes("zebracorn") &&
+      // The last request is the answer; a search-terms request precedes it.
+      ask: aiRequests.at(-1)!.document.markdown.includes("zebracorn") &&
         ask.citations.some((item: { documentId: string }) =>
           item.documentId === secret
         ),

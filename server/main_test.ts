@@ -4971,6 +4971,153 @@ Deno.test("hybrid Ask OKF uses published evidence for viewers and excludes hidde
   }
 });
 
+Deno.test("FTS search and rewritten Ask stay permission-filtered with separate drafts", async () => {
+  const dataDir = await Deno.makeTempDir();
+  let viewerId = "";
+  let deniedConcept = "";
+  const fga = fakeOpenFga((tuple) =>
+    tuple.user === `user:${viewerId}` &&
+    (tuple.object === "concept:repository/secret" ||
+      tuple.object === `concept:${deniedConcept}`)
+  );
+  const requests: AIRequest[] = [];
+  const objects = new Map<string, string>();
+  const app = await createCollabApp({
+    dataDir,
+    authSecret: "fts-search-test-secret-at-least-32-characters",
+    objectStore: {
+      put: (key, markdown) => {
+        objects.set(key, markdown);
+        return Promise.resolve();
+      },
+      get: (key) =>
+        objects.has(key)
+          ? Promise.resolve(objects.get(key)!)
+          : Promise.reject(new Error("Not found")),
+      remove: (key) => {
+        objects.delete(key);
+        return Promise.resolve();
+      },
+    },
+    openfgaURL: `http://127.0.0.1:${(fga.server.addr as Deno.NetAddr).port}`,
+    automationIntervalMs: 0,
+    aiResponder: (request) => {
+      requests.push(request);
+      return Promise.resolve(
+        request.task === "search-terms"
+          ? '{"terms":["remittance schedule"]}'
+          : "Grounded answer [1]",
+      );
+    },
+    repositorySync: async () => ({
+      revision: "one",
+      files: [
+        await inspectOkf(
+          "secret.md",
+          "---\ntype: Guide\ntitle: Classified payment reference\n---\n\nRestricted payment evidence",
+        ),
+      ],
+      issues: [],
+    }),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    app.fetch,
+  );
+  const base = `http://127.0.0.1:${(server.addr as Deno.NetAddr).port}`;
+  const owner = new Client(base);
+  const viewer = new Client(base);
+  const json = async (
+    client: Client,
+    path: string,
+    body?: Record<string, unknown>,
+  ) => {
+    const response = await client.request(
+      path,
+      body ? { method: "POST", body: JSON.stringify(body) } : {},
+    );
+    assert.ok(response.ok, await response.clone().text());
+    return await response.json();
+  };
+  const ids = async (client: Client, query: string) =>
+    (await json(client, `/api/search?q=${encodeURIComponent(query)}`))
+      .results.map((item: { id: string }) => item.id).sort();
+  try {
+    await owner.signUp("Owner", "fts-owner@example.com");
+    await json(owner, "/api/setup", { name: "FTS test" });
+    const invitation = await json(owner, "/api/invitations", {
+      email: "fts-viewer@example.com",
+      access: "viewer",
+    });
+    await viewer.signUp("Viewer", "fts-viewer@example.com", invitation.id);
+    await json(viewer, "/api/invitations/accept", {
+      invitationId: invitation.id,
+    });
+    viewerId = (await json(viewer, "/api/auth/get-session")).user.id;
+    const create = async (title: string, markdown: string) => {
+      const created = await json(owner, "/api/concepts", {
+        title,
+        type: "Guide",
+        spaceId: "policies",
+        markdown,
+      });
+      await json(owner, `/api/concepts/${created.id}/publish`, { markdown });
+      return created.id as string;
+    };
+    const terms = await create(
+      "Supplier terms",
+      "Payment and remittance schedule for suppliers.",
+    );
+    deniedConcept = await create("Board payroll", "Payment of board fees.");
+    const updated = await owner.request(`/api/concepts/${terms}`, {
+      method: "PUT",
+      body: "Draftonly renegotiation of remittance.",
+    });
+    assert.equal(updated.status, 204, await updated.text());
+    await json(owner, "/api/sources/repositories", {
+      repositoryUrl: "https://example.com/company/fts.git",
+      folder: "okf",
+    });
+
+    // Stemming finds "Payment" from "paying"; hidden concepts never appear.
+    assert.deepEqual(await ids(viewer, "paying"), [terms]);
+    assert.deepEqual(
+      await ids(owner, "paying"),
+      [deniedConcept, "repository/secret"].sort(),
+    );
+    // Viewers match the publication, editors the draft.
+    assert.deepEqual(await ids(viewer, "draftonly"), []);
+    assert.deepEqual(await ids(owner, "draftonly"), [terms]);
+    assert.deepEqual(await ids(owner, "schedule"), []);
+    assert.deepEqual(await ids(viewer, "schedule"), [terms]);
+    for (const query of ['"', "*", "NEAR(", "title:", 'pay" OR *']) {
+      await json(viewer, `/api/search?q=${encodeURIComponent(query)}`);
+    }
+
+    const answer = await json(viewer, "/api/ai/chat", {
+      scope: "workspace",
+      messages: [{ role: "user", content: "When are vendors settled?" }],
+    });
+    assert.deepEqual(
+      answer.citations.map((item: { documentId: string }) => item.documentId),
+      [terms],
+    );
+    const rewrite = requests.find((request) =>
+      request.task === "search-terms"
+    )!;
+    assert.equal(rewrite.document.markdown, "");
+    assert.ok(
+      !JSON.stringify(rewrite).match(/remittance schedule for|Payment/),
+    );
+    assert.match(requests.at(-1)!.document.markdown, /remittance schedule/);
+  } finally {
+    await server.shutdown();
+    await app.close();
+    await fga.server.shutdown();
+    await Deno.remove(dataDir, { recursive: true });
+  }
+});
+
 Deno.test("archive names stay unique when generated ids share a long prefix", () => {
   const names = uniqueArchiveNames([
     { id: "mcp-saved-artifact", label: "MCP saved artifact" },

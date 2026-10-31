@@ -233,11 +233,23 @@ viewers receive published content only.
 
 Open Ask OKF from Search for workspace questions, or switch scope inside a
 document. Workspace answers include links to the retrieved sources. Retrieval
-uses keyword search by default. Optional hybrid retrieval also finds paraphrases
-using embeddings, combines the keyword and semantic rankings with reciprocal
-rank fusion, and keeps the same context budget and source citations. Retrieval
-can miss relevant material; check the sources. The Search panel remains keyword
-based.
+can miss relevant material; check the sources.
+
+**Default retrieval.** Search, Ask OKF and the MCP `knowledge.search` tool use a
+SQLite FTS5 full-text index ranked with BM25, stored privately in the app's
+`hub.db`. Words match their stems and prefixes ("paying" finds "payment"), and
+exact title matches still rank first. The index keeps hub drafts, hub
+publications and current imports as separate rows, and every search intersects
+its matches with the documents the user can view: viewers match publications,
+editors match the drafts they can edit, and restricted sources stay hidden. For
+workspace questions, Ask OKF first asks the chat provider for 3–10 search terms
+and synonyms. That call sends **only the question and recent chat turns**, never
+document content. If it fails, returns invalid JSON, or takes longer than about
+8 seconds, Ask OKF falls back to the question's keywords.
+
+**Optional embeddings.** Hybrid retrieval also finds paraphrases with embeddings
+and combines the keyword and semantic rankings with reciprocal rank fusion,
+keeping the same context budget and source citations. It is off by default.
 
 Asking a question sends the selected document or a bounded selection of
 accessible source content and recent chat messages to that provider. Choose and
@@ -252,8 +264,12 @@ OKF_AI_MODEL=<provider-model-id>
 OKF_AI_API_KEY=<provider-api-key>
 # Optional for compatible or self-hosted endpoints:
 OKF_AI_URL=<provider-api-url>
-# Optional: enable hybrid retrieval with an embedding model on this provider:
-OKF_AI_EMBED_MODEL=<provider-embedding-model-id>
+# Optional: enable hybrid retrieval with an embedding model:
+OKF_AI_EMBED_MODEL=<embedding-model-id>
+# Optional: use a different embedding endpoint (each defaults to the chat value):
+OKF_AI_EMBED_PROVIDER=<ax-provider-id>
+OKF_AI_EMBED_URL=<embedding-api-url>
+OKF_AI_EMBED_API_KEY=<embedding-api-key>
 ```
 
 Ax provider IDs include `openai`, `anthropic`, `google-gemini`, `openrouter`,
@@ -264,24 +280,45 @@ Ax provider IDs include `openai`, `anthropic`, `google-gemini`, `openrouter`,
 Open **Workspace settings → AI** to confirm the server configuration is ready.
 Provider credentials are never sent to the browser.
 
-`OKF_AI_EMBED_MODEL` reuses `OKF_AI_PROVIDER`, `OKF_AI_URL` and
-`OKF_AI_API_KEY`; OKF never selects another provider for embeddings. The
-installed Ax adapter must declare embedding support. Among the providers listed
-above, `openai` and `google-gemini` currently support it (for example,
-`text-embedding-3-small` with `openai`). Other Ax profiles, including
-`anthropic` and `ollama`, currently stay keyword-only, even if an upstream
-service has its own embedding API. An unset model or unsupported adapter
-preserves keyword retrieval without errors. Compatible self-hosted endpoints can
-use the `openai` adapter with the operator's explicit `OKF_AI_URL`.
+Embeddings use `OKF_AI_EMBED_PROVIDER`, `OKF_AI_EMBED_URL` and
+`OKF_AI_EMBED_API_KEY`; each unset value reuses the chat provider's
+`OKF_AI_PROVIDER`, `OKF_AI_URL` or `OKF_AI_API_KEY`. Supported embedding
+providers are `openai` and `google-gemini` (through Ax, for example
+`text-embedding-3-small` with `openai`) and `ollama` (through Ollama's native
+`/api/embed`). Other providers, including `anthropic`, stay keyword-only. An
+unset model or unsupported provider keeps keyword retrieval without errors.
+Compatible self-hosted endpoints can use the `openai` adapter with an explicit
+`OKF_AI_EMBED_URL`.
 
-Enabling embeddings sends **all indexed knowledge** to the configured provider
-in the background, including hub drafts, published revisions, and current
-imports, even when some members cannot view them. Requests contain document
-titles and chunks of roughly 1–2k characters; workspace questions are also sent
-for embedding. Choose this setting only when that provider may process this
-content. Answers still send only the questioner's accessible content: viewers
-match publications, editors match drafts they can already edit, and restricted
-sources are filtered using the same view permission checks as keyword search.
+When embeddings are enabled, **every indexed document is sent to the embedding
+endpoint** in the background: hub drafts, published revisions, and current
+imports, including restricted sources and documents some members cannot view.
+Requests contain document titles and chunks of roughly 1–2k characters;
+workspace questions are also sent for embedding. Answers still send only the
+questioner's accessible content to the chat provider: viewers match
+publications, editors match drafts they can already edit, and restricted sources
+are filtered using the same view permission checks as keyword search.
+
+The recommended setup is local
+[EmbeddingGemma](https://ollama.com/library/embeddinggemma) through Ollama, so
+document content never leaves your infrastructure, whichever chat provider you
+use. Compose includes an optional `ollama` service behind the `embeddings`
+profile, with models kept in the `ollama_data` volume:
+
+```sh
+docker compose --profile embeddings up -d
+docker compose exec ollama ollama pull embeddinggemma
+```
+
+Then add to `.okf-stack.env` and restart the app (`COMPOSE_PROFILES` makes
+`deno task stack` start Ollama too):
+
+```sh
+COMPOSE_PROFILES=embeddings
+OKF_AI_EMBED_PROVIDER=ollama
+OKF_AI_EMBED_URL=http://ollama:11434
+OKF_AI_EMBED_MODEL=embeddinggemma
+```
 
 Vectors, chunk text, content hashes, and a resumable work queue are stored in
 the app's SQLite `hub.db` (`okf_semantic_document` and `okf_semantic_chunk`),

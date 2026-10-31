@@ -25,6 +25,7 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, normalize } from "node:path/posix";
 import {
+  type AIMessage,
   type AIRequest,
   type AIResponder,
   createAIEmbedder,
@@ -32,6 +33,7 @@ import {
   type Embedder,
 } from "./ai.ts";
 import { createSemanticIndex } from "./semantic-index.ts";
+import { createSearchIndex, searchState } from "./search-index.ts";
 import {
   actionAllowed,
   ActionError,
@@ -62,7 +64,7 @@ import {
   type ExportFile,
 } from "./export-archive.ts";
 import { createGitHubAppClient, type GitHubAppClient } from "./github-app.ts";
-import { retrieveKnowledge } from "./knowledge-retrieval.ts";
+import { retrieveKnowledge, searchTerms } from "./knowledge-retrieval.ts";
 import { buildKnowledgeGraph, definitionContent } from "./knowledge-graph.ts";
 import { createDefinitionComparison } from "./compare-definitions.ts";
 import { createOkfDraftRoutes } from "./okf-draft-routes.ts";
@@ -220,6 +222,9 @@ type AppOptions = {
   aiAPIKey?: string;
   aiResponder?: AIResponder;
   aiEmbedModel?: string;
+  aiEmbedProvider?: string;
+  aiEmbedURL?: string;
+  aiEmbedAPIKey?: string;
   aiEmbedder?: Embedder;
 };
 
@@ -638,6 +643,9 @@ export async function createCollabApp({
   aiAPIKey,
   aiResponder,
   aiEmbedModel,
+  aiEmbedProvider,
+  aiEmbedURL,
+  aiEmbedAPIKey,
   aiEmbedder,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
@@ -1107,6 +1115,7 @@ export async function createCollabApp({
         AND importedAt < okf_imported_concept.importedAt
     )
   `);
+  const searchIndex = createSearchIndex(db);
   const artifactStore = createArtifactStore(db, allowedArtifactHosts);
   const artifactUsage = createArtifactUsage(db);
   const appCapabilities = createAppCapabilities();
@@ -2039,18 +2048,33 @@ export async function createCollabApp({
   for (const row of concepts()) {
     await loadDocument(row, row.id === CONCEPT ? DEFAULT_MARKDOWN : undefined);
   }
+  function indexDraft(conceptId: string) {
+    const row = concept(conceptId);
+    const live = documents.get(conceptId);
+    if (row && live) {
+      searchIndex.replace(conceptId, "draft", {
+        title: row.title,
+        type: row.type,
+        tags: [],
+        body: live.markdown,
+      });
+    }
+  }
 
+  // Embeddings may use a separate (e.g. local Ollama) endpoint; unset values reuse chat's.
+  const embedProvider = aiEmbedProvider || aiProvider;
+  const embedURL = aiEmbedURL || aiURL;
   const embed = aiEmbedder ?? createAIEmbedder({
-    provider: aiProvider,
+    provider: embedProvider,
     model: aiEmbedModel,
-    apiURL: aiURL,
-    apiKey: aiAPIKey,
+    apiURL: embedURL,
+    apiKey: aiEmbedAPIKey || aiAPIKey,
   });
   const semanticIndex = embed && aiEmbedModel
     ? createSemanticIndex({
       db,
       embed,
-      modelKey: JSON.stringify([aiProvider, aiURL ?? "", aiEmbedModel]),
+      modelKey: JSON.stringify([embedProvider, embedURL ?? "", aiEmbedModel]),
       load: async ({ id, state }) => {
         if (state === "source") {
           const row = importedConcepts().find((row) => row.id === id);
@@ -2120,6 +2144,7 @@ export async function createCollabApp({
         conceptId,
       );
       await Deno.writeTextFile(markdownPath(conceptId), markdown);
+      indexDraft(conceptId);
     });
     live.markdownWrite = write;
     await write;
@@ -2379,6 +2404,12 @@ export async function createCollabApp({
       db.prepare(
         "UPDATE okf_concept SET publishedRevision = ?, updatedAt = ? WHERE id = ?",
       ).run(number, publishedAt, conceptId);
+      searchIndex.replace(conceptId, "published", {
+        title: row.title,
+        type: row.type,
+        tags: [],
+        body: live.markdown,
+      });
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -2486,6 +2517,29 @@ export async function createCollabApp({
     if (!revision) return null;
     const markdown = await publishedRevisionMarkdown(revision.objectKey);
     return { markdown, metadata: publishedMetadata(markdown) };
+  }
+
+  // Drafts are already in memory; publications are fetched only when missing.
+  db.exec("BEGIN");
+  for (const row of concepts()) indexDraft(row.id);
+  db.exec("COMMIT");
+  for (const row of concepts()) {
+    if (!row.publishedRevision || searchIndex.has(row.id, "published")) {
+      continue;
+    }
+    try {
+      const publication = await currentPublication(row);
+      if (publication) {
+        searchIndex.replace(row.id, "published", {
+          title: publication.metadata.title,
+          type: publication.metadata.type,
+          tags: [],
+          body: bodyOnly(publication.markdown),
+        });
+      }
+    } catch {
+      // Retried on the next start; publishing also rewrites the row.
+    }
   }
 
   async function publishedLabelFor(userId: string, conceptId: string) {
@@ -3178,7 +3232,12 @@ export async function createCollabApp({
       input.includeArchived === true,
     );
     const graph = buildKnowledgeGraph(documents);
-    const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    // Candidates come from FTS rows for the state each user may see, intersected with visible documents.
+    const relevance = query
+      ? searchIndex.rank(query)
+      : new Map<string, number>();
+    const relevanceOf = (item: SearchDocument) =>
+      relevance.get(`${item.id}\n${searchState(item)}`);
     const results = documents.filter((item) => {
       if (attention) {
         if (
@@ -3199,8 +3258,7 @@ export async function createCollabApp({
         tag &&
         !item.tags.some((itemTag) => itemTag.toLocaleLowerCase() === tag)
       ) return false;
-      const haystack = item.searchText.toLocaleLowerCase();
-      return terms.every((term) => haystack.includes(term));
+      return !query || relevanceOf(item) !== undefined;
     }).map((item) => {
       const title = item.title.toLocaleLowerCase();
       const loweredQuery = query.toLocaleLowerCase();
@@ -3213,6 +3271,8 @@ export async function createCollabApp({
         : title.includes(loweredQuery)
         ? 10
         : 1;
+      // Title boosts dominate; BM25 (mapped below 1) orders within each tier.
+      const bm25 = relevanceOf(item) ?? 0;
       const {
         searchText,
         linkHrefs: _linkHrefs,
@@ -3223,7 +3283,7 @@ export async function createCollabApp({
       } = item;
       return {
         ...visible,
-        score,
+        score: query ? score + bm25 / (1 + bm25) : score,
         canCompareDefinitions: item.canReviewConflicts,
         aiEnabled: Boolean(respondWithAI),
         snippet: searchSnippet(searchText, query, item.title, [
@@ -3975,12 +4035,9 @@ export async function createCollabApp({
                 );
                 return await semanticIndex.search(question, ({ id, state }) => {
                   const item = visible.get(id);
-                  const expected = item?.kind === "imported"
-                    ? "source"
-                    : item?.canReviewConflicts
-                    ? "draft"
-                    : "published";
-                  if (!item || state !== expected) return Promise.resolve(null);
+                  if (!item || state !== searchState(item)) {
+                    return Promise.resolve(null);
+                  }
                   const row = item.kind === "hub-native" ? concept(id) : null;
                   return Promise.resolve({
                     ...item,
@@ -3991,6 +4048,7 @@ export async function createCollabApp({
                 });
               }
               : undefined,
+            () => searchTerms(respondWithAI, messages as AIMessage[]),
           );
           const message = await respondWithAI({
             messages: messages as {
@@ -6957,6 +7015,7 @@ ${extensionYaml(extension)}---
           new Date().toISOString(),
           conceptId,
         );
+        indexDraft(conceptId);
         if (row.spaceId !== spaceId) {
           (await loadDocument(row)).clients.forEach((client) =>
             client.close(1000, "Concept moved")
@@ -7390,6 +7449,9 @@ if (import.meta.main) {
     aiProvider: Deno.env.get("OKF_AI_PROVIDER")?.trim(),
     aiModel: Deno.env.get("OKF_AI_MODEL")?.trim(),
     aiEmbedModel: Deno.env.get("OKF_AI_EMBED_MODEL")?.trim(),
+    aiEmbedProvider: Deno.env.get("OKF_AI_EMBED_PROVIDER")?.trim(),
+    aiEmbedURL: Deno.env.get("OKF_AI_EMBED_URL")?.trim(),
+    aiEmbedAPIKey: Deno.env.get("OKF_AI_EMBED_API_KEY")?.trim(),
     aiURL: Deno.env.get("OKF_AI_URL")?.trim(),
     aiAPIKey: Deno.env.get("OKF_AI_API_KEY")?.trim() ||
       Deno.env.get("OLLAMA_API_KEY")?.trim(),

@@ -78,6 +78,9 @@ services:
       OKF_AI_API_KEY: ${OKF_AI_API_KEY:-}
       OKF_AI_MODEL: ${OKF_AI_MODEL:-}
       OKF_AI_EMBED_MODEL: ${OKF_AI_EMBED_MODEL:-}
+      OKF_AI_EMBED_PROVIDER: ${OKF_AI_EMBED_PROVIDER:-}
+      OKF_AI_EMBED_URL: ${OKF_AI_EMBED_URL:-}
+      OKF_AI_EMBED_API_KEY: ${OKF_AI_EMBED_API_KEY:-}
       OKF_AI_PROVIDER: ${OKF_AI_PROVIDER:-}
       OKF_AI_URL: ${OKF_AI_URL:-}
       OKF_AUTOMATION_INTERVAL_MS: "21600000"
@@ -121,6 +124,15 @@ services:
       - app_data:/data
       - ./config:/config:ro
 
+  # Optional local embeddings: docker compose --profile embeddings up -d, then
+  # docker compose exec ollama ollama pull embeddinggemma
+  ollama:
+    image: ollama/ollama:0.40.13
+    profiles: [embeddings]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+
   backup:
     image: alpine:3.23.3
     profiles: [tools]
@@ -156,5 +168,6 @@ services:
 
 volumes:
   app_data:
+  ollama_data:
   openfga_data:
   rustfs_data:

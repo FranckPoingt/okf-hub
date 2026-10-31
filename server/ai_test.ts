@@ -10,7 +10,6 @@ Deno.test("embeddings are opt-in and never switch providers for unsupported prof
       "anthropic",
       "openrouter",
       "groq",
-      "ollama",
       "webllm",
       "invalid",
     ]
@@ -20,7 +19,7 @@ Deno.test("embeddings are opt-in and never switch providers for unsupported prof
       null,
     );
   }
-  for (const provider of ["openai", "google-gemini"]) {
+  for (const provider of ["openai", "google-gemini", "ollama"]) {
     assert.equal(
       typeof createAIEmbedder({
         provider,
@@ -66,6 +65,55 @@ Deno.test("Ax embeddings use the configured endpoint, model and credential", asy
       auth: "Bearer stub-key",
       body: { model: "local-embed", input: ["Test evidence"] },
     });
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("Ollama embeddings call /api/embed on the configured local endpoint", async () => {
+  const received: { path: string; auth: string | null; body: unknown }[] = [];
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    async (request) => {
+      const body = await request.json();
+      received.push({
+        path: new URL(request.url).pathname,
+        auth: request.headers.get("authorization"),
+        body,
+      });
+      return Response.json({
+        embeddings: body.input.map(() => [0.5, 0.5]),
+      });
+    },
+  );
+  try {
+    const port = (server.addr as Deno.NetAddr).port;
+    const local = createAIEmbedder({
+      provider: "ollama",
+      model: "embeddinggemma",
+      apiURL: `http://127.0.0.1:${port}/`,
+    })!;
+    assert.deepEqual(await local(["a", "b"]), [[0.5, 0.5], [0.5, 0.5]]);
+    // An inherited OpenAI-compatible /v1 URL still reaches the native endpoint.
+    const cloud = createAIEmbedder({
+      provider: "ollama",
+      model: "embeddinggemma",
+      apiKey: "stub-key",
+      apiURL: `http://127.0.0.1:${port}/v1`,
+    })!;
+    await cloud(["c"]);
+    assert.deepEqual(received, [
+      {
+        path: "/api/embed",
+        auth: null,
+        body: { model: "embeddinggemma", input: ["a", "b"] },
+      },
+      {
+        path: "/api/embed",
+        auth: "Bearer stub-key",
+        body: { model: "embeddinggemma", input: ["c"] },
+      },
+    ]);
   } finally {
     await server.shutdown();
   }

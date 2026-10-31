@@ -1,3 +1,5 @@
+import type { AIMessage, AIResponder } from "./ai.ts";
+
 export type RetrievalResult = {
   id: string;
   kind: "hub-native" | "imported";
@@ -17,6 +19,43 @@ export type Citation = {
 
 export type SemanticMatch = { item: RetrievalResult; excerpt: string };
 
+/** Asks the chat provider for search terms. Only the conversation is sent,
+ * never document content; callers fall back to keywords on any failure. */
+export async function searchTerms(
+  respond: AIResponder,
+  messages: AIMessage[],
+  timeoutMs = 8_000,
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer = await Promise.race([
+      respond({
+        task: "search-terms",
+        messages: messages.slice(-6),
+        document: { title: "", space: "", state: "source", markdown: "" },
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+      }),
+    ]);
+    const parsed = JSON.parse(
+      answer.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""),
+    );
+    const terms = [
+      ...new Set(
+        (Array.isArray(parsed) ? parsed : parsed?.terms)
+          .filter((term: unknown) => typeof term === "string")
+          .map((term: string) => term.trim().slice(0, 120))
+          .filter(Boolean),
+      ),
+    ] as string[];
+    if (!terms.length) throw new Error("No search terms");
+    return terms.slice(0, 10);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Both rankers are supplied by the caller and must use its existing permission
 // filter. Load rechecks access and returns only the current permitted content.
 export async function retrieveKnowledge(
@@ -25,8 +64,9 @@ export async function retrieveKnowledge(
   load: (result: RetrievalResult) => Promise<string | null>,
   budget = 24_000,
   semantic?: (question: string) => Promise<SemanticMatch[]>,
+  rewrite?: (question: string) => Promise<string[]>,
 ) {
-  const terms = [
+  const keywords = [
     ...new Set(question.toLocaleLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []),
   ]
     .filter((term) =>
@@ -46,12 +86,26 @@ export async function retrieveKnowledge(
       ]).has(term)
     )
     .slice(0, 12).map((term) => term.slice(0, 120));
+  let rewritten: string[] = [];
+  try {
+    rewritten = await rewrite?.(question) ?? [];
+  } catch {
+    // Bad JSON, provider errors and timeouts keep keyword-only retrieval.
+  }
+  const terms = [
+    ...new Set([
+      ...rewritten.map((term) => term.toLocaleLowerCase()),
+      ...keywords,
+    ]),
+  ];
   const matches = new Map<string, { item: RetrievalResult; score: number }>();
   for (const term of terms) {
-    for (const item of await search(term)) {
+    // Matched terms dominate; each list's BM25 order breaks ties.
+    for (const [rank, item] of (await search(term)).entries()) {
+      const score = 1 + 1 / (rank + 2);
       const existing = matches.get(item.id);
-      if (existing) existing.score++;
-      else matches.set(item.id, { item, score: 1 });
+      if (existing) existing.score += score;
+      else matches.set(item.id, { item, score });
     }
   }
   let ranked = [...matches.values()].sort((a, b) =>

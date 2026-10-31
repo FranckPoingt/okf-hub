@@ -20,11 +20,25 @@
 
 ### Behavior changes
 
-- **Ask OKF can retrieve paraphrases.** Optional `OKF_AI_EMBED_MODEL` enables
-  permission-filtered hybrid workspace retrieval through the operator's existing
-  AI provider. A private SQLite chunk/vector index updates in the background
-  with a persistent retry queue and separate draft/publication versions.
-  Unconfigured or unsupported embeddings retain keyword-only behavior.
+- **Search ranks by relevance and understands word forms.** Search, Ask OKF and
+  MCP `knowledge.search` now use a private SQLite FTS5 index with BM25 ranking
+  and stemming ("paying" finds "payment"), with the same permission filtering
+  and separate draft/publication matching. Exact title matches still rank first;
+  results within a tier are ordered by relevance instead of title, and matches
+  inside a word (for example "ment" in "payment") no longer count.
+- **Ask OKF rewrites workspace questions into search terms.** With an AI
+  provider configured, one short call sends only the question and recent chat
+  turns (never document content) to get synonyms and domain terms, falling back
+  to keywords on failure or after about 8 seconds.
+- **Ask OKF can retrieve paraphrases with local embeddings.** Optional
+  `OKF_AI_EMBED_MODEL` enables permission-filtered hybrid workspace retrieval.
+  It is off by default; when enabled, every indexed document, including drafts
+  and restricted sources, is sent to the embedding endpoint. New
+  `OKF_AI_EMBED_PROVIDER`, `OKF_AI_EMBED_URL` and `OKF_AI_EMBED_API_KEY` (each
+  defaulting to the chat value) let embeddings run on a local Ollama with
+  EmbeddingGemma, available as the optional `embeddings` Compose profile, so
+  content never leaves your infrastructure. A private SQLite chunk/vector index
+  updates in the background with a persistent retry queue.
 - **The first account needs the setup link.** While no workspace exists, account
   creation requires the one-time link that `deno task stack` and the server log
   print (or `deno task admin setup-url`). Sign-up on a fresh install is no
