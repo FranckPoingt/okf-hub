@@ -44,7 +44,6 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Refresh shared store/);
   assert.match(bundle, /Connect and import/);
   assert.match(bundle, /Refresh Notion/);
-  assert.match(bundle, /Notion owned/);
   assert.match(bundle, /Search company knowledge/);
   assert.match(bundle, /Advanced search and filters/);
   assert.match(bundle, /Search every source you can access/);
@@ -54,7 +53,6 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   assert.match(bundle, /Fix broken link/);
   assert.match(bundle, /Source issues/);
   assert.match(bundle, /imported-document-header/);
-  assert.match(bundle, /Shared-store owned/);
   assert.match(bundle, /Tools for this knowledge/);
   assert.match(bundle, /Answers from/);
   assert.match(bundle, /Create draft Artifact/);
@@ -187,7 +185,7 @@ Deno.test("builds the lifecycle and connected-source shell", async () => {
   const sidebar = await Deno.readTextFile("src/components/app-sidebar.tsx");
   assert.match(
     sidebar,
-    /<SidebarMenuBadge>{sources\.length}<\/SidebarMenuBadge>/,
+    /<SidebarMenuBadge[^>]*>\s*{source\.count}\s*<\/SidebarMenuBadge>/,
   );
   assert.match(sidebar, /expandedImportFolders/);
   assert.doesNotMatch(

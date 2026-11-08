@@ -1,5 +1,4 @@
 import {
-  AppWindow,
   Archive,
   Blocks,
   ChevronDown,
@@ -7,7 +6,6 @@ import {
   Code2,
   Database,
   FileText,
-  Folder,
   Home,
   Lock,
   LogOut,
@@ -15,15 +13,20 @@ import {
   Moon,
   MoreHorizontal,
   Plus,
-  Search,
   Settings,
   Sun,
   Unlock,
+  Users,
 } from "lucide-react";
 import { type DragEvent, useState } from "react";
 import { Avatar, AvatarFallback } from "./ui/avatar.tsx";
 import { SpaceIcon } from "./space-icon.tsx";
 import { setTheme, type ThemeChoice, useTheme } from "../lib/theme.ts";
+import {
+  folderSize,
+  type ImportFolder,
+  importTree,
+} from "../lib/import-tree.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,9 +52,6 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
   SidebarSeparator,
   useSidebar,
@@ -87,6 +87,10 @@ type SidebarImport = {
   path: string;
   title: string;
 };
+// One indent step for every nested tree: documents, imported folders and files.
+const NESTED_TREE =
+  "ml-3 w-[calc(100%-0.75rem)] border-l border-sidebar-border/80 pl-1";
+
 type SidebarSource = {
   id: string;
   name: string;
@@ -108,7 +112,7 @@ type AppSidebarProps = {
   user: { email: string; name: string };
   workspace: { name: string; tagline: string; logo: string };
   onCreate: () => void;
-  onCreateApp: () => void;
+  onCreateFromTemplate: () => void;
   onCreateArtifact: (spaceId?: string) => void;
   onCreateDocument: (spaceId?: string, parentId?: string) => void;
   onCreateSpace: () => void;
@@ -124,9 +128,7 @@ type AppSidebarProps = {
   onOpenConcept: (id: string) => void;
   onOpenHome: () => void;
   onOpenImported: (sourceId: string, path: string) => void;
-  onOpenSearch: () => void;
   onOpenSpace: (id: string) => void;
-  onOpenSpaceArtifacts: (id: string) => void;
   onOpenSources: () => void;
   onSignOut: () => void;
 };
@@ -149,7 +151,7 @@ export function AppSidebar({
   user,
   workspace,
   onCreate,
-  onCreateApp,
+  onCreateFromTemplate,
   onCreateArtifact,
   onCreateDocument,
   onCreateSpace,
@@ -162,9 +164,7 @@ export function AppSidebar({
   onOpenConcept,
   onOpenHome,
   onOpenImported,
-  onOpenSearch,
   onOpenSpace,
-  onOpenSpaceArtifacts,
   onOpenSources,
   onSignOut,
 }: AppSidebarProps) {
@@ -321,9 +321,6 @@ export function AppSidebar({
                 <MoreHorizontal />
               </DropdownMenuTrigger>
               <DropdownMenuContent side="right" align="start" className="w-52">
-                <DropdownMenuItem onClick={() => onOpenConcept(concept.id)}>
-                  <FileText /> Open
-                </DropdownMenuItem>
                 {concept.status === "active" && (
                   <DropdownMenuItem
                     onClick={() => onCreateDocument(spaceId, concept.id)}
@@ -349,7 +346,7 @@ export function AppSidebar({
             </DropdownMenu>
           )}
           {hasChildren && !collapsed && (
-            <SidebarMenu className="ml-3 w-[calc(100%-0.75rem)] border-l border-sidebar-border/80 pl-1">
+            <SidebarMenu className={NESTED_TREE}>
               {renderConcepts(spaceId, concept.id)}
             </SidebarMenu>
           )}
@@ -357,50 +354,187 @@ export function AppSidebar({
       );
     });
 
+  const activeImport = activeView === "imported"
+    ? imports.find((item) => item.id === activeImportId)
+    : undefined;
+  const renderImports = (
+    sourceId: string,
+    folder: ImportFolder<SidebarImport>,
+  ): React.ReactNode => [
+    ...folder.folders.map((child) => {
+      const key = `${sourceId}:${child.path}`;
+      const expanded = expandedImportFolders.has(key) ||
+        (activeImport?.sourceId === sourceId &&
+          activeImport.path.startsWith(`${child.path}/`));
+      return (
+        <SidebarMenuItem key={key}>
+          <SidebarMenuButton
+            type="button"
+            size="sm"
+            tooltip={child.path}
+            aria-expanded={expanded}
+            onClick={() =>
+              setExpandedImportFolders((current) => {
+                const next = new Set(current);
+                next.has(key) ? next.delete(key) : next.add(key);
+                return next;
+              })}
+          >
+            {expanded ? <ChevronDown /> : <ChevronRight />}
+            <span>{child.name}</span>
+          </SidebarMenuButton>
+          <SidebarMenuBadge className="font-normal text-muted-foreground">
+            {folderSize(child)}
+          </SidebarMenuBadge>
+          {expanded && (
+            <SidebarMenu className={NESTED_TREE}>
+              {renderImports(sourceId, child)}
+            </SidebarMenu>
+          )}
+        </SidebarMenuItem>
+      );
+    }),
+    ...folder.items.map((item) => (
+      <SidebarMenuItem key={item.id}>
+        <SidebarMenuButton
+          type="button"
+          size="sm"
+          tooltip={item.title}
+          isActive={activeImport?.id === item.id}
+          onClick={() => onOpenImported(item.sourceId, item.path)}
+        >
+          <FileText />
+          <span>{item.title}</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    )),
+  ];
+
   const totalArtifacts =
     concepts.filter((item) =>
       item.status === "active" && item.type?.toLocaleLowerCase() === "artifact"
     ).length;
+
+  const workspaceIdentity = (
+    <>
+      {workspace.logo
+        ? (
+          <img
+            className="size-8 shrink-0 rounded-lg object-cover"
+            src={workspace.logo}
+            alt=""
+          />
+        )
+        : (
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary font-serif text-base text-sidebar-primary-foreground">
+            {workspace.name.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+      <span className="grid min-w-0 flex-1 text-left leading-tight">
+        <span className="truncate">{workspace.name}</span>
+        <span className="truncate text-xs font-normal text-muted-foreground">
+          {workspace.tagline}
+        </span>
+      </span>
+    </>
+  );
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              type="button"
-              size="lg"
-              tooltip={workspace.name}
-              onClick={onOpenHome}
-              className="font-semibold"
-            >
-              {workspace.logo
-                ? (
-                  <img
-                    className="size-8 shrink-0 rounded-lg object-cover"
-                    src={workspace.logo}
-                    alt=""
-                  />
-                )
-                : (
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary font-serif text-base text-sidebar-primary-foreground">
-                    {workspace.name.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-              <span className="grid min-w-0 flex-1 text-left leading-tight">
-                <span className="truncate">{workspace.name}</span>
-                <span className="truncate text-xs font-normal text-muted-foreground">
-                  {workspace.tagline}
-                </span>
-              </span>
-            </SidebarMenuButton>
+            {canEdit || access === "owner"
+              ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <SidebarMenuButton
+                        type="button"
+                        size="lg"
+                        tooltip={workspace.name}
+                        className="font-semibold"
+                      />
+                    }
+                  >
+                    {workspaceIdentity}
+                    <ChevronDown className="ml-auto" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="bottom"
+                    align="start"
+                    className="w-64"
+                  >
+                    {canEdit && (
+                      <DropdownMenuItem onClick={onCreate}>
+                        <Settings />
+                        Workspace settings
+                      </DropdownMenuItem>
+                    )}
+                    {access === "owner" && (
+                      <DropdownMenuItem onClick={onManageAccess}>
+                        <Users />
+                        Manage access
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )
+              : (
+                <SidebarMenuButton
+                  type="button"
+                  size="lg"
+                  tooltip={workspace.name}
+                  onClick={onOpenHome}
+                  className="font-semibold"
+                >
+                  {workspaceIdentity}
+                </SidebarMenuButton>
+              )}
           </SidebarMenuItem>
+          {canEdit && (
+            <SidebarMenuItem className="mt-2">
+              <SidebarMenuButton
+                type="button"
+                tooltip="New document"
+                className="bg-sidebar-primary pr-8 text-sidebar-primary-foreground hover:bg-sidebar-primary/90 hover:text-sidebar-primary-foreground"
+                onClick={() => onCreateDocument()}
+              >
+                <Plus />
+                <span>New document</span>
+              </SidebarMenuButton>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <SidebarMenuAction
+                      type="button"
+                      aria-label="More ways to create"
+                      className="text-sidebar-primary-foreground hover:bg-sidebar-primary-foreground/15 hover:text-sidebar-primary-foreground"
+                    />
+                  }
+                >
+                  <ChevronDown />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="right"
+                  align="start"
+                  className="w-52"
+                >
+                  <DropdownMenuItem onClick={onCreateFromTemplate}>
+                    <FileText /> From a template…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onCreateArtifact()}>
+                    <Blocks /> Artifact
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -413,20 +547,6 @@ export function AppSidebar({
                   <Home />
                   <span>Home</span>
                 </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  type="button"
-                  tooltip="Search"
-                  isActive={activeView === "search"}
-                  onClick={onOpenSearch}
-                >
-                  <Search />
-                  <span>Search</span>
-                </SidebarMenuButton>
-                <SidebarMenuBadge className="font-normal text-muted-foreground">
-                  ⌘K
-                </SidebarMenuBadge>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -444,51 +564,6 @@ export function AppSidebar({
                   </SidebarMenuBadge>
                 )}
               </SidebarMenuItem>
-              {canEdit && (
-                <SidebarMenuItem>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <SidebarMenuButton
-                          type="button"
-                          tooltip="Create"
-                          className="mt-1 bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90 hover:text-sidebar-primary-foreground"
-                        />
-                      }
-                    >
-                      <Plus />
-                      <span>Create</span>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      side="right"
-                      align="start"
-                      className="w-52"
-                    >
-                      <DropdownMenuItem onClick={() => onCreateDocument()}>
-                        <FileText /> Document
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onCreateArtifact()}>
-                        <Blocks /> Artifact
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled={!currentConceptId}
-                        onClick={onCreateApp}
-                      >
-                        <AppWindow /> Artifact
-                        {!currentConceptId && (
-                          <span className="ml-auto text-xs text-muted-foreground">
-                            Open a document
-                          </span>
-                        )}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={onCreateSpace}>
-                        <Folder /> Space
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </SidebarMenuItem>
-              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -511,13 +586,6 @@ export function AppSidebar({
 
         {spaces.map((space) => {
           const collapsed = collapsedSpaces.has(space.id);
-          const spaceArtifacts = concepts.filter((item) =>
-            item.spaceId === space.id &&
-            item.status === "active" &&
-            item.type?.toLocaleLowerCase() === "artifact"
-          ).length;
-          const spaceArtifactsActive = activeView === "space_artifacts" &&
-            activeSpaceId === space.id;
           if (iconOnly) {
             const active =
               (activeView === "space" || activeView === "space_artifacts") &&
@@ -551,7 +619,9 @@ export function AppSidebar({
               </SidebarGroup>
             );
           }
-          const active = activeView === "space" && activeSpaceId === space.id;
+          const active =
+            (activeView === "space" || activeView === "space_artifacts") &&
+            activeSpaceId === space.id;
           return (
             <SidebarGroup className="py-0" key={space.id}>
               <div className="relative">
@@ -624,25 +694,6 @@ export function AppSidebar({
               {!collapsed && (
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {spaceArtifacts > 0 && (
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          type="button"
-                          size="sm"
-                          tooltip={`${space.name} artifacts`}
-                          aria-label={`${space.name} artifacts`}
-                          isActive={spaceArtifactsActive}
-                          onClick={() => onOpenSpaceArtifacts(space.id)}
-                          className="pl-6 text-muted-foreground"
-                        >
-                          <Blocks />
-                          <span>Artifacts</span>
-                        </SidebarMenuButton>
-                        <SidebarMenuBadge className="font-normal text-muted-foreground">
-                          {spaceArtifacts}
-                        </SidebarMenuBadge>
-                      </SidebarMenuItem>
-                    )}
                     {renderConcepts(space.id, null)}
                   </SidebarMenu>
                 </SidebarGroupContent>
@@ -651,138 +702,100 @@ export function AppSidebar({
           );
         })}
 
-        <SidebarSeparator />
+        <SidebarSeparator className="mt-3" />
 
-        <SidebarGroup className="py-1">
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  type="button"
-                  tooltip="Sources"
-                  isActive={activeView === "sources"}
-                  onClick={onOpenSources}
-                >
-                  <Database />
-                  <span>Sources</span>
-                </SidebarMenuButton>
-                <SidebarMenuBadge>{sources.length}</SidebarMenuBadge>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {!iconOnly && sources.length > 0 && (
-          <SidebarGroup className="py-1">
-            <SidebarGroupLabel>Imported</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {sources.map((source) => {
-                  const sourceImports = imports.filter((item) =>
-                    item.sourceId === source.id
-                  );
-                  const folders = new Map<string, SidebarImport[]>();
-                  for (const item of sourceImports) {
-                    const slash = item.path.lastIndexOf("/");
-                    const folder = slash === -1
-                      ? ""
-                      : item.path.slice(0, slash);
-                    folders.set(folder, [...(folders.get(folder) ?? []), item]);
-                  }
-                  const active = sourceImports.some((item) =>
-                    activeView === "imported" && activeImportId === item.id
-                  );
-                  const expanded = active || expandedSources.has(source.id);
-                  return (
-                    <SidebarMenuItem key={source.id}>
+        {iconOnly
+          ? (
+            <SidebarGroup className="py-1">
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      type="button"
+                      tooltip="Sources"
+                      isActive={activeView === "sources"}
+                      onClick={onOpenSources}
+                    >
+                      <Database />
+                      <span>Sources</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )
+          : (
+            <SidebarGroup className="py-1">
+              <SidebarGroupLabel>Sources</SidebarGroupLabel>
+              <SidebarGroupAction
+                type="button"
+                title="Manage sources"
+                aria-label="Manage sources"
+                className={activeView === "sources"
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : undefined}
+                onClick={onOpenSources}
+              >
+                <Settings />
+              </SidebarGroupAction>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {sources.map((source) => {
+                    const sourceImports = imports.filter((item) =>
+                      item.sourceId === source.id
+                    );
+                    const active = activeImport?.sourceId === source.id;
+                    const expanded = active || expandedSources.has(source.id);
+                    return (
+                      <SidebarMenuItem key={source.id}>
+                        <SidebarMenuButton
+                          type="button"
+                          size="sm"
+                          tooltip={source.name}
+                          aria-expanded={expanded}
+                          onClick={() =>
+                            setExpandedSources((current) => {
+                              const next = new Set(current);
+                              next.has(source.id)
+                                ? next.delete(source.id)
+                                : next.add(source.id);
+                              return next;
+                            })}
+                        >
+                          {source.kind === "git" ? <Code2 /> : <Database />}
+                          <span>{source.name}</span>
+                        </SidebarMenuButton>
+                        <SidebarMenuBadge className="font-normal text-muted-foreground">
+                          {source.count}
+                        </SidebarMenuBadge>
+                        {expanded && (
+                          <SidebarMenu className={NESTED_TREE}>
+                            {renderImports(
+                              source.id,
+                              importTree(sourceImports),
+                            )}
+                          </SidebarMenu>
+                        )}
+                      </SidebarMenuItem>
+                    );
+                  })}
+                  {!sources.length && access === "owner" && (
+                    <SidebarMenuItem>
                       <SidebarMenuButton
                         type="button"
                         size="sm"
-                        className="pr-8"
-                        tooltip={source.name}
-                        aria-expanded={expanded}
-                        onClick={() =>
-                          setExpandedSources((current) => {
-                            const next = new Set(current);
-                            next.has(source.id)
-                              ? next.delete(source.id)
-                              : next.add(source.id);
-                            return next;
-                          })}
+                        className="text-muted-foreground"
+                        onClick={onOpenSources}
                       >
-                        {expanded ? <ChevronDown /> : <ChevronRight />}
-                        {source.kind === "git" ? <Code2 /> : <Database />}
-                        <span>{source.name}</span>
+                        <Plus />
+                        <span>Connect a source</span>
                       </SidebarMenuButton>
-                      <SidebarMenuBadge>{source.count}</SidebarMenuBadge>
-                      {expanded && (
-                        <SidebarMenuSub>
-                          {Array.from(folders).map(([folder, items]) => {
-                            const folderKey = `${source.id}:${folder}`;
-                            const folderActive = items.some((item) =>
-                              activeView === "imported" &&
-                              activeImportId === item.id
-                            );
-                            const folderExpanded = folderActive ||
-                              expandedImportFolders.has(folderKey);
-                            const documents = items.map((item) => (
-                              <SidebarMenuSubItem key={item.id}>
-                                <SidebarMenuSubButton
-                                  render={<button type="button" />}
-                                  size="sm"
-                                  title={item.title}
-                                  isActive={activeView === "imported" &&
-                                    activeImportId === item.id}
-                                  onClick={() =>
-                                    onOpenImported(item.sourceId, item.path)}
-                                >
-                                  <FileText />
-                                  <span>{item.title}</span>
-                                </SidebarMenuSubButton>
-                              </SidebarMenuSubItem>
-                            ));
-                            if (!folder) return documents;
-                            return (
-                              <SidebarMenuSubItem key={folderKey}>
-                                <SidebarMenuSubButton
-                                  render={<button type="button" />}
-                                  size="sm"
-                                  aria-expanded={folderExpanded}
-                                  onClick={() =>
-                                    setExpandedImportFolders((current) => {
-                                      const next = new Set(current);
-                                      next.has(folderKey)
-                                        ? next.delete(folderKey)
-                                        : next.add(folderKey);
-                                      return next;
-                                    })}
-                                >
-                                  {folderExpanded
-                                    ? <ChevronDown />
-                                    : <ChevronRight />}
-                                  <Folder />
-                                  <span>{folder}</span>
-                                  <span className="ml-auto tabular-nums opacity-50">
-                                    {items.length}
-                                  </span>
-                                </SidebarMenuSubButton>
-                                {folderExpanded && (
-                                  <SidebarMenuSub className="mx-2">
-                                    {documents}
-                                  </SidebarMenuSub>
-                                )}
-                              </SidebarMenuSubItem>
-                            );
-                          })}
-                        </SidebarMenuSub>
-                      )}
                     </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+                  )}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
       </SidebarContent>
 
       <SidebarFooter>
@@ -803,18 +816,6 @@ export function AppSidebar({
                 </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-64">
-                {canEdit && (
-                  <DropdownMenuItem onClick={onCreate}>
-                    <Settings />
-                    Workspace settings
-                  </DropdownMenuItem>
-                )}
-                {access === "owner" && (
-                  <DropdownMenuItem onClick={onManageAccess}>
-                    <Settings />
-                    Manage access
-                  </DropdownMenuItem>
-                )}
                 <DropdownMenuItem onClick={onOpenDeveloper}>
                   <Code2 />
                   Developer settings
@@ -847,17 +848,6 @@ export function AppSidebar({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {canEdit && (
-              <SidebarMenuAction
-                type="button"
-                title="Workspace settings"
-                aria-label="Workspace settings"
-                onClick={onCreate}
-                showOnHover
-              >
-                <Settings />
-              </SidebarMenuAction>
-            )}
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

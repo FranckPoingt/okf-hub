@@ -52,6 +52,13 @@ import {
 } from "./artifact-store.ts";
 import { createArtifactUsage } from "./artifact-usage.ts";
 import { createConnectorRegistry } from "./connector-registry.ts";
+import {
+  createImageStore,
+  IMAGE_CSP,
+  IMAGE_MAX_BYTES,
+  IMAGE_ROUTE,
+  imageReferences,
+} from "./document-images.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import {
   createFreshnessStore,
@@ -567,7 +574,7 @@ function frame(type: number, payload: Uint8Array) {
   return result;
 }
 
-function allowedOrigin(request: Request) {
+function allowedOrigin(request: Request, trusted: string[]) {
   const origin = request.headers.get("origin");
   let portless = false;
   try {
@@ -580,7 +587,9 @@ function allowedOrigin(request: Request) {
   }
   return !origin || origin === new URL(request.url).origin ||
     portless ||
-    ["http://localhost:3000", "http://127.0.0.1:3000"].includes(origin);
+    ["http://localhost:3000", "http://127.0.0.1:3000", ...trusted].includes(
+      origin,
+    );
 }
 
 function cors(request: Request) {
@@ -649,6 +658,11 @@ export async function createCollabApp({
   aiEmbedder,
 }: AppOptions = {}) {
   await Deno.mkdir(dataDir, { recursive: true });
+  // The origins better-auth trusts, e.g. the Vite dev server behind its proxy.
+  const devOrigins = [
+    ...(baseURL ? [new URL(baseURL).origin] : []),
+    ...(trustedOrigins ?? []),
+  ];
   const security = await createSecurity({
     dataDir,
     baseURL,
@@ -1142,15 +1156,18 @@ export async function createCollabApp({
       ...connector,
       enabled: connectorEnabled(connector.id),
     }));
+  const s3 = !objectStore && s3Endpoint && s3AccessKey && s3SecretKey
+    ? createObjectStore({
+      endpoint: s3Endpoint,
+      accessKey: s3AccessKey,
+      secretKey: s3SecretKey,
+      bucket: s3Bucket,
+    })
+    : undefined;
+  const images = createImageStore(s3, `${dataDir}/images`);
   const store = objectStore ??
-    (s3Endpoint && s3AccessKey && s3SecretKey
-      ? createObjectStore({
-        endpoint: s3Endpoint,
-        accessKey: s3AccessKey,
-        secretKey: s3SecretKey,
-        bucket: s3Bucket,
-      })
-      : {
+    (s3 ??
+      {
         put: () =>
           Promise.reject(new Error("Object storage is not configured")),
         get: () =>
@@ -2861,6 +2878,7 @@ export async function createCollabApp({
         body: `# Documents\n\n${entries.join("\n")}\n`,
       });
     }
+    const exportedImages = new Set<string>();
     for (const row of rows) {
       const chain: string[] = [];
       const seen = new Set<string>();
@@ -2890,13 +2908,31 @@ export async function createCollabApp({
             published.includes(typeYaml(row.type))
         ? "stable"
         : "draft";
+      // Bundle referenced Hub images and point the Markdown at the copies.
+      let body = bodyOnly(draft).trimEnd();
+      for (const reference of imageReferences(body)) {
+        if (!rowById.has(reference.conceptId)) continue;
+        const path = `images/${
+          encodeURIComponent(reference.conceptId)
+        }/${reference.name}`;
+        if (!exportedImages.has(path)) {
+          const image = await images.get(reference.conceptId, reference.name);
+          if (!image) continue;
+          exportedImages.add(path);
+          files.push({ path, body: image.body });
+        }
+        body = body.replaceAll(
+          reference.url,
+          `${"../".repeat(documentPath.split("/").length)}${path}`,
+        );
+      }
       files.push({
         path: `okf/${documentPath}.md`,
         body: `---\ntype: ${JSON.stringify(row.type)}\ntitle: ${
           JSON.stringify(row.title)
         }\nid: ${JSON.stringify(row.id)}\nstatus: ${status}\n${
           extensionYaml(frontmatter.get(row.id))
-        }intent: ${row.intent}\n---\n\n${bodyOnly(draft).trimEnd()}\n`,
+        }intent: ${row.intent}\n---\n\n${body}\n`,
       });
       const appNames = uniqueArchiveNames(
         apps.map((app) => ({ id: app.id, label: app.title })),
@@ -3939,7 +3975,7 @@ export async function createCollabApp({
         BUNDLE_CSP,
       );
     }
-    if (!allowedOrigin(request)) {
+    if (!allowedOrigin(request, devOrigins)) {
       return new Response("Origin not allowed", { status: 403 });
     }
     const url = new URL(request.url);
@@ -6415,6 +6451,86 @@ export async function createCollabApp({
         await payload(concept(conceptId)!, true, current.user.id),
         { headers: cors(request) },
       );
+    }
+
+    const imageUpload = url.pathname.match(
+      /^\/api\/concepts\/([^/]+)\/images$/,
+    );
+    const imageRoute = url.pathname.match(IMAGE_ROUTE);
+    if (
+      imageUpload && request.method === "POST" ||
+      imageRoute && request.method === "GET"
+    ) {
+      const current = await security.session(request);
+      if (!current) {
+        return Response.json({ error: "Sign in required" }, {
+          status: 401,
+          headers: cors(request),
+        });
+      }
+      const conceptId = decodeURIComponent((imageUpload ?? imageRoute)![1]);
+      const row = concept(conceptId);
+      if (
+        !row ||
+        !await security.check(current.user.id, "view", conceptId)
+      ) {
+        return Response.json({ error: "Not found" }, {
+          status: 404,
+          headers: cors(request),
+        });
+      }
+      if (imageRoute) {
+        const image = await images.get(conceptId, imageRoute[2]);
+        if (!image) {
+          return Response.json({ error: "Not found" }, {
+            status: 404,
+            headers: cors(request),
+          });
+        }
+        return new Response(image.body as BodyInit, {
+          headers: {
+            ...cors(request),
+            "content-type": image.type,
+            "x-content-type-options": "nosniff",
+            // Private: the bytes are permission-checked; the URL is content-hashed.
+            "cache-control": "private, max-age=31536000, immutable",
+            "content-security-policy": IMAGE_CSP,
+          },
+        });
+      }
+      if (!await security.check(current.user.id, "edit", conceptId)) {
+        return Response.json({ error: "Edit access required" }, {
+          status: 403,
+          headers: cors(request),
+        });
+      }
+      if (row.lockedAt) {
+        return Response.json({ error: "Unlock the document to edit it" }, {
+          status: 423,
+          headers: cors(request),
+        });
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = await readArtifactUpload(request, IMAGE_MAX_BYTES);
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Upload failed",
+        }, { status: 413, headers: cors(request) });
+      }
+      try {
+        return Response.json(await images.put(conceptId, bytes), {
+          status: 201,
+          headers: cors(request),
+        });
+      } catch (error) {
+        return Response.json({
+          error: error instanceof Error ? error.message : "Upload failed",
+        }, {
+          status: error instanceof ActionError ? error.status : 500,
+          headers: cors(request),
+        });
+      }
     }
 
     const conceptRoute = url.pathname.match(

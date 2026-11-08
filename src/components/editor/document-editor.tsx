@@ -7,7 +7,9 @@ import {
   serializerCtx,
 } from "@milkdown/kit/core";
 import { diffComponent } from "@milkdown/kit/component/diff";
+import { imageBlockSchema } from "@milkdown/kit/component/image-block";
 import { diff, startDiffReviewCmd } from "@milkdown/kit/plugin/diff";
+import { uploadConfig } from "@milkdown/kit/plugin/upload";
 import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
 import { inputRules } from "@milkdown/kit/prose/inputrules";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
@@ -36,6 +38,116 @@ import { MarkdownWritingHelp } from "./markdown-writing-help.tsx";
 
 const withoutPageTitle = (markdown: string) =>
   markdown.replace(/^#\s+[^\n]*(?:\n|$)/, "");
+
+type ImageUpload = (file: File) => Promise<string>;
+
+/** Posts an image to the document's store; failures are reported and resolve
+ * to "" so Crepe inserts nothing instead of a dead link. */
+function imageUploader(
+  conceptId: string | undefined,
+  report: (message: string) => void,
+): ImageUpload {
+  return async (file) => {
+    report("");
+    try {
+      if (!conceptId) {
+        throw new Error(
+          "Upload images inside a document; templates can use image URLs.",
+        );
+      }
+      const response = await api(`${conceptPath(conceptId)}/images`, {
+        method: "POST",
+        body: file,
+        headers: { "content-type": file.type || "application/octet-stream" },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          body.error ?? `Image upload failed (${response.status})`,
+        );
+      }
+      return String(body.url);
+    } catch (error) {
+      report(
+        `${file.name}: ${
+          error instanceof Error ? error.message : "Image upload failed"
+        }`,
+      );
+      return "";
+    }
+  };
+}
+
+/** Crepe with OKF's feature set: Ask replaces AI, and image blocks upload to
+ * the document's image store. Omit `placeholder` on read-only surfaces. */
+function createCrepe(
+  root: HTMLElement,
+  defaultValue: string,
+  placeholder?: { mode: "doc" | "block"; text: string },
+  upload: ImageUpload = () => Promise.resolve(""),
+) {
+  const crepe = new Crepe({
+    root,
+    defaultValue,
+    features: {
+      [Crepe.Feature.AI]: false,
+      [Crepe.Feature.TopBar]: false,
+      [Crepe.Feature.Placeholder]: Boolean(placeholder),
+    },
+    featureConfigs: {
+      [Crepe.Feature.Placeholder]: placeholder,
+      [Crepe.Feature.ImageBlock]: {
+        onUpload: upload,
+        blockCaptionPlaceholderText: "Describe the image (alt text)",
+      },
+    },
+  });
+  crepe.editor.config((ctx) => {
+    // Pasted or dropped files go through the same uploader; failed ones are
+    // skipped so no blob: or empty image lands in the Markdown.
+    ctx.update(uploadConfig.key, (options) => ({
+      ...options,
+      uploader: async (files, schema) => {
+        const images = Array.from(files).filter((file) =>
+          file.type.startsWith("image/")
+        );
+        const urls = await Promise.all(images.map(upload));
+        return urls.filter(Boolean).map((src) =>
+          schema.nodes["image-block"].createAndFill({ src })!
+        );
+      },
+    }));
+    // Crepe stores the resize ratio in the alt text; keep standard
+    // ![alt](url) Markdown and edit the alt text as the caption instead.
+    // shortcut: resize ratio and image title are not persisted; store them
+    // as attributes if users need sized images.
+    ctx.update(imageBlockSchema.key, (schema) => (schemaCtx) => ({
+      ...schema(schemaCtx),
+      parseMarkdown: {
+        match: ({ type }) => type === "image-block",
+        runner: (state, node, type) => {
+          state.addNode(type, {
+            src: String(node.url ?? ""),
+            caption: String(node.alt || node.title || ""),
+            ratio: 1,
+          });
+        },
+      },
+      toMarkdown: {
+        match: (node) => node.type.name === "image-block",
+        runner: (state, node) => {
+          state.openNode("paragraph");
+          state.addNode("image", undefined, undefined, {
+            url: node.attrs.src,
+            alt: node.attrs.caption,
+          });
+          state.closeNode();
+        },
+      },
+    }));
+  });
+  return crepe;
+}
 
 const commentHighlightsKey = new PluginKey<DecorationSet>(
   "okf-comment-highlights",
@@ -333,26 +445,11 @@ export function DocumentPreview({
   linkOpen.current = onLinkOpen;
   useEditor((root) => {
     let stopCommentHighlights = () => {};
-    const crepe = new Crepe({
+    const crepe = createCrepe(
       root,
-      defaultValue: hidePageTitle ? withoutPageTitle(markdown) : markdown,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-      featureConfigs: {
-        [Crepe.Feature.Placeholder]: {
-          mode: "doc",
-          text: "Write something, or type / for commands",
-        },
-      },
-    });
+      hidePageTitle ? withoutPageTitle(markdown) : markdown,
+    ).setReadonly(true);
     crepe.editor.config((ctx) => {
-      ctx.update(
-        editorViewOptionsCtx,
-        (options) => ({ ...options, editable: () => false }),
-      );
       if (conceptId) {
         ctx.update(prosePluginsCtx, (plugins) => [
           ...plugins,
@@ -404,22 +501,8 @@ export function RevisionDiff({
   after: string;
 }) {
   useEditor((root) => {
-    const crepe = new Crepe({
-      root,
-      defaultValue: before,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.Placeholder]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-    });
-    crepe.editor.use(diff).use(diffComponent).config((ctx) => {
-      ctx.update(
-        editorViewOptionsCtx,
-        (options) => ({ ...options, editable: () => false }),
-      );
-    });
+    const crepe = createCrepe(root, before).setReadonly(true);
+    crepe.editor.use(diff).use(diffComponent);
     crepe.on((listener) =>
       listener.mounted((ctx) => {
         ctx.get(commandsCtx).call(startDiffReviewCmd.key, after);
@@ -443,23 +526,15 @@ export function LocalMarkdownEditor({
   markdownChange.current = onChange;
   const snapshotReady = useRef(onSnapshotReady);
   snapshotReady.current = onSnapshotReady;
+  const [uploadError, setUploadError] = useState("");
   useEditor((root) => {
     let editorMounted = false;
-    const crepe = new Crepe({
+    const crepe = createCrepe(
       root,
-      defaultValue: value,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-      featureConfigs: {
-        [Crepe.Feature.Placeholder]: {
-          mode: "doc",
-          text: "Write the reusable document structure…",
-        },
-      },
-    });
+      value,
+      { mode: "doc", text: "Write the reusable document structure…" },
+      imageUploader(undefined, setUploadError),
+    );
     crepe.editor.config((ctx) => {
       ctx.update(prosePluginsCtx, (plugins) => [
         ...plugins,
@@ -489,7 +564,13 @@ export function LocalMarkdownEditor({
     };
     return crepe;
   }, []);
-  return <Milkdown />;
+  return (
+    <>
+      {uploadError && <p className="action-error" role="alert">{uploadError}
+      </p>}
+      <Milkdown />
+    </>
+  );
 }
 
 export function DocumentEditor({
@@ -535,6 +616,7 @@ export function DocumentEditor({
   const loaded = useRef(onLoaded);
   loaded.current = onLoaded;
   const [ready, setReady] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   useEditor((root) => {
     setReady(false);
     let emitted = "";
@@ -550,20 +632,16 @@ export function DocumentEditor({
     );
     let editorConnected = false;
     let stopCommentHighlights = () => {};
-    const crepe = new Crepe({
+    // Block mode hints on whichever empty line holds the cursor, not only an
+    // empty document; viewers who cannot edit get no writing prompt.
+    const crepe = createCrepe(
       root,
-      features: {
-        [Crepe.Feature.AI]: false,
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.TopBar]: false,
-      },
-      featureConfigs: {
-        [Crepe.Feature.Placeholder]: {
-          mode: "doc",
-          text: "Write something, or type / for commands",
-        },
-      },
-    });
+      "",
+      canEdit
+        ? { mode: "block", text: "Write something, or type / for commands" }
+        : undefined,
+      canEdit ? imageUploader(conceptId, setUploadError) : undefined,
+    );
     crepe.editor.use(collab).config((ctx) => {
       ctx.update(
         editorViewOptionsCtx,
@@ -671,6 +749,8 @@ export function DocumentEditor({
             Connecting to document…
           </p>
         )}
+      {uploadError && <p className="action-error" role="alert">{uploadError}
+      </p>}
       <div inert={!ready}>
         <Milkdown />
       </div>
