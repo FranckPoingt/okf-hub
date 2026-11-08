@@ -277,6 +277,49 @@ Deno.test("uploads, dedupes, serves and exports document images with document pe
     assert.equal(missing.status, 404);
     await missing.body?.cancel();
 
+    // Agents: API key upload through the action, then raw read with the key.
+    const keyFor = async (scopes: string[]) => {
+      const response = await owner.request("/api/developer/keys", {
+        method: "POST",
+        body: JSON.stringify({ name: scopes.join(" "), scopes }),
+      });
+      assert.equal(response.status, 201, await response.clone().text());
+      return { authorization: `Bearer ${(await response.json()).token}` };
+    };
+    const agent = await keyFor(["documents.images.upload", "documents.get"]);
+    const action = await fetch(
+      `${base}/api/v1/actions/documents.images.upload`,
+      {
+        method: "POST",
+        headers: { ...agent, "content-type": "application/json" },
+        body: JSON.stringify({
+          id: docId,
+          alt: "Flow [v2]",
+          base64: `data:image/png;base64,${btoa(String.fromCharCode(...PNG))}`,
+        }),
+      },
+    );
+    assert.equal(action.status, 200, await action.clone().text());
+    const uploaded = (await action.json()).result;
+    assert.equal(uploaded.url, url);
+    assert.equal(uploaded.markdown, `![Flow  v2](${url})`);
+    const viaKey = await fetch(`${base}${url}`, { headers: agent });
+    assert.deepEqual(new Uint8Array(await viaKey.arrayBuffer()), PNG);
+    const readOnly = await keyFor(["documents.list"]);
+    const scoped = await fetch(`${base}${url}`, { headers: readOnly });
+    assert.equal(scoped.status, 403);
+    await scoped.body?.cancel();
+    const badBase64 = await fetch(
+      `${base}/api/v1/actions/documents.images.upload`,
+      {
+        method: "POST",
+        headers: { ...agent, "content-type": "application/json" },
+        body: JSON.stringify({ id: docId, base64: "!!!" }),
+      },
+    );
+    assert.equal(badBase64.status, 400);
+    await badBase64.body?.cancel();
+
     const secret = await (await upload(owner, secretId, PNG)).json();
     const blocked = await viewer.request(secret.url);
     assert.equal(blocked.status, 404);

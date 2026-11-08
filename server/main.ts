@@ -3685,6 +3685,56 @@ export async function createCollabApp({
       },
     },
     {
+      name: "documents.images.upload",
+      tag: "Documents",
+      title: "Upload document image",
+      description:
+        "Stores a base64 PNG, JPEG, GIF or WebP image (max 10 MiB) on an editable document and returns Markdown to insert with documents.update-draft.",
+      mode: "mutation",
+      approval: "none",
+      inputSchema: {
+        type: "object",
+        required: ["id", "base64"],
+        properties: {
+          id: { type: "string" },
+          base64: { type: "string" },
+          alt: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      run: async (context, input) => {
+        const id = String(input.id ?? "");
+        const row = concept(id);
+        if (!row || !await security.check(context.userId, "edit", id)) {
+          throw new ActionError("Not found", 404);
+        }
+        if (row.lockedAt) {
+          throw new ActionError("Unlock the document to edit it", 423);
+        }
+        const base64 = String(input.base64 ?? "").replace(
+          /^data:[^,]*,|\s/g,
+          "",
+        );
+        if (base64.length > Math.ceil(IMAGE_MAX_BYTES / 3) * 4) {
+          throw new ActionError("Images can be at most 10 MiB", 413);
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+        } catch {
+          throw new ActionError("base64 is not valid base64");
+        }
+        const image = await images.put(id, bytes);
+        const alt = String(input.alt ?? "").replace(/[[\]\n]/g, " ").trim();
+        security.audit(
+          context.userId,
+          "concept.image.uploaded",
+          `concept:${id}`,
+        );
+        return { ...image, markdown: `![${alt}](${image.url})` };
+      },
+    },
+    {
       name: "documents.publish",
       tag: "Documents",
       title: "Publish document",
@@ -6461,10 +6511,22 @@ export async function createCollabApp({
       imageUpload && request.method === "POST" ||
       imageRoute && request.method === "GET"
     ) {
-      const current = await security.session(request);
+      const current = await security.authenticate(request);
       if (!current) {
-        return Response.json({ error: "Sign in required" }, {
+        return Response.json({ error: "Sign in or use an API key" }, {
           status: 401,
+          headers: cors(request),
+        });
+      }
+      // API keys need the scope of the matching action.
+      if (
+        !actionAllowed(
+          current.scopes,
+          imageUpload ? "documents.images.upload" : "documents.get",
+        )
+      ) {
+        return Response.json({ error: "API key scope does not allow this" }, {
+          status: 403,
           headers: cors(request),
         });
       }

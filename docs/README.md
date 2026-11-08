@@ -92,6 +92,13 @@ as the document. The Markdown keeps a standard `![alt text](url)` link to
 alt text. Images are stored in the object store when `OKF_S3_*` is configured,
 otherwise under `OKF_DATA_DIR/images/`. Linked `https:` images keep working.
 
+Agents upload with the `documents.images.upload` action (API and MCP): send
+`{ id, base64, alt? }` and insert the returned `markdown` with
+`documents.update-draft`. MCP requests are capped at 9 MiB, so base64 images
+there stay under about 6.5 MiB. With an API key, the raw image routes also work:
+`POST` needs the `documents.images.upload` scope and `GET` needs
+`documents.get`.
+
 ### Ownership and review
 
 Each hub-native document can have a responsible workspace editor and an optional
