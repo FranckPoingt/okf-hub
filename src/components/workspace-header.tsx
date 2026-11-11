@@ -17,6 +17,10 @@ type WorkspaceHeaderProps = {
   status: string;
   statusTone: "connecting" | "offline" | "online";
   title: string;
+  /** Makes the title editable in place; called on blur with the new title. */
+  onRename?: (title: string) => void;
+  /** Focus and select the title once, e.g. right after creating a document. */
+  focusTitle?: boolean;
   onSearch: () => void;
   actions?: ReactNode;
 };
@@ -27,6 +31,8 @@ export function WorkspaceHeader({
   status,
   statusTone,
   title,
+  onRename,
+  focusTitle,
   onSearch,
   actions,
 }: WorkspaceHeaderProps) {
@@ -45,9 +51,41 @@ export function WorkspaceHeader({
           </BreadcrumbItem>
           <BreadcrumbSeparator className="hidden sm:list-item" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="block max-w-[48vw] truncate font-medium">
-              {title}
-            </BreadcrumbPage>
+            {onRename
+              ? (
+                <input
+                  key={title}
+                  aria-label="Document title"
+                  className="max-w-[48vw] min-w-16 truncate rounded-sm bg-transparent px-1 font-medium text-foreground outline-none [field-sizing:content] hover:bg-accent focus:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  defaultValue={title}
+                  maxLength={100}
+                  ref={(input) => {
+                    if (
+                      input && focusTitle && document.activeElement !== input
+                    ) {
+                      input.focus();
+                      input.select();
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                    if (event.key === "Escape") {
+                      event.currentTarget.value = title;
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  onBlur={(event) => {
+                    const next = event.currentTarget.value.trim();
+                    if (!next) event.currentTarget.value = title;
+                    onRename(next || title);
+                  }}
+                />
+              )
+              : (
+                <BreadcrumbPage className="block max-w-[48vw] truncate font-medium">
+                  {title}
+                </BreadcrumbPage>
+              )}
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>

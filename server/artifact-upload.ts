@@ -148,7 +148,10 @@ export function prepareArtifactUpload(
   };
 }
 
-export async function readArtifactUpload(request: Request) {
+export async function readArtifactUpload(
+  request: Request,
+  limit = MAX_BYTES,
+) {
   const chunks: Uint8Array[] = [];
   let size = 0;
   const reader = request.body?.getReader();
@@ -158,7 +161,9 @@ export async function readArtifactUpload(request: Request) {
         const next = await reader.read();
         if (next.done) break;
         size += next.value.length;
-        if (size > MAX_BYTES) throw new Error("Upload exceeds 8 MiB");
+        if (size > limit) {
+          throw new Error(`Upload exceeds ${limit / 1024 / 1024} MiB`);
+        }
         chunks.push(next.value);
       }
     } finally {

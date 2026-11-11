@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -53,7 +54,6 @@ body {
   min-height: 100%;
   background: var(--paper);
   color: var(--ink);
-  font-family: Arial,Helvetica,sans-serif;
 }
 button,
 a {
@@ -76,7 +76,6 @@ a {
   place-items: center;
   background: var(--green);
   color: white;
-  font-family: Georgia,serif;
 }
 .lifecycle-actions button,
 .view-switch button {
@@ -171,53 +170,6 @@ a {
 }
 .editor-frame .milkdown .ProseMirror {
   min-height: 580px;
-  color: var(--secondary-foreground);
-  font-family: var(--font-ui);
-  font-size: 17px;
-  line-height: 1.75;
-}
-.editor-frame .milkdown .ProseMirror h1,
-.editor-frame .milkdown .ProseMirror h2,
-.editor-frame .milkdown .ProseMirror h3 {
-  color: var(--ink);
-  letter-spacing: -.035em;
-}
-.editor-frame .milkdown .ProseMirror h1 {
-  font-size: 46px;
-  line-height: 1.05;
-}
-.editor-frame .milkdown .ProseMirror h2 {
-  margin-top: 1.6em;
-  font-size: 28px;
-}
-.editor-frame .milkdown .ProseMirror blockquote {
-  border-left: 3px solid var(--coral);
-  margin-left: 0;
-  padding-left: 18px;
-  color: var(--muted-foreground);
-}
-.editor-frame .milkdown .ProseMirror code {
-  font-family: ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size: .82em;
-}
-.editor-frame .milkdown .ProseMirror pre {
-  padding: 18px;
-  border-radius: 6px;
-  overflow: auto;
-  background: #192723;
-  color: #edf3ef;
-}
-.editor-frame .milkdown .ProseMirror table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: Arial,sans-serif;
-  font-size: 13px;
-}
-.editor-frame .milkdown .ProseMirror th,
-.editor-frame .milkdown .ProseMirror td {
-  padding: 9px;
-  border: 1px solid var(--border);
-  text-align: left;
 }
 .editor-loading,
 .service-error {
@@ -243,7 +195,7 @@ a {
   border-radius: 3px 3px 3px 0;
   background: currentColor;
   color: white;
-  font: 9px Arial,sans-serif;
+  font: 600 9px var(--font-sans);
   white-space: nowrap;
 }
 /* Solid ring token: >= 3:1 against page and card surfaces in both themes. */
@@ -386,7 +338,7 @@ a {
 .invite-list input {
   grid-column: 1/-1;
   padding: 6px;
-  font-family: ui-monospace,monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .invite-list span {
@@ -1195,9 +1147,6 @@ details[open] > summary .source-details-chevron {
   .editor-frame .milkdown .editor {
     padding: 35px 22px;
   }
-  .editor-frame .milkdown .ProseMirror h1 {
-    font-size: 36px;
-  }
 }
 @media (max-width:800px) {
   .auth-card {
@@ -1456,6 +1405,7 @@ details[open] > summary .source-details-chevron {
   --radius-xl: calc(var(--radius) * 1.5);
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -1507,20 +1457,23 @@ details[open] > summary .source-details-chevron {
   --sidebar-ring: #52796f;
   --radius: .625rem;
   --shadow-card: 0 1px 2px rgb(23 37 33 / .04), 0 8px 28px rgb(23 37 33 / .05);
-  --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  --font-ui: var(--font-sans);
 }
 
 /* Milkdown Crepe ships its own grey palette and serif headings; map them to
-   app tokens so documents, diffs and dark mode match the rest of the UI. */
+   app tokens so documents, menus, diffs and dark mode match the rest of the UI.
+   Tokens are read at use time, so the .dark overrides apply without a
+   second theme file. */
 .milkdown {
   --crepe-color-background: var(--card);
   --crepe-color-on-background: var(--foreground);
   --crepe-color-surface: var(--muted-surface);
-  --crepe-color-surface-low: var(--muted-surface);
+  --crepe-color-surface-low: var(--secondary);
   --crepe-color-on-surface: var(--foreground);
   --crepe-color-on-surface-variant: var(--muted-foreground);
-  --crepe-color-outline: var(--input);
+  /* Crepe uses outline for every icon (handle, toolbar, slash menu, bullets)
+     and mixes it to 20% for borders, so it needs text-level contrast. */
+  --crepe-color-outline: var(--muted-foreground);
   --crepe-color-primary: var(--primary);
   --crepe-color-secondary: var(--secondary);
   --crepe-color-on-secondary: var(--secondary-foreground);
@@ -1528,11 +1481,118 @@ details[open] > summary .source-details-chevron {
   --crepe-color-on-inverse: var(--background);
   --crepe-color-inline-code: var(--destructive);
   --crepe-color-error: var(--destructive);
-  --crepe-color-hover: var(--accent);
-  --crepe-color-selected: var(--accent);
+  /* Menus sit on the muted surface, where --accent is nearly invisible. */
+  --crepe-color-hover: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --crepe-color-selected: color-mix(in srgb, var(--primary) 18%, transparent);
   --crepe-color-inline-area: var(--muted-surface);
-  --crepe-font-title: var(--font-ui);
-  --crepe-font-default: var(--font-ui);
+  --crepe-color-diff-added: var(--success);
+  --crepe-color-diff-removed: var(--destructive);
+  --crepe-font-title: var(--font-sans);
+  --crepe-font-default: var(--font-sans);
+  --crepe-font-code: var(--font-mono);
+  --crepe-shadow-1: 0 1px 2px rgb(0 0 0 / .06), 0 4px 16px rgb(0 0 0 / .1);
+  --crepe-shadow-2: 0 2px 4px rgb(0 0 0 / .08), 0 12px 32px rgb(0 0 0 / .16);
+}
+
+/* Image blocks: app radius and border instead of Crepe's bare frame. */
+.milkdown .milkdown-image-block > .image-wrapper img,
+.milkdown .milkdown-image-inline img {
+  border-radius: var(--radius-md);
+}
+.milkdown .milkdown-image-block > .image-wrapper img {
+  border: 1px solid var(--border);
+}
+.milkdown .milkdown-image-block > .image-edit,
+.milkdown .milkdown-image-inline > .empty-image-inline {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.milkdown .milkdown-image-block > .caption-input {
+  color: var(--muted-foreground);
+  font-size: .875rem;
+}
+
+/* Crepe fixes p at 16px/24px and headings at 32-42px regardless of surface;
+   inherit the surface's size and scale headings from it instead. */
+.milkdown .ProseMirror p {
+  font-size: inherit;
+  line-height: inherit;
+  padding: .3em 0;
+}
+.milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--crepe-color-on-background);
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+.milkdown .ProseMirror h1 {
+  margin-top: 1.4em;
+  font-size: 2.125em;
+  line-height: 1.15;
+}
+.milkdown .ProseMirror h2 {
+  margin-top: 1.5em;
+  font-size: 1.5em;
+  line-height: 1.25;
+}
+.milkdown .ProseMirror h3 {
+  margin-top: 1.3em;
+  font-size: 1.25em;
+  line-height: 1.35;
+}
+.milkdown .ProseMirror h4 {
+  margin-top: 1.2em;
+  font-size: 1.075em;
+  line-height: 1.4;
+}
+.milkdown .ProseMirror :is(h5, h6) {
+  margin-top: 1.1em;
+  font-size: 1em;
+  line-height: 1.5;
+}
+.milkdown .ProseMirror h6 {
+  color: var(--crepe-color-on-surface-variant);
+}
+/* Crepe's virtual cursor element is the first child; skip it. */
+.milkdown .ProseMirror > :nth-child(1 of :not(.prosemirror-virtual-cursor)) {
+  margin-top: 0;
+}
+.milkdown .ProseMirror blockquote {
+  margin: .5em 0;
+  padding-left: 1.1em;
+  color: var(--crepe-color-on-surface-variant);
+}
+.milkdown .milkdown-code-block,
+.milkdown .milkdown-table-block {
+  margin: .6em 0;
+}
+/* Crepe highlights code with CodeMirror's One Dark theme, whose light text is
+   unreadable on the light muted surface. Give code blocks (and their language
+   picker) the dark palette in both app themes; values mirror .dark tokens. */
+.milkdown .milkdown-code-block {
+  --crepe-color-surface: #1b2520;
+  --crepe-color-surface-low: #24302a;
+  --crepe-color-secondary: #24302a;
+  --crepe-color-on-background: #e8ede9;
+  --crepe-color-on-surface: #e8ede9;
+  --crepe-color-on-surface-variant: #9aa8a1;
+  --crepe-color-outline: #9aa8a1;
+  --crepe-color-hover: rgb(255 255 255 / 8%);
+  --crepe-color-selected: rgb(124 196 164 / 28%);
+  border-radius: var(--radius);
+  color: var(--crepe-color-on-surface);
+}
+.milkdown .milkdown-code-block .cm-content {
+  caret-color: var(--crepe-color-on-background);
+}
+.milkdown .milkdown-code-block .cm-editor .cm-selectionLayer .cm-selectionBackground {
+  background: var(--crepe-color-selected);
+}
+.milkdown .milkdown-code-block .cm-editor .cm-activeLine,
+.milkdown .milkdown-code-block .cm-editor .cm-activeLineGutter {
+  background: transparent;
+}
+.milkdown .milkdown-code-block .cm-gutters {
+  color: var(--crepe-color-on-surface-variant);
 }
 
 html,
@@ -1931,9 +1991,8 @@ label {
 }
 .editor-frame .milkdown .ProseMirror {
   color: var(--secondary-foreground);
-  font-family: var(--font-sans);
   font-size: 16px;
-  line-height: 1.75;
+  line-height: 1.7;
 }
 
 .editor-frame .milkdown .comment-highlight {
@@ -2199,9 +2258,6 @@ label {
   .editor-frame .milkdown .editor {
     padding: 36px 22px;
   }
-  .editor-frame .milkdown .ProseMirror h1 {
-    font-size: 2rem;
-  }
   .imported-document-header {
     padding: 14px 22px;
   }
@@ -2351,7 +2407,6 @@ label {
 .presentation-content-slide .milkdown .ProseMirror {
   min-height: 0;
   color: var(--foreground);
-  font-family: var(--font-sans);
   font-size: clamp(1.15rem, 2vw, 1.8rem);
   line-height: 1.55;
 }
@@ -2360,7 +2415,6 @@ label {
 .presentation-content-slide .milkdown .ProseMirror h3,
 .presentation-content-slide .milkdown .ProseMirror h4 {
   margin: 0 0 .65em;
-  font-family: var(--font-sans);
   font-size: clamp(2rem, 5vw, 4.5rem);
   letter-spacing: -.045em;
   line-height: 1.05;
@@ -2576,7 +2630,7 @@ label {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
   }
   html {
     @apply font-sans;
@@ -3209,7 +3263,7 @@ label {
   padding: 4px 7px;
   border-radius: var(--radius-sm);
   background: var(--muted);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: .7rem;
   text-overflow: ellipsis;
   white-space: nowrap;

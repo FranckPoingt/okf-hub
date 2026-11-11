@@ -127,8 +127,6 @@ export default function App() {
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [newDocumentSpaceId, setNewDocumentSpaceId] = useState<string>();
   const [newDocumentParentId, setNewDocumentParentId] = useState<string>();
-  const [newDocumentType, setNewDocumentType] = useState<string>();
-  const [newDocumentIntent, setNewDocumentIntent] = useState<string>();
   const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
   const [spaceDialogIcon, setSpaceDialogIcon] = useState("");
   const [documentSettingsOpen, setDocumentSettingsOpen] = useState(false);
@@ -140,6 +138,7 @@ export default function App() {
   const [draftSavedAt, setDraftSavedAt] = useState("");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [newDocumentTemplateId, setNewDocumentTemplateId] = useState<string>();
+  const [titleFocusId, setTitleFocusId] = useState<string>();
   const [templateSnapshot, setTemplateSnapshot] = useState<
     { title: string; body: string } | null
   >(null);
@@ -1548,27 +1547,105 @@ export default function App() {
     setDeveloperOpen(true);
     if (record) recordRoute({ kind: "developer" });
   };
-  const openNewDocument = (
+  const openNewDocumentDialog = (
     spaceId?: string,
     parentId?: string,
     templateId?: string,
   ) => {
     setNewDocumentTemplateId(templateId);
-    setNewDocumentType(undefined);
-    setNewDocumentIntent(undefined);
     setNewDocumentSpaceId(spaceId);
     setNewDocumentParentId(parentId);
     setActionError("");
     setNewDocumentOpen(true);
   };
-  const openNewArtifact = (spaceId?: string) => {
-    setNewDocumentTemplateId(undefined);
-    setNewDocumentType("Artifact");
-    setNewDocumentIntent("working");
-    setNewDocumentSpaceId(spaceId);
-    setNewDocumentParentId(undefined);
+  // One click creates an untitled draft where you are and opens it with the
+  // title selected; type, intent and space stay editable in document settings.
+  const quickCreate = async ({
+    spaceId,
+    parentId,
+    title = "Untitled",
+    type = "Document",
+    intent = "canonical",
+  }: {
+    spaceId?: string;
+    parentId?: string;
+    title?: string;
+    type?: string;
+    intent?: string;
+  }) => {
+    const target = spaceId ??
+      (isConceptRouteActive ? concept?.spaceId : undefined) ??
+      activeSpace?.id ?? activeSpaceArtifacts?.id ?? spaces[0]?.id;
+    setActionBusy(true);
     setActionError("");
-    setNewDocumentOpen(true);
+    try {
+      const response = await api("/api/concepts", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          type,
+          intent,
+          spaceId: target,
+          parentId: parentId ?? null,
+        }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Creation failed");
+        return;
+      }
+      await refreshHubLists();
+      await openHubConcept(result.id);
+      setTitleFocusId(result.id);
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  };
+  // Templates need their variables filled in, so only they open the dialog.
+  const openNewDocument = (
+    spaceId?: string,
+    parentId?: string,
+    templateId?: string,
+  ) =>
+    templateId
+      ? openNewDocumentDialog(spaceId, parentId, templateId)
+      : void quickCreate({ spaceId, parentId });
+  const openNewArtifact = (spaceId?: string) =>
+    void quickCreate({
+      spaceId,
+      title: "Untitled artifact",
+      type: "Artifact",
+      intent: "working",
+    });
+  const renameConcept = async (title: string) => {
+    setTitleFocusId(undefined);
+    if (!concept || title === concept.title) return;
+    try {
+      setActionError("");
+      const response = await api(`${conceptPath(concept.id)}/metadata`, {
+        method: "PUT",
+        body: JSON.stringify({ title }),
+      });
+      const result = await response.json() as Concept & { error?: string };
+      if (!response.ok) {
+        setActionError(result.error ?? "Rename failed");
+        return;
+      }
+      setConcept(result);
+      await refreshHubLists();
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error
+          ? cause.message
+          : "The action failed. Please try again.",
+      );
+    }
   };
 
   const handleReferenceReady = useCallback(
@@ -1874,11 +1951,11 @@ export default function App() {
       : status === "syncing"
       ? "connecting"
       : status;
-  // Overview pages say nothing here: the page title already names them.
-  const statusLabel = activeSpace
-    ? `${activeSpace.count} documents`
-    : searchOpen || homeOpen || artifactsOpen || activeSpaceArtifacts ||
-        sourceOpen || createOpen || developerOpen || showArtifactFirst
+  // The header only flags states the page body does not already show: overview
+  // pages name themselves, and the document toolbar shows version and saving.
+  const statusLabel = activeSpace || searchOpen || homeOpen || artifactsOpen ||
+      activeSpaceArtifacts || sourceOpen || createOpen || developerOpen ||
+      showArtifactFirst
     ? ""
     : imported
     ? "read only"
@@ -1888,23 +1965,15 @@ export default function App() {
     ? "locked"
     : bootstrap.canEdit && view === "draft"
     ? status
-    : "published";
+    : "";
   const statusDetail = activeSpace || homeOpen || artifactsOpen ||
       activeSpaceArtifacts || searchOpen || sourceOpen || createOpen ||
-      developerOpen || showArtifactFirst
+      developerOpen || showArtifactFirst || imported
     ? ""
-    : imported
-    ? imported.sourceId === "shared"
-      ? "Shared-store owned"
-      : imported.sourceId === "notion"
-      ? "Notion owned"
-      : "Repository owned"
     : concept?.lockedAt
     ? "Read only until unlocked"
-    : bootstrap.canEdit && view === "published" && concept?.publishedRevision
-    ? `Revision ${concept.publishedRevision} published`
     : bootstrap.canEdit
-    ? saveState === "failed" ? "Save failed" : ""
+    ? ""
     : "View only";
   const presentation = imported?.markdown
     ? {
@@ -1993,12 +2062,7 @@ export default function App() {
           onCreate={() => {
             showCreate("general");
           }}
-          onCreateApp={() => {
-            if (!concept) return;
-            setArtifactFirstOpen(false);
-            setSurface("artifacts");
-            showHubConcept(concept.id);
-          }}
+          onCreateFromTemplate={() => openNewDocumentDialog()}
           onCreateArtifact={openNewArtifact}
           onCreateDocument={openNewDocument}
           onCreateSpace={() => {
@@ -2032,9 +2096,7 @@ export default function App() {
           onOpenConcept={showHubConcept}
           onOpenHome={showHome}
           onOpenImported={(sourceId, path) => void openImported(sourceId, path)}
-          onOpenSearch={openGlobalSearch}
           onOpenSpace={showSpace}
-          onOpenSpaceArtifacts={showSpaceArtifacts}
           onOpenSources={showSources}
           onSignOut={() => void signOut()}
         />
@@ -2047,6 +2109,11 @@ export default function App() {
             status={statusLabel}
             statusTone={statusTone}
             title={pageTitle}
+            onRename={isConceptRouteActive && canEditDocument &&
+                view === "draft" && concept?.status === "active"
+              ? (title) => void renameConcept(title)
+              : undefined}
+            focusTitle={titleFocusId === concept?.id}
             onSearch={openGlobalSearch}
             actions={imported || showArtifactFirst
               ? (
@@ -2413,9 +2480,6 @@ export default function App() {
                         Source checked {new Date(imported.source.lastSyncedAt)
                           .toLocaleString()}
                       </span>
-                    )}
-                    {imported.owner && (
-                      <span>Source owner: {imported.owner}</span>
                     )}
                   </div>
                   {imported.source?.status === "sync_failed" && (
@@ -2889,8 +2953,6 @@ export default function App() {
           initialSpaceId={newDocumentSpaceId}
           initialParentId={newDocumentParentId}
           initialTemplateId={newDocumentTemplateId}
-          initialType={newDocumentType}
-          initialIntent={newDocumentIntent}
           busy={actionBusy}
           error={actionError}
           onOpenChange={setNewDocumentOpen}

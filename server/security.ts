@@ -1435,7 +1435,9 @@ export async function createSecurity({
     if (!url.pathname.startsWith("/api/")) return null;
     if (
       url.pathname === "/api/openapi.json" ||
-      url.pathname.startsWith("/api/v1/")
+      url.pathname.startsWith("/api/v1/") ||
+      // Image routes authenticate sessions and API keys themselves.
+      /^\/api\/concepts\/[^/]+\/images(\/[^/]+)?$/.test(url.pathname)
     ) return null;
     const current = await session(request);
     if (url.pathname === "/api/bootstrap" && request.method === "GET") {

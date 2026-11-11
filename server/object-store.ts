@@ -93,8 +93,9 @@ export function createObjectStore({
   async function request(
     method: "DELETE" | "GET" | "PUT",
     key = "",
-    body = "",
+    body: string | Uint8Array = "",
     query: Record<string, string> = {},
+    type = "text/markdown; charset=utf-8",
   ) {
     const now = new Date();
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -124,15 +125,13 @@ export function createObjectStore({
     url.search = canonicalQuery;
     const response = await fetch(url, {
       method,
-      body: method === "PUT" ? body : undefined,
+      body: method === "PUT" ? buffer(body) : undefined,
       headers: {
         authorization:
           `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
         "x-amz-content-sha256": payloadHash,
         "x-amz-date": amzDate,
-        ...(key && method === "PUT"
-          ? { "content-type": "text/markdown; charset=utf-8" }
-          : {}),
+        ...(key && method === "PUT" ? { "content-type": type } : {}),
       },
     });
     return response;
@@ -159,6 +158,28 @@ export function createObjectStore({
           `Object storage ${response.status}: ${await response.text()}`,
         );
       }
+    },
+    async putBytes(key: string, bytes: Uint8Array, type: string) {
+      await ensureBucket();
+      const response = await request("PUT", key, bytes, {}, type);
+      if (!response.ok) {
+        throw new Error(
+          `Object storage ${response.status}: ${await response.text()}`,
+        );
+      }
+    },
+    async getBytes(key: string) {
+      const response = await request("GET", key);
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(
+          `Object storage ${response.status}: ${await response.text()}`,
+        );
+      }
+      return new Uint8Array(await response.arrayBuffer());
     },
     async get(key: string) {
       const response = await request("GET", key);
