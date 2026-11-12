@@ -68,7 +68,9 @@ deno task dev
 ```
 
 Open `http://127.0.0.1:5173`. To use Portless for both services, run
-`deno task stack:portless` and `deno task dev:portless` instead.
+`deno task stack:portless` and `deno task dev:portless` instead. Prefix the
+latter with `PORTLESS_TAILSCALE=1` to open the UI from other tailnet devices;
+Portless prints the `https://<machine>.<tailnet>.ts.net:<port>` URL.
 
 Before submitting changes:
 

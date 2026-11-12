@@ -33,8 +33,14 @@ tests before changing behavior; preserve unrelated work.
 - `deno task test`: TypeScript, production build, lint, then Deno tests.
 - `deno fmt` / `deno fmt --check`: formatting.
 - `deno task dev`: Vite UI; `deno task dev:service`: watched backend.
+- **Dev URLs:** never assume a port (`localhost:3000`, `:8443`). Local URL:
+  `portless get <name>`. URL for other tailnet devices (only when started with
+  `PORTLESS_TAILSCALE=1`; the port depends on start order):
+  `jq -r '.[] | select(.tailscaleUrl) | "\(.hostname)\t\(.tailscaleUrl)"' ~/.portless/routes.json`.
 - `deno task stack`: local Docker Compose stack; `deno task stack:down` stops
-  it.
+  it. With Portless (`http://okf-hub.localhost`), start and stop it only with
+  `deno task stack:portless` / `deno task stack:down`, not raw
+  `docker compose up`.
 - `deno task admin`: operator administration; inspect its help before use.
 - Docs pages under `docs/` need valid OKF frontmatter; index/log have their own
   formats. Follow neighboring pages and `tests/docs_test.ts`.

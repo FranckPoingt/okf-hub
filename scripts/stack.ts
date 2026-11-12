@@ -152,16 +152,37 @@ function composeOutput(args: string[]) {
   return dockerOutput(["compose", "--env-file", ENV_FILE, ...args]);
 }
 
+// `portless compose` keeps the app's host port across container recreates;
+// a plain `docker compose up` would pick a new one and break the alias.
+function composeUp(args: string[], usePortless: boolean) {
+  return usePortless
+    ? portless(["compose", "--env-file", ENV_FILE, "up", ...args])
+    : compose(["up", ...args]);
+}
+
 async function expose() {
   const address = await composeOutput(["port", "app", "8788"]);
   const port = address.match(/:(\d+)$/)?.[1];
   if (!port) throw new Error(`Could not read app port from ${address}`);
+  // Pin the port portless chose, so a plain `docker compose up` reuses it too.
+  const lines = (await Deno.readTextFile(ENV_FILE)).split("\n").filter((
+    line,
+  ) => line && !line.startsWith("OKF_APP_BIND="));
+  await Deno.writeTextFile(
+    ENV_FILE,
+    `${[...lines, `OKF_APP_BIND=127.0.0.1:${port}:8788`].join("\n")}\n`,
+    { mode: 0o600 },
+  );
+  await Deno.chmod(ENV_FILE, 0o600);
   await portless(["alias", "okf-hub", port]);
   console.log("OKF Hub is ready at http://okf-hub.localhost");
 }
 
 async function start(usePortless = false) {
-  await compose(["up", "--build", "-d", "--wait", "--wait-timeout", "180"]);
+  await composeUp(
+    ["--build", "-d", "--wait", "--wait-timeout", "180"],
+    usePortless,
+  );
   if (usePortless) await expose();
   else console.log("OKF Hub is ready at http://localhost:8788");
   await admin(["setup-url"]);
@@ -198,8 +219,10 @@ export async function stackRunning() {
 
 async function stop() {
   const usePortless = await usesPortless();
-  await compose(["down"]);
-  if (usePortless) await portless(["alias", "--remove", "okf-hub"]);
+  if (usePortless) {
+    await portless(["compose", "--env-file", ENV_FILE, "down"]);
+    await portless(["alias", "--remove", "okf-hub"]);
+  } else await compose(["down"]);
 }
 
 async function backup() {
@@ -209,7 +232,10 @@ async function backup() {
   try {
     await compose(["run", "--rm", "-e", `BACKUP_FILE=${name}`, "backup"]);
   } finally {
-    await compose(["up", "-d", "--wait", "--wait-timeout", "180"]);
+    await composeUp(
+      ["-d", "--wait", "--wait-timeout", "180"],
+      await usesPortless(),
+    );
   }
   console.log(`${BACKUP_DIR}/${name}`);
 }

@@ -17,7 +17,7 @@
     "stack:portless": "deno run --allow-read=.okf-stack.env,backups --allow-write=.okf-stack.env,backups --allow-run=docker,portless scripts/stack.ts up-portless",
     "stack:github": "deno run --allow-read=.okf-stack.env,.okf-github-app.pem --allow-write=.okf-stack.env scripts/stack.ts github",
     "stack:down": "deno run --allow-read=.okf-stack.env --allow-write=.okf-stack.env --allow-run=docker,portless scripts/stack.ts down",
-    "stack:backup": "deno run --allow-read=.okf-stack.env,backups --allow-write=.okf-stack.env,backups --allow-run=docker scripts/stack.ts backup",
+    "stack:backup": "deno run --allow-read=.okf-stack.env,backups --allow-write=.okf-stack.env,backups --allow-run=docker,portless scripts/stack.ts backup",
     "stack:restore": "deno run --allow-read=.okf-stack.env,backups --allow-write=.okf-stack.env,backups --allow-run=docker,portless scripts/stack.ts restore",
     "admin": "NODE_DISABLE_COLORS=1 BETTER_AUTH_TELEMETRY=0 deno run --allow-read --allow-write --allow-net --allow-env --allow-run=docker scripts/admin.ts",
     "typecheck": "tsc --noEmit",
